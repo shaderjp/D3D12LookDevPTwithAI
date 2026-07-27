@@ -4,6 +4,7 @@
 #include "SimpleJson.h"
 
 #include <commctrl.h>
+#include <dwmapi.h>
 #include <microsoft.ui.xaml.media.dxinterop.h>
 #include <microsoft.ui.xaml.window.h>
 #include <shlobj.h>
@@ -65,6 +66,7 @@ MainWindow::MainWindow()
 {
     InitializeComponent();
     LoadLayout();
+    ApplyTheme(m_themeMode);
 
     m_viewModel =
         winrt::make_self<lookdevpt::winui::EditorViewModel>();
@@ -108,6 +110,7 @@ void MainWindow::OnLoaded(
             1,
             reinterpret_cast<DWORD_PTR>(this));
     }
+    UpdateTitleBarTheme();
     ApplyPanelVisibility();
     OnViewportHostSizeChanged(nullptr, nullptr);
     ViewportInputSurface().Focus(FocusState::Programmatic);
@@ -161,6 +164,13 @@ void MainWindow::OnClosed(
         m_controller->StopAndJoin();
     }
     m_controller.reset();
+}
+
+void MainWindow::OnActualThemeChanged(
+    FrameworkElement const&,
+    IInspectable const&)
+{
+    UpdateTitleBarTheme();
 }
 
 void MainWindow::OnViewportLoaded(
@@ -566,6 +576,26 @@ void MainWindow::OnPanelToggleClick(
     RoutedEventArgs const&)
 {
     ApplyPanelVisibility();
+}
+
+void MainWindow::OnThemeClick(
+    IInspectable const& sender,
+    RoutedEventArgs const&)
+{
+    const std::wstring theme = Tag(sender);
+    if (theme == L"light")
+    {
+        ApplyTheme(EditorThemeMode::Light);
+    }
+    else if (theme == L"dark")
+    {
+        ApplyTheme(EditorThemeMode::Dark);
+    }
+    else
+    {
+        ApplyTheme(EditorThemeMode::System);
+    }
+    SaveLayout();
 }
 
 void MainWindow::OnShowAllPanels(
@@ -1242,6 +1272,71 @@ void MainWindow::ApplyPanelVisibility()
         m_showBottom ? m_bottomHeight : 0));
 }
 
+void MainWindow::ApplyTheme(EditorThemeMode mode)
+{
+    m_themeMode = mode;
+    SystemThemeMenu().IsChecked(mode == EditorThemeMode::System);
+    LightThemeMenu().IsChecked(mode == EditorThemeMode::Light);
+    DarkThemeMenu().IsChecked(mode == EditorThemeMode::Dark);
+
+    ElementTheme requestedTheme = ElementTheme::Default;
+    if (mode == EditorThemeMode::Light)
+    {
+        requestedTheme = ElementTheme::Light;
+    }
+    else if (mode == EditorThemeMode::Dark)
+    {
+        requestedTheme = ElementTheme::Dark;
+    }
+    EditorRoot().RequestedTheme(requestedTheme);
+    UpdateTitleBarTheme();
+}
+
+void MainWindow::UpdateTitleBarTheme()
+{
+    if (!m_windowHandle)
+    {
+        return;
+    }
+    const BOOL useDarkMode =
+        EditorRoot().ActualTheme() == ElementTheme::Dark;
+    DwmSetWindowAttribute(
+        m_windowHandle,
+        DWMWA_USE_IMMERSIVE_DARK_MODE,
+        &useDarkMode,
+        sizeof(useDarkMode));
+
+    const COLORREF captionColor = useDarkMode
+        ? RGB(32, 32, 32)
+        : RGB(243, 243, 243);
+    const COLORREF textColor = useDarkMode
+        ? RGB(255, 255, 255)
+        : RGB(0, 0, 0);
+    const COLORREF borderColor = useDarkMode
+        ? RGB(48, 48, 48)
+        : RGB(229, 229, 229);
+    DwmSetWindowAttribute(
+        m_windowHandle,
+        DWMWA_CAPTION_COLOR,
+        &captionColor,
+        sizeof(captionColor));
+    DwmSetWindowAttribute(
+        m_windowHandle,
+        DWMWA_TEXT_COLOR,
+        &textColor,
+        sizeof(textColor));
+    DwmSetWindowAttribute(
+        m_windowHandle,
+        DWMWA_BORDER_COLOR,
+        &borderColor,
+        sizeof(borderColor));
+    RedrawWindow(
+        m_windowHandle,
+        nullptr,
+        nullptr,
+        RDW_INVALIDATE | RDW_FRAME);
+}
+
 void MainWindow::LoadLayout()
 {
     const std::filesystem::path path = LayoutPath();
@@ -1256,6 +1351,20 @@ void MainWindow::LoadLayout()
         text << file.rdbuf();
         cld::JsonValue root =
             cld::JsonParser(text.str()).Parse();
+        const std::string theme =
+            cld::JsonStringOr(root, "theme", "system");
+        if (theme == "light")
+        {
+            m_themeMode = EditorThemeMode::Light;
+        }
+        else if (theme == "dark")
+        {
+            m_themeMode = EditorThemeMode::Dark;
+        }
+        else
+        {
+            m_themeMode = EditorThemeMode::System;
+        }
         m_leftWidth = Clamp(
             cld::JsonNumberOr(root, "leftWidth", m_leftWidth),
             220.0, 600.0);
@@ -1318,7 +1427,17 @@ void MainWindow::SaveLayout()
     {
         return;
     }
+    const char* theme = "system";
+    if (m_themeMode == EditorThemeMode::Light)
+    {
+        theme = "light";
+    }
+    else if (m_themeMode == EditorThemeMode::Dark)
+    {
+        theme = "dark";
+    }
     file << "{\n"
+         << "  \"theme\": \"" << theme << "\",\n"
          << "  \"leftWidth\": " << m_leftWidth << ",\n"
          << "  \"rightWidth\": " << m_rightWidth << ",\n"
          << "  \"bottomHeight\": " << m_bottomHeight << ",\n"

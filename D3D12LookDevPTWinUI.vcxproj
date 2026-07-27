@@ -128,7 +128,7 @@
     <Link>
       <SubSystem>Windows</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalDependencies>$(AssimpLibName);$(AssimpZlibName);$(NrdAdditionalDependencies)$(RtxdiAdditionalDependencies)DirectXTex.lib;xinput9_1_0.lib;d3d12.lib;dxgi.lib;dxguid.lib;d3dcompiler.lib;comctl32.lib;comdlg32.lib;windowscodecs.lib;ole32.lib;shell32.lib;advapi32.lib;ws2_32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>$(AssimpLibName);$(AssimpZlibName);$(NrdAdditionalDependencies)$(RtxdiAdditionalDependencies)DirectXTex.lib;xinput9_1_0.lib;d3d12.lib;dxgi.lib;dxguid.lib;d3dcompiler.lib;dwmapi.lib;comctl32.lib;comdlg32.lib;windowscodecs.lib;ole32.lib;shell32.lib;advapi32.lib;ws2_32.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <AdditionalLibraryDirectories>$(AssimpLibDir);$(AssimpZlibDir);$(DirectXTexLibDir);$(NrdAdditionalLibraryDirs)$(RtxdiAdditionalLibraryDirs)%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <DelayLoadDLLs>d3d12.dll;%(DelayLoadDLLs)</DelayLoadDLLs>
     </Link>
@@ -154,7 +154,7 @@
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
-      <AdditionalDependencies>$(AssimpLibName);$(AssimpZlibName);$(NrdAdditionalDependencies)$(RtxdiAdditionalDependencies)DirectXTex.lib;xinput9_1_0.lib;d3d12.lib;dxgi.lib;dxguid.lib;d3dcompiler.lib;comctl32.lib;comdlg32.lib;windowscodecs.lib;ole32.lib;shell32.lib;advapi32.lib;ws2_32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>$(AssimpLibName);$(AssimpZlibName);$(NrdAdditionalDependencies)$(RtxdiAdditionalDependencies)DirectXTex.lib;xinput9_1_0.lib;d3d12.lib;dxgi.lib;dxguid.lib;d3dcompiler.lib;dwmapi.lib;comctl32.lib;comdlg32.lib;windowscodecs.lib;ole32.lib;shell32.lib;advapi32.lib;ws2_32.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <AdditionalLibraryDirectories>$(AssimpLibDir);$(AssimpZlibDir);$(DirectXTexLibDir);$(NrdAdditionalLibraryDirs)$(RtxdiAdditionalLibraryDirs)%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <DelayLoadDLLs>d3d12.dll;%(DelayLoadDLLs)</DelayLoadDLLs>
     </Link>

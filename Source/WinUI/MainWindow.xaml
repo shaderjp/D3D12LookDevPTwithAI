@@ -8,6 +8,7 @@
 
     <Grid x:Name="EditorRoot"
           Loaded="OnLoaded"
+          ActualThemeChanged="OnActualThemeChanged"
           PreviewKeyDown="OnPreviewKeyDown"
           PreviewKeyUp="OnPreviewKeyUp"
           GotFocus="OnEditGotFocus"
@@ -50,6 +51,12 @@
                 <ToggleMenuFlyoutItem x:Name="RestirPanelMenu" Text="ReSTIR" Tag="RestirTab" IsChecked="True" Click="OnPanelToggleClick" />
                 <ToggleMenuFlyoutItem x:Name="DiagnosticsPanelMenu" Text="Diagnostics / Stats" Tag="DiagnosticsTab" IsChecked="True" Click="OnPanelToggleClick" />
                 <ToggleMenuFlyoutItem x:Name="McpPanelMenu" Text="MCP Server" Tag="McpTab" IsChecked="True" Click="OnPanelToggleClick" />
+                <MenuFlyoutSeparator />
+                <MenuFlyoutSubItem Text="Theme">
+                    <ToggleMenuFlyoutItem x:Name="SystemThemeMenu" Text="Use System Setting" Tag="system" IsChecked="True" Click="OnThemeClick" />
+                    <ToggleMenuFlyoutItem x:Name="LightThemeMenu" Text="Light" Tag="light" Click="OnThemeClick" />
+                    <ToggleMenuFlyoutItem x:Name="DarkThemeMenu" Text="Dark" Tag="dark" Click="OnThemeClick" />
+                </MenuFlyoutSubItem>
                 <MenuFlyoutSeparator />
                 <MenuFlyoutItem Text="Show All Panels" Click="OnShowAllPanels" />
                 <MenuFlyoutItem Text="Reset Default Layout" Click="OnResetLayout" />

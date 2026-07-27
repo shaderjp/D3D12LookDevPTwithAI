@@ -116,8 +116,9 @@ application:
 - Diagnostics and MCP in the bottom `TabView`
 
 The left, right, and bottom regions are resizable. The View menu controls panel
-visibility, Show All, Reset Default Layout, and F10 Render Only mode. Layout
-widths, selected tabs, and visibility are stored in:
+visibility, Show All, Reset Default Layout, F10 Render Only mode, and the
+System/Light/Dark application theme. Layout widths, selected tabs, visibility,
+and the selected theme are stored in:
 
 ```text
 %APPDATA%\D3D12LookDevPTWinUI\ui.json

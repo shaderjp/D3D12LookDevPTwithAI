@@ -113,8 +113,8 @@ Project menu から scene、environment、schema v2 project を開けます。�
 - 下: Diagnostics、MCP の `TabView`
 
 左、右、下領域は splitter で resize できます。View menu から panel 表示、
-Show All、Reset Default Layout、F10 Render Only を操作できます。幅、選択 tab、
-表示状態は次へ保存されます。
+Show All、Reset Default Layout、F10 Render Only、および System / Light / Dark
+theme を操作できます。幅、選択 tab、表示状態、選択した theme は次へ保存されます。
 
 ```text
 %APPDATA%\D3D12LookDevPTWinUI\ui.json

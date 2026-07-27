@@ -6,6 +6,13 @@
 
 namespace winrt::D3D12LookDevPTWinUI::implementation
 {
+enum class EditorThemeMode
+{
+    System,
+    Light,
+    Dark,
+};
+
 struct MainWindow : MainWindowT<MainWindow>
 {
     MainWindow();
@@ -16,6 +23,9 @@ struct MainWindow : MainWindowT<MainWindow>
     void OnClosed(
         Windows::Foundation::IInspectable const&,
         Microsoft::UI::Xaml::WindowEventArgs const&);
+    void OnActualThemeChanged(
+        Microsoft::UI::Xaml::FrameworkElement const&,
+        Windows::Foundation::IInspectable const&);
     void OnViewportLoaded(
         Windows::Foundation::IInspectable const&,
         Microsoft::UI::Xaml::RoutedEventArgs const&);
@@ -79,6 +89,9 @@ struct MainWindow : MainWindowT<MainWindow>
     void OnPanelToggleClick(
         Windows::Foundation::IInspectable const&,
         Microsoft::UI::Xaml::RoutedEventArgs const&);
+    void OnThemeClick(
+        Windows::Foundation::IInspectable const&,
+        Microsoft::UI::Xaml::RoutedEventArgs const&);
     void OnShowAllPanels(
         Windows::Foundation::IInspectable const&,
         Microsoft::UI::Xaml::RoutedEventArgs const&);
@@ -130,6 +143,8 @@ private:
     void ApplyRenderOnly(bool enabled);
     void ToggleRenderOnly();
     void ApplyPanelVisibility();
+    void ApplyTheme(EditorThemeMode mode);
+    void UpdateTitleBarTheme();
     void LoadLayout();
     void SaveLayout();
     Windows::Foundation::IAsyncAction PickFile(
@@ -175,6 +190,7 @@ private:
     bool m_showLeft = true;
     bool m_showRight = true;
     bool m_showBottom = true;
+    EditorThemeMode m_themeMode = EditorThemeMode::System;
     double m_leftWidth = 330.0;
     double m_rightWidth = 380.0;
     double m_bottomHeight = 250.0;

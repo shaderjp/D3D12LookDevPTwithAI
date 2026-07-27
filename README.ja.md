@@ -7,9 +7,16 @@ WinUI 3 版です。D3D12LookDevPT の renderer、shader pipeline、project sche
 CLI、benchmark 出力、MCP、optional backend を維持し、ImGui と Win32
 application shell を C++/WinRT / WinUI 3 に置き換えています。
 
-移植元は D3D12LookDevPT commit
+移植元は
+[shaderjp/D3D12LookDevPT](https://github.com/shaderjp/D3D12LookDevPT) commit
 `605fe99dc7bc42863c3d374d532ccc134b9f651d` です。renderer と HLSL はこの
 revision との互換性を維持します。
+
+## スクリーンショット
+
+| Bistro Interior | Bistro Exterior |
+|:---:|:---:|
+| ![ダークテーマのWinUI editorで描画したBistro Interior](docs/images/screenshot001.jpg) | ![ダークテーマのWinUI editorで描画したBistro Exterior](docs/images/screenshot002.jpg) |
 
 ## 対応環境
 

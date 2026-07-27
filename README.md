@@ -8,9 +8,16 @@ project schema, command line, benchmark output, MCP tools, and optional
 backends from D3D12LookDevPT while replacing ImGui and the Win32 application
 shell with C++/WinRT and WinUI 3.
 
-This repository was ported from D3D12LookDevPT commit
-`605fe99dc7bc42863c3d374d532ccc134b9f651d`. The renderer and HLSL baseline are
-kept compatible with that revision.
+This repository was ported from
+[shaderjp/D3D12LookDevPT](https://github.com/shaderjp/D3D12LookDevPT) commit
+`605fe99dc7bc42863c3d374d532ccc134b9f651d`. The renderer and HLSL baseline
+are kept compatible with that revision.
+
+## Screenshots
+
+| Bistro Interior | Bistro Exterior |
+|:---:|:---:|
+| ![Bistro Interior rendered in the dark-themed WinUI editor](docs/images/screenshot001.jpg) | ![Bistro Exterior rendered in the dark-themed WinUI editor](docs/images/screenshot002.jpg) |
 
 ## Supported environment
 

@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "keyframes": [
+    { "frame": 0,   "position": [5.25, 1.65, -1.50], "yaw": 0.200,  "pitch": 0.000, "cut": true },
+    { "frame": 119, "position": [5.25, 1.65, -1.50], "yaw": 0.200,  "pitch": 0.000, "cut": false },
+    { "frame": 180, "position": [5.25, 1.65, -1.50], "yaw": 0.500,  "pitch": -0.030, "cut": false },
+    { "frame": 240, "position": [7.00, 1.70, 1.00],  "yaw": 0.800,  "pitch": -0.040, "cut": false },
+    { "frame": 270, "position": [8.50, 1.70, 4.00],  "yaw": 1.800,  "pitch": -0.020, "cut": false },
+    { "frame": 330, "position": [8.50, 1.70, 4.00],  "yaw": 1.800,  "pitch": -0.020, "cut": false },
+    { "frame": 350, "position": [8.50, 1.70, 4.00],  "yaw": 3.120,  "pitch": -0.020, "cut": false },
+    { "frame": 369, "position": [8.50, 1.70, 4.00],  "yaw": -3.120, "pitch": -0.020, "cut": false },
+    { "frame": 370, "position": [3.00, 1.60, 8.00],  "yaw": -2.500, "pitch": 0.000, "cut": true },
+    { "frame": 419, "position": [3.00, 1.60, 8.00],  "yaw": -2.500, "pitch": 0.000, "cut": false }
+  ]
+}

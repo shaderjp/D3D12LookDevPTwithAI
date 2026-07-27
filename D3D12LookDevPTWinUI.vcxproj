@@ -1,0 +1,338 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <VCProjectVersion>18.0</VCProjectVersion>
+    <Keyword>Win32Proj</Keyword>
+    <ProjectGuid>{7A1DDF3B-1E0A-4DD8-A013-CF56A1048B91}</ProjectGuid>
+    <RootNamespace>D3D12LookDevPTWinUI</RootNamespace>
+    <WindowsTargetPlatformVersion>10.0.26100.0</WindowsTargetPlatformVersion>
+    <WindowsTargetPlatformMinVersion>10.0.19041.0</WindowsTargetPlatformMinVersion>
+    <ProjectName>D3D12LookDevPTWinUI</ProjectName>
+    <TargetName>D3D12LookDevPTWinUI</TargetName>
+    <DefaultLanguage>en-US</DefaultLanguage>
+    <MinimumVisualStudioVersion>18.0</MinimumVisualStudioVersion>
+    <ApplicationType>Windows Store</ApplicationType>
+    <ApplicationTypeRevision>10.0</ApplicationTypeRevision>
+    <AppContainerApplication>false</AppContainerApplication>
+    <AppxPackage>false</AppxPackage>
+    <WindowsPackageType>None</WindowsPackageType>
+    <WindowsAppSDKSelfContained>false</WindowsAppSDKSelfContained>
+    <RuntimeIdentifiers>win10-x64</RuntimeIdentifiers>
+    <DesktopCompatible>true</DesktopCompatible>
+    <UseWinUI>true</UseWinUI>
+    <CppWinRTOptimized>true</CppWinRTOptimized>
+    <CppWinRTRootNamespaceAutoMerge>true</CppWinRTRootNamespaceAutoMerge>
+    <MinimalCoreWin>true</MinimalCoreWin>
+    <RestoreProjectStyle>PackageReference</RestoreProjectStyle>
+    <TargetFrameworkIdentifier>native</TargetFrameworkIdentifier>
+    <TargetFrameworkVersion>v0.0</TargetFrameworkVersion>
+    <BaseIntermediateOutputPath>Obj\NuGet\D3D12LookDevPTWinUI\</BaseIntermediateOutputPath>
+    <Microsoft_Direct3D_D3D12_SkipLibraryCopy>false</Microsoft_Direct3D_D3D12_SkipLibraryCopy>
+    <Microsoft_Direct3D_D3D12_SkipDebugLayerCopy>false</Microsoft_Direct3D_D3D12_SkipDebugLayerCopy>
+    <Microsoft_Direct3D_D3D12_SkipIncludeDir>false</Microsoft_Direct3D_D3D12_SkipIncludeDir>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Label="ToolsetSelection">
+    <LookDevPtPlatformToolset Condition="'$(LookDevPtPlatformToolset)' == ''">v145</LookDevPtPlatformToolset>
+    <LookDevPtVsFamily>2026</LookDevPtVsFamily>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+    <UseDebugLibraries>true</UseDebugLibraries>
+    <PlatformToolset>$(LookDevPtPlatformToolset)</PlatformToolset>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+    <UseDebugLibraries>false</UseDebugLibraries>
+    <PlatformToolset>$(LookDevPtPlatformToolset)</PlatformToolset>
+    <WholeProgramOptimization>true</WholeProgramOptimization>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <PropertyGroup>
+    <OutDir>$(ProjectDir)Bin\$(Platform)\$(Configuration)\</OutDir>
+    <IntDir>$(ProjectDir)Obj\$(Platform)\$(Configuration)\</IntDir>
+    <TargetName>D3D12LookDevPTWinUI</TargetName>
+    <GeneratedFilesDir>$(IntDir)Generated Files\</GeneratedFilesDir>
+    <AssimpRoot>$(ProjectDir)ThirdParty\assimp</AssimpRoot>
+    <AssimpBuildRoot>$(AssimpRoot)\Build\$(LookDevPtPlatformToolset)\$(Platform)\$(Configuration)</AssimpBuildRoot>
+    <AssimpLibDir>$(AssimpBuildRoot)\lib\$(Configuration)</AssimpLibDir>
+    <AssimpZlibDir>$(AssimpBuildRoot)\contrib\zlib\$(Configuration)</AssimpZlibDir>
+    <AssimpLibName>assimp-lookdevpt.lib</AssimpLibName>
+    <AssimpZlibName>zlib-lookdevpt.lib</AssimpZlibName>
+    <DirectXTexProject>$(ProjectDir)ThirdParty\DirectXTex\DirectXTex\DirectXTex_Desktop_$(LookDevPtVsFamily).vcxproj</DirectXTexProject>
+    <DirectXTexLibDir>$(ProjectDir)ThirdParty\DirectXTex\DirectXTex\Bin\Desktop_$(LookDevPtVsFamily)\x64\$(Configuration)</DirectXTexLibDir>
+    <EnableDLSS Condition="'$(EnableDLSS)'==''">true</EnableDLSS>
+    <D3D12LookDevPtWithDlss Condition="'$(EnableDLSS)'=='true' Or '$(EnableDLSS)'=='True' Or '$(EnableDLSS)'=='1'">1</D3D12LookDevPtWithDlss>
+    <D3D12LookDevPtWithDlss Condition="'$(D3D12LookDevPtWithDlss)'==''">0</D3D12LookDevPtWithDlss>
+    <EnableNRD Condition="'$(EnableNRD)'==''">true</EnableNRD>
+    <D3D12LookDevPtWithNrd Condition="'$(EnableNRD)'=='true' Or '$(EnableNRD)'=='True' Or '$(EnableNRD)'=='1'">1</D3D12LookDevPtWithNrd>
+    <D3D12LookDevPtWithNrd Condition="'$(D3D12LookDevPtWithNrd)'==''">0</D3D12LookDevPtWithNrd>
+    <StreamlineRoot>$(ProjectDir)ThirdParty\Streamline</StreamlineRoot>
+    <DlssRoot>$(ProjectDir)ThirdParty\DLSS</DlssRoot>
+    <DlssIncludeDirs Condition="'$(D3D12LookDevPtWithDlss)'=='1'">$(StreamlineRoot)\include;$(DlssRoot)\include;</DlssIncludeDirs>
+    <NrdRoot>$(ProjectDir)ThirdParty\NRD</NrdRoot>
+    <NrdBuildRoot>$(NrdRoot)\Build\$(LookDevPtPlatformToolset)\$(Platform)\$(Configuration)</NrdBuildRoot>
+    <NrdLibDir>$(NrdBuildRoot)\Lib</NrdLibDir>
+    <NrdLibName>NRD.lib</NrdLibName>
+    <NrdShaderMakeBlobLibName>ShaderMakeBlob.lib</NrdShaderMakeBlobLibName>
+    <NrdIncludeDirs Condition="'$(D3D12LookDevPtWithNrd)'=='1'">$(NrdRoot)\Include;</NrdIncludeDirs>
+    <NrdAdditionalDependencies Condition="'$(D3D12LookDevPtWithNrd)'=='1'">$(NrdLibName);$(NrdShaderMakeBlobLibName);</NrdAdditionalDependencies>
+    <NrdAdditionalLibraryDirs Condition="'$(D3D12LookDevPtWithNrd)'=='1'">$(NrdLibDir);</NrdAdditionalLibraryDirs>
+    <EnableRTXDI Condition="'$(EnableRTXDI)'==''">false</EnableRTXDI>
+    <D3D12LookDevPtRtxdiRequested Condition="'$(EnableRTXDI)'=='true' Or '$(EnableRTXDI)'=='True' Or '$(EnableRTXDI)'=='1'">1</D3D12LookDevPtRtxdiRequested>
+    <D3D12LookDevPtRtxdiRequested Condition="'$(D3D12LookDevPtRtxdiRequested)'==''">0</D3D12LookDevPtRtxdiRequested>
+    <RtxdiRoot Condition="'$(RtxdiRoot)'==''">$(ProjectDir)ThirdParty\RTXDI</RtxdiRoot>
+    <RtxdiRuntimeRoot>$(RtxdiRoot)\Libraries\Rtxdi</RtxdiRuntimeRoot>
+    <RtxdiSdkAvailable>false</RtxdiSdkAvailable>
+    <RtxdiSdkAvailable Condition="Exists('$(RtxdiRuntimeRoot)\Include\Rtxdi\RtxdiParameters.h') And Exists('$(RtxdiRuntimeRoot)\Source\ReSTIRDI.cpp') And Exists('$(RtxdiRuntimeRoot)\CMakeLists.txt')">true</RtxdiSdkAvailable>
+    <D3D12LookDevPtWithRtxdi Condition="'$(D3D12LookDevPtRtxdiRequested)'=='1' And '$(RtxdiSdkAvailable)'=='true'">1</D3D12LookDevPtWithRtxdi>
+    <D3D12LookDevPtWithRtxdi Condition="'$(D3D12LookDevPtWithRtxdi)'==''">0</D3D12LookDevPtWithRtxdi>
+    <RtxdiBuildRoot>$(RtxdiRoot)\Build\$(LookDevPtPlatformToolset)\$(Platform)\$(Configuration)</RtxdiBuildRoot>
+    <RtxdiLibDir>$(RtxdiBuildRoot)\Lib</RtxdiLibDir>
+    <RtxdiLibName>Rtxdi.lib</RtxdiLibName>
+    <RtxdiIncludeDirs Condition="'$(D3D12LookDevPtWithRtxdi)'=='1'">$(RtxdiRuntimeRoot)\Include;</RtxdiIncludeDirs>
+    <RtxdiAdditionalDependencies Condition="'$(D3D12LookDevPtWithRtxdi)'=='1'">$(RtxdiLibName);</RtxdiAdditionalDependencies>
+    <RtxdiAdditionalLibraryDirs Condition="'$(D3D12LookDevPtWithRtxdi)'=='1'">$(RtxdiLibDir);</RtxdiAdditionalLibraryDirs>
+    <RtxdiDxcInclude Condition="'$(D3D12LookDevPtWithRtxdi)'=='1'">-I &quot;$(RtxdiRuntimeRoot)\Include&quot;</RtxdiDxcInclude>
+    <NuGetPackageRoot Condition="'$(NuGetPackageRoot)'==''">$(UserProfile)\.nuget\packages\</NuGetPackageRoot>
+    <AgilitySdkBinDir>$(NuGetPackageRoot)microsoft.direct3d.d3d12\1.619.3\build\native\bin\x64\</AgilitySdkBinDir>
+    <DxcExe>$(NuGetPackageRoot)microsoft.direct3d.dxc\1.9.2602.17\build\native\bin\x64\dxc.exe</DxcExe>
+    <CompiledShaderDir>$(OutDir)</CompiledShaderDir>
+  </PropertyGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <ClCompile>
+      <WarningLevel>Level4</WarningLevel>
+      <PrecompiledHeader>Use</PrecompiledHeader>
+      <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
+      <PrecompiledHeaderOutputFile>$(IntDir)pch.pch</PrecompiledHeaderOutputFile>
+      <SDLCheck>true</SDLCheck>
+      <PreprocessorDefinitions>WIN32;_DEBUG;_WINDOWS;UNICODE;_UNICODE;NOMINMAX;WIN32_LEAN_AND_MEAN;D3D12LOOKDEVPT_WINUI=1;DISABLE_XAML_GENERATED_MAIN;D3D12LOOKDEVPT_WITH_DLSS=$(D3D12LookDevPtWithDlss);D3D12LOOKDEVPT_WITH_NRD=$(D3D12LookDevPtWithNrd);D3D12LOOKDEVPT_RTXDI_REQUESTED=$(D3D12LookDevPtRtxdiRequested);D3D12LOOKDEVPT_RTXDI_SDK_AVAILABLE=$(RtxdiSdkAvailable);D3D12LOOKDEVPT_WITH_RTXDI=$(D3D12LookDevPtWithRtxdi);%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>$(ProjectDir)Source\WinUI;$(GeneratedFilesDir);$(GeneratedFilesDir)Source\WinUI;$(ProjectDir)Source;$(ProjectDir)Shaders;$(ProjectDir)ThirdParty\DirectXTex\DirectXTex;$(ProjectDir)ThirdParty\DirectXTex\Common;$(ProjectDir)ThirdParty\assimp\include;$(AssimpBuildRoot)\include;$(DlssIncludeDirs)$(NrdIncludeDirs)$(RtxdiIncludeDirs)%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <LanguageStandard>stdcpp20</LanguageStandard>
+      <ConformanceMode>true</ConformanceMode>
+      <MultiProcessorCompilation>true</MultiProcessorCompilation>
+      <AdditionalOptions>/utf-8 /bigobj /FS %(AdditionalOptions)</AdditionalOptions>
+    </ClCompile>
+    <Link>
+      <SubSystem>Windows</SubSystem>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+      <AdditionalDependencies>$(AssimpLibName);$(AssimpZlibName);$(NrdAdditionalDependencies)$(RtxdiAdditionalDependencies)DirectXTex.lib;xinput9_1_0.lib;d3d12.lib;dxgi.lib;dxguid.lib;d3dcompiler.lib;comctl32.lib;comdlg32.lib;windowscodecs.lib;ole32.lib;shell32.lib;advapi32.lib;ws2_32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalLibraryDirectories>$(AssimpLibDir);$(AssimpZlibDir);$(DirectXTexLibDir);$(NrdAdditionalLibraryDirs)$(RtxdiAdditionalLibraryDirs)%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <DelayLoadDLLs>d3d12.dll;%(DelayLoadDLLs)</DelayLoadDLLs>
+    </Link>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <ClCompile>
+      <WarningLevel>Level4</WarningLevel>
+      <PrecompiledHeader>Use</PrecompiledHeader>
+      <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
+      <PrecompiledHeaderOutputFile>$(IntDir)pch.pch</PrecompiledHeaderOutputFile>
+      <FunctionLevelLinking>true</FunctionLevelLinking>
+      <IntrinsicFunctions>true</IntrinsicFunctions>
+      <SDLCheck>true</SDLCheck>
+      <PreprocessorDefinitions>WIN32;NDEBUG;_WINDOWS;UNICODE;_UNICODE;NOMINMAX;WIN32_LEAN_AND_MEAN;D3D12LOOKDEVPT_WINUI=1;DISABLE_XAML_GENERATED_MAIN;D3D12LOOKDEVPT_WITH_DLSS=$(D3D12LookDevPtWithDlss);D3D12LOOKDEVPT_WITH_NRD=$(D3D12LookDevPtWithNrd);D3D12LOOKDEVPT_RTXDI_REQUESTED=$(D3D12LookDevPtRtxdiRequested);D3D12LOOKDEVPT_RTXDI_SDK_AVAILABLE=$(RtxdiSdkAvailable);D3D12LOOKDEVPT_WITH_RTXDI=$(D3D12LookDevPtWithRtxdi);%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>$(ProjectDir)Source\WinUI;$(GeneratedFilesDir);$(GeneratedFilesDir)Source\WinUI;$(ProjectDir)Source;$(ProjectDir)Shaders;$(ProjectDir)ThirdParty\DirectXTex\DirectXTex;$(ProjectDir)ThirdParty\DirectXTex\Common;$(ProjectDir)ThirdParty\assimp\include;$(AssimpBuildRoot)\include;$(DlssIncludeDirs)$(NrdIncludeDirs)$(RtxdiIncludeDirs)%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <LanguageStandard>stdcpp20</LanguageStandard>
+      <ConformanceMode>true</ConformanceMode>
+      <MultiProcessorCompilation>true</MultiProcessorCompilation>
+      <AdditionalOptions>/utf-8 /bigobj /FS %(AdditionalOptions)</AdditionalOptions>
+    </ClCompile>
+    <Link>
+      <SubSystem>Windows</SubSystem>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+      <EnableCOMDATFolding>true</EnableCOMDATFolding>
+      <OptimizeReferences>true</OptimizeReferences>
+      <AdditionalDependencies>$(AssimpLibName);$(AssimpZlibName);$(NrdAdditionalDependencies)$(RtxdiAdditionalDependencies)DirectXTex.lib;xinput9_1_0.lib;d3d12.lib;dxgi.lib;dxguid.lib;d3dcompiler.lib;comctl32.lib;comdlg32.lib;windowscodecs.lib;ole32.lib;shell32.lib;advapi32.lib;ws2_32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalLibraryDirectories>$(AssimpLibDir);$(AssimpZlibDir);$(DirectXTexLibDir);$(NrdAdditionalLibraryDirs)$(RtxdiAdditionalLibraryDirs)%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <DelayLoadDLLs>d3d12.dll;%(DelayLoadDLLs)</DelayLoadDLLs>
+    </Link>
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <ClCompile Include="Source\BenchmarkHarness.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="Source\D3D12PathTracingBackend.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="Source\D3D12PathTracingBackend.WinUI.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="Source\DlssBackend.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="Source\DXSample.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="Source\FpsCamera.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="Source\McpDispatcher.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="Source\McpServer.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="Source\NrdBackend.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="Source\PathTracingScene.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="Source\QualitySettingsJson.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="Source\RtxdiBackend.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="Source\SceneImporter.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="Source\SimpleJson.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="Source\stdafx.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="Source\TextureLoader.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="Source\WinUI\pch.cpp">
+      <PrecompiledHeader>Create</PrecompiledHeader>
+      <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
+    </ClCompile>
+    <ClCompile Include="Source\WinUI\App.xaml.cpp">
+      <DependentUpon>App.xaml</DependentUpon>
+    </ClCompile>
+    <ClCompile Include="Source\WinUI\EditorViewModel.cpp" />
+    <ClCompile Include="Source\WinUI\MainWindow.xaml.cpp">
+      <DependentUpon>MainWindow.xaml</DependentUpon>
+    </ClCompile>
+    <ClCompile Include="Source\WinUI\RendererController.cpp" />
+    <ClCompile Include="Source\WinUI\main.cpp" />
+    <ClCompile Include="$(GeneratedFilesDir)module.g.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="Source\BenchmarkHarness.h" />
+    <ClInclude Include="Source\D3D12PathTracingBackend.h" />
+    <ClInclude Include="Source\DlssBackend.h" />
+    <ClInclude Include="Source\DenoiseSettingsJson.h" />
+    <ClInclude Include="Source\DXSample.h" />
+    <ClInclude Include="Source\DXSampleHelper.h" />
+    <ClInclude Include="Source\EditorTypes.h" />
+    <ClInclude Include="Source\FpsCamera.h" />
+    <ClInclude Include="Source\McpDispatcher.h" />
+    <ClInclude Include="Source\McpServer.h" />
+    <ClInclude Include="Source\NrdBackend.h" />
+    <ClInclude Include="Source\PathTracingScene.h" />
+    <ClInclude Include="Source\ProjectPath.h" />
+    <ClInclude Include="Source\QualitySettings.h" />
+    <ClInclude Include="Source\QualitySettingsJson.h" />
+    <ClInclude Include="Source\RenderStabilityTypes.h" />
+    <ClInclude Include="Source\RtxdiBackend.h" />
+    <ClInclude Include="Source\SceneImporter.h" />
+    <ClInclude Include="Source\SceneTypes.h" />
+    <ClInclude Include="Source\SimpleJson.h" />
+    <ClInclude Include="Source\stdafx.h" />
+    <ClInclude Include="Source\TextureLoader.h" />
+    <ClInclude Include="Source\WinUI\pch.h" />
+    <ClInclude Include="Source\WinUI\App.xaml.h">
+      <DependentUpon>App.xaml</DependentUpon>
+    </ClInclude>
+    <ClInclude Include="Source\WinUI\EditorViewModel.h" />
+    <ClInclude Include="Source\WinUI\MainWindow.xaml.h">
+      <DependentUpon>MainWindow.xaml</DependentUpon>
+    </ClInclude>
+    <ClInclude Include="Source\WinUI\RendererController.h" />
+    <ClInclude Include="Source\WinUI\RendererCommandQueue.h" />
+    <ClInclude Include="Source\WinUI\RendererSnapshotMailbox.h" />
+    <ClInclude Include="Source\WinUI\WinUIEditor.h" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="BuildThirdParty.ps1" />
+    <None Include="Shaders\PathTracingABI.hlsli" />
+    <None Include="Shaders\PathTracingSampling.hlsli" />
+    <None Include="Shaders\PathTracingSceneConstants.hlsli" />
+    <None Include="Shaders\PathTracing.hlsl" />
+    <None Include="Shaders\PathTracingReSTIR.hlsl" />
+    <None Include="Shaders\PathTracingReSTIRDI.hlsl" />
+    <None Include="Shaders\PathTracingReSTIRCombined.hlsl" />
+    <None Include="Shaders\ReSTIRResolve.hlsl" />
+    <None Include="Shaders\PathTracingDenoise.hlsl" />
+    <None Include="Shaders\PathTracingNrd.hlsl" />
+    <None Include="Shaders\PathTracingQualityCounters.hlsli" />
+    <None Include="Shaders\PathTracingQualityCounters.hlsl" />
+    <None Include="Shaders\PathTracingTaa.hlsl" />
+  </ItemGroup>
+  <ItemGroup>
+    <ApplicationDefinition Include="Source\WinUI\App.xaml" />
+    <Page Include="Source\WinUI\MainWindow.xaml" />
+  </ItemGroup>
+  <ItemGroup>
+    <Midl Include="Source\WinUI\App.idl">
+      <SubType>Code</SubType>
+      <DependentUpon>App.xaml</DependentUpon>
+    </Midl>
+    <Midl Include="Source\WinUI\MainWindow.idl">
+      <SubType>Code</SubType>
+      <DependentUpon>MainWindow.xaml</DependentUpon>
+    </Midl>
+  </ItemGroup>
+  <ItemGroup>
+    <Manifest Include="Package\D3D12LookDevPTWinUI.manifest" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.WindowsAppSDK">
+      <Version>2.3.1</Version>
+    </PackageReference>
+    <PackageReference Include="Microsoft.Windows.CppWinRT">
+      <Version>2.0.250303.1</Version>
+    </PackageReference>
+    <PackageReference Include="Microsoft.Direct3D.D3D12">
+      <Version>1.619.3</Version>
+    </PackageReference>
+    <PackageReference Include="Microsoft.Direct3D.DXC">
+      <Version>1.9.2602.17</Version>
+    </PackageReference>
+  </ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <Target Name="EnsureThirdParty" BeforeTargets="PrepareForBuild">
+    <Error Condition="!Exists('$(ProjectDir)ThirdParty\DirectXTex\DirectXTex\DirectXTex.h')" Text="ThirdParty\DirectXTex is missing." />
+    <Error Condition="!Exists('$(ProjectDir)ThirdParty\assimp\include\assimp\Importer.hpp')" Text="ThirdParty\assimp is missing." />
+    <Error Condition="'$(D3D12LookDevPtWithDlss)'=='1' And !Exists('$(StreamlineRoot)\include\sl.h')" Text="ThirdParty\Streamline is missing. Run git submodule update --init --recursive or build with /p:EnableDLSS=false." />
+    <Error Condition="'$(D3D12LookDevPtWithDlss)'=='1' And !Exists('$(DlssRoot)\include\nvsdk_ngx.h')" Text="ThirdParty\DLSS is missing. Run git submodule update --init --recursive or build with /p:EnableDLSS=false." />
+    <Error Condition="'$(D3D12LookDevPtWithNrd)'=='1' And !Exists('$(NrdRoot)\Include\NRD.h')" Text="ThirdParty\NRD is missing. Run git submodule update --init --recursive or build with /p:EnableNRD=false." />
+    <Warning Condition="'$(D3D12LookDevPtRtxdiRequested)'=='1' And '$(D3D12LookDevPtWithRtxdi)'!='1'" Text="EnableRTXDI was requested, but the pinned RTXDI v3.0.0 runtime was not found under $(RtxdiRuntimeRoot). Building the explicit Baseline PT fallback instead." />
+    <Message Condition="'$(D3D12LookDevPtWithRtxdi)'=='1'" Importance="high" Text="RTXDI v3.0.0 ReSTIR DI enabled. ReSTIR GI/PT remains on the Baseline PT fallback." />
+  </Target>
+  <Target Name="BuildThirdParty" BeforeTargets="ClCompile">
+    <Exec Command="powershell -NoProfile -ExecutionPolicy Bypass -File &quot;$(ProjectDir)BuildThirdParty.ps1&quot; -AssimpRoot &quot;$(AssimpRoot)&quot; -AssimpBuildRoot &quot;$(AssimpBuildRoot)&quot; -AssimpLibDir &quot;$(AssimpLibDir)&quot; -AssimpZlibDir &quot;$(AssimpZlibDir)&quot; -AssimpLibName &quot;$(AssimpLibName)&quot; -AssimpZlibName &quot;$(AssimpZlibName)&quot; -DirectXTexProject &quot;$(DirectXTexProject)&quot; -DirectXTexLibDir &quot;$(DirectXTexLibDir)&quot; -NrdRoot &quot;$(NrdRoot)&quot; -NrdBuildRoot &quot;$(NrdBuildRoot)&quot; -NrdLibDir &quot;$(NrdLibDir)&quot; -NrdLibName &quot;$(NrdLibName)&quot; -EnableNRD &quot;$(D3D12LookDevPtWithNrd)&quot; -RtxdiRuntimeRoot &quot;$(RtxdiRuntimeRoot)&quot; -RtxdiBuildRoot &quot;$(RtxdiBuildRoot)&quot; -RtxdiLibDir &quot;$(RtxdiLibDir)&quot; -RtxdiLibName &quot;$(RtxdiLibName)&quot; -EnableRTXDI &quot;$(D3D12LookDevPtWithRtxdi)&quot; -MSBuildPath &quot;$(MSBuildToolsPath)\MSBuild.exe&quot; -Configuration &quot;$(Configuration)&quot; -VisualStudioVersion &quot;$(VisualStudioVersion)&quot;" />
+  </Target>
+  <Target Name="WriteShaderBuildConfiguration" BeforeTargets="CompileShaders">
+    <WriteLinesToFile File="$(IntDir)ShaderBuildConfiguration.txt" Lines="NRD=$(D3D12LookDevPtWithNrd);RTXDI=$(D3D12LookDevPtWithRtxdi)" Overwrite="true" WriteOnlyWhenDifferent="true" />
+  </Target>
+  <Target Name="CompileShaders" BeforeTargets="ClCompile" Inputs="$(IntDir)ShaderBuildConfiguration.txt;Shaders\PathTracingSceneConstants.hlsli;Shaders\PathTracingSampling.hlsli;Shaders\PathTracingQualityCounters.hlsli;Shaders\PathTracingABI.hlsli;Shaders\PathTracing.hlsl;Shaders\PathTracingReSTIR.hlsl;Shaders\PathTracingReSTIRDI.hlsl;Shaders\PathTracingReSTIRCombined.hlsl;Shaders\ReSTIRResolve.hlsl;Shaders\PathTracingDenoise.hlsl;Shaders\PathTracingNrd.hlsl;Shaders\PathTracingTaa.hlsl;Shaders\PathTracingQualityCounters.hlsl" Outputs="$(CompiledShaderDir)PathTracing.lib.cso;$(CompiledShaderDir)PathTracingReSTIR.lib.cso;$(CompiledShaderDir)PathTracingReSTIRDI.lib.cso;$(CompiledShaderDir)PathTracingReSTIRCombined.lib.cso;$(CompiledShaderDir)RtxdiDiCandidate.cso;$(CompiledShaderDir)RtxdiDiTemporal.cso;$(CompiledShaderDir)RtxdiDiSpatial.cso;$(CompiledShaderDir)RtxdiDiShade.cso;$(CompiledShaderDir)PathTracingDenoiseTemporal.cso;$(CompiledShaderDir)PathTracingDenoiseAtrous0.cso;$(CompiledShaderDir)PathTracingDenoiseAtrous1.cso;$(CompiledShaderDir)PathTracingDenoiseAtrous2.cso;$(CompiledShaderDir)PathTracingDenoiseAtrous3.cso;$(CompiledShaderDir)PathTracingDenoiseAtrous4.cso;$(CompiledShaderDir)PathTracingDenoiseComposite.cso;$(CompiledShaderDir)PathTracingNrdPrepare.cso;$(CompiledShaderDir)PathTracingNrdComposite.cso;$(CompiledShaderDir)PathTracingFinalTaa.cso;$(CompiledShaderDir)PathTracingQualityCounters.cso">
+    <MakeDir Directories="$(CompiledShaderDir)" />
+    <Error Condition="!Exists('$(DxcExe)')" Text="DXC was not found at $(DxcExe). Restore NuGet packages first." />
+    <PropertyGroup>
+      <DxcCommon>-HV 2021 -D D3D12LOOKDEVPT_WITH_NRD=$(D3D12LookDevPtWithNrd) -D D3D12LOOKDEVPT_WITH_RTXDI=$(D3D12LookDevPtWithRtxdi) -I &quot;$(ProjectDir)Shaders&quot; $(RtxdiDxcInclude)</DxcCommon>
+      <DxcDebug Condition="'$(Configuration)'=='Debug'">-Zi -Qembed_debug -Od</DxcDebug>
+      <DxcDebug Condition="'$(Configuration)'!='Debug'">-O3</DxcDebug>
+    </PropertyGroup>
+    <Exec Command="&quot;$(DxcExe)&quot; $(DxcCommon) $(DxcDebug) -T lib_6_6 -Fo &quot;$(CompiledShaderDir)PathTracing.lib.cso&quot; &quot;$(ProjectDir)Shaders\PathTracing.hlsl&quot;" />
+    <Exec Command="&quot;$(DxcExe)&quot; $(DxcCommon) $(DxcDebug) -T lib_6_6 -Fo &quot;$(CompiledShaderDir)PathTracingReSTIR.lib.cso&quot; &quot;$(ProjectDir)Shaders\PathTracingReSTIR.hlsl&quot;" />
+    <Exec Command="&quot;$(DxcExe)&quot; $(DxcCommon) $(DxcDebug) -T lib_6_6 -Fo &quot;$(CompiledShaderDir)PathTracingReSTIRDI.lib.cso&quot; &quot;$(ProjectDir)Shaders\PathTracingReSTIRDI.hlsl&quot;" />
+    <Exec Command="&quot;$(DxcExe)&quot; $(DxcCommon) $(DxcDebug) -T lib_6_6 -Fo &quot;$(CompiledShaderDir)PathTracingReSTIRCombined.lib.cso&quot; &quot;$(ProjectDir)Shaders\PathTracingReSTIRCombined.hlsl&quot;" />
+    <Exec Command="&quot;$(DxcExe)&quot; $(DxcCommon) $(DxcDebug) -E RtxdiDiCandidateCS -T cs_6_6 -Fo &quot;$(CompiledShaderDir)RtxdiDiCandidate.cso&quot; &quot;$(ProjectDir)Shaders\ReSTIRResolve.hlsl&quot;" />
+    <Exec Command="&quot;$(DxcExe)&quot; $(DxcCommon) $(DxcDebug) -E RtxdiDiTemporalCS -T cs_6_6 -Fo &quot;$(CompiledShaderDir)RtxdiDiTemporal.cso&quot; &quot;$(ProjectDir)Shaders\ReSTIRResolve.hlsl&quot;" />
+    <Exec Command="&quot;$(DxcExe)&quot; $(DxcCommon) $(DxcDebug) -E RtxdiDiSpatialCS -T cs_6_6 -Fo &quot;$(CompiledShaderDir)RtxdiDiSpatial.cso&quot; &quot;$(ProjectDir)Shaders\ReSTIRResolve.hlsl&quot;" />
+    <Exec Command="&quot;$(DxcExe)&quot; $(DxcCommon) $(DxcDebug) -E RtxdiDiShadeCS -T cs_6_6 -Fo &quot;$(CompiledShaderDir)RtxdiDiShade.cso&quot; &quot;$(ProjectDir)Shaders\ReSTIRResolve.hlsl&quot;" />
+    <Exec Command="&quot;$(DxcExe)&quot; $(DxcCommon) $(DxcDebug) -E DenoiseTemporalCS -T cs_6_6 -Fo &quot;$(CompiledShaderDir)PathTracingDenoiseTemporal.cso&quot; &quot;$(ProjectDir)Shaders\PathTracingDenoise.hlsl&quot;" />
+    <Exec Command="&quot;$(DxcExe)&quot; $(DxcCommon) $(DxcDebug) -E DenoiseAtrous0CS -T cs_6_6 -Fo &quot;$(CompiledShaderDir)PathTracingDenoiseAtrous0.cso&quot; &quot;$(ProjectDir)Shaders\PathTracingDenoise.hlsl&quot;" />
+    <Exec Command="&quot;$(DxcExe)&quot; $(DxcCommon) $(DxcDebug) -E DenoiseAtrous1CS -T cs_6_6 -Fo &quot;$(CompiledShaderDir)PathTracingDenoiseAtrous1.cso&quot; &quot;$(ProjectDir)Shaders\PathTracingDenoise.hlsl&quot;" />
+    <Exec Command="&quot;$(DxcExe)&quot; $(DxcCommon) $(DxcDebug) -E DenoiseAtrous2CS -T cs_6_6 -Fo &quot;$(CompiledShaderDir)PathTracingDenoiseAtrous2.cso&quot; &quot;$(ProjectDir)Shaders\PathTracingDenoise.hlsl&quot;" />
+    <Exec Command="&quot;$(DxcExe)&quot; $(DxcCommon) $(DxcDebug) -E DenoiseAtrous3CS -T cs_6_6 -Fo &quot;$(CompiledShaderDir)PathTracingDenoiseAtrous3.cso&quot; &quot;$(ProjectDir)Shaders\PathTracingDenoise.hlsl&quot;" />
+    <Exec Command="&quot;$(DxcExe)&quot; $(DxcCommon) $(DxcDebug) -E DenoiseAtrous4CS -T cs_6_6 -Fo &quot;$(CompiledShaderDir)PathTracingDenoiseAtrous4.cso&quot; &quot;$(ProjectDir)Shaders\PathTracingDenoise.hlsl&quot;" />
+    <Exec Command="&quot;$(DxcExe)&quot; $(DxcCommon) $(DxcDebug) -E DenoiseCompositeCS -T cs_6_6 -Fo &quot;$(CompiledShaderDir)PathTracingDenoiseComposite.cso&quot; &quot;$(ProjectDir)Shaders\PathTracingDenoise.hlsl&quot;" />
+    <Exec Command="&quot;$(DxcExe)&quot; $(DxcCommon) $(DxcDebug) -E NrdPrepareCS -T cs_6_6 -Fo &quot;$(CompiledShaderDir)PathTracingNrdPrepare.cso&quot; &quot;$(ProjectDir)Shaders\PathTracingNrd.hlsl&quot;" />
+    <Exec Command="&quot;$(DxcExe)&quot; $(DxcCommon) $(DxcDebug) -E NrdCompositeCS -T cs_6_6 -Fo &quot;$(CompiledShaderDir)PathTracingNrdComposite.cso&quot; &quot;$(ProjectDir)Shaders\PathTracingNrd.hlsl&quot;" />
+    <Exec Command="&quot;$(DxcExe)&quot; $(DxcCommon) $(DxcDebug) -E FinalTaaCS -T cs_6_6 -Fo &quot;$(CompiledShaderDir)PathTracingFinalTaa.cso&quot; &quot;$(ProjectDir)Shaders\PathTracingTaa.hlsl&quot;" />
+    <Exec Command="&quot;$(DxcExe)&quot; $(DxcCommon) $(DxcDebug) -E QualityCountersCS -T cs_6_6 -Fo &quot;$(CompiledShaderDir)PathTracingQualityCounters.cso&quot; &quot;$(ProjectDir)Shaders\PathTracingQualityCounters.hlsl&quot;" />
+  </Target>
+  <Target Name="CopyAgilitySdk" AfterTargets="Build">
+    <MakeDir Directories="$(OutDir)D3D12" />
+    <Error Condition="!Exists('$(AgilitySdkBinDir)D3D12Core.dll')" Text="D3D12 Agility SDK DLLs were not found at $(AgilitySdkBinDir). Restore NuGet packages first." />
+    <Copy SourceFiles="$(AgilitySdkBinDir)D3D12Core.dll;$(AgilitySdkBinDir)d3d12SDKLayers.dll" DestinationFolder="$(OutDir)D3D12\" SkipUnchangedFiles="true" />
+  </Target>
+  <Target Name="CopyOptionalDlssRuntime" AfterTargets="Build" Condition="'$(D3D12LookDevPtWithDlss)'=='1'">
+    <MakeDir Directories="$(OutDir)Streamline" />
+    <ItemGroup>
+      <DlssRuntimeFiles Include="$(DlssRoot)\lib\Windows_x86_64\rel\nvngx_dlss.dll" Condition="Exists('$(DlssRoot)\lib\Windows_x86_64\rel\nvngx_dlss.dll')" />
+      <DlssRuntimeFiles Include="$(DlssRoot)\lib\Windows_x86_64\rel\nvngx_dlssd.dll" Condition="Exists('$(DlssRoot)\lib\Windows_x86_64\rel\nvngx_dlssd.dll')" />
+      <StreamlineRuntimeFiles Include="$(StreamlineRoot)\bin\x64\sl.interposer.dll" Condition="Exists('$(StreamlineRoot)\bin\x64\sl.interposer.dll')" />
+      <StreamlineRuntimeFiles Include="$(StreamlineRoot)\bin\x64\sl.common.dll" Condition="Exists('$(StreamlineRoot)\bin\x64\sl.common.dll')" />
+      <StreamlineRuntimeFiles Include="$(StreamlineRoot)\bin\x64\sl.dlss.dll" Condition="Exists('$(StreamlineRoot)\bin\x64\sl.dlss.dll')" />
+      <StreamlineRuntimeFiles Include="$(StreamlineRoot)\bin\x64\sl.dlss_d.dll" Condition="Exists('$(StreamlineRoot)\bin\x64\sl.dlss_d.dll')" />
+    </ItemGroup>
+    <Copy SourceFiles="@(DlssRuntimeFiles);@(StreamlineRuntimeFiles)" DestinationFolder="$(OutDir)Streamline\" SkipUnchangedFiles="true" Condition="'@(DlssRuntimeFiles);@(StreamlineRuntimeFiles)' != ''" />
+  </Target>
+</Project>

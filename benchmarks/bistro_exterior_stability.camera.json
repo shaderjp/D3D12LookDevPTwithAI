@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "keyframes": [
+    { "frame": 0,   "position": [-13.7932, 7.99065, -6.07792], "yaw": 0.456,  "pitch": -0.144733, "cut": true },
+    { "frame": 119, "position": [-13.7932, 7.99065, -6.07792], "yaw": 0.456,  "pitch": -0.144733, "cut": false },
+    { "frame": 180, "position": [-13.7932, 7.99065, -6.07792], "yaw": 0.696,  "pitch": -0.124733, "cut": false },
+    { "frame": 240, "position": [-11.7000, 8.25000, -4.35000], "yaw": 0.870,  "pitch": -0.170000, "cut": false },
+    { "frame": 270, "position": [-5.50000, 8.10000, -1.00000], "yaw": 1.720,  "pitch": -0.120000, "cut": false },
+    { "frame": 330, "position": [-5.50000, 8.10000, -1.00000], "yaw": 1.720,  "pitch": -0.120000, "cut": false },
+    { "frame": 350, "position": [-5.50000, 8.10000, -1.00000], "yaw": 3.120,  "pitch": -0.120000, "cut": false },
+    { "frame": 369, "position": [-5.50000, 8.10000, -1.00000], "yaw": -3.120, "pitch": -0.120000, "cut": false },
+    { "frame": 370, "position": [-18.0000, 6.50000, 3.00000],  "yaw": -0.350, "pitch": -0.080000, "cut": true },
+    { "frame": 419, "position": [-18.0000, 6.50000, 3.00000],  "yaw": -0.350, "pitch": -0.080000, "cut": false }
+  ]
+}

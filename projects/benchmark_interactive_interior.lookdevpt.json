@@ -1,0 +1,43 @@
+{
+  "schemaVersion": 2,
+  "scenePath": "..\\Bistro_v5_2\\BistroInterior.fbx",
+  "environmentPath": "..\\Bistro_v5_2\\san_giuseppe_bridge_4k.hdr",
+  "mode": "ReSTIR GI + DI",
+  "quality": {
+    "qualityProfile": "interactive_game",
+    "restirBackend": "rtxdi",
+    "secondaryShadingRate": "auto",
+    "rayBudget": {
+      "movingSpp": 1,
+      "movingBounces": 2,
+      "staticBaseSpp": 1,
+      "staticMaxSpp": 2,
+      "staticBounces": 4,
+      "settleFrames": 8,
+      "targetGpuMs": 14.5
+    },
+    "finalTaa": true,
+    "sharpenStrength": 0.15,
+    "referenceSpp": 4096
+  },
+  "denoise": {
+    "preset": "interactive_stable",
+    "enabled": true,
+    "backend": "nrd_reblur",
+    "splitSignalDenoise": true,
+    "realtimeReconstruction": true,
+    "cameraJitter": true,
+    "temporalStability": true,
+    "jitterMode": "stable32",
+    "atrousPasses": 3
+  },
+  "view": {
+    "debugView": 0,
+    "environmentEnabled": true,
+    "exposure": 0,
+    "gamma": 2.2,
+    "toneMapper": "aces",
+    "materialFocusMode": "normal",
+    "selectedMaterial": 0
+  }
+}

@@ -664,11 +664,16 @@ void FinalTaaCS(
         current = 0.0f.xxx;
     }
 
-    // Contract-validation views are categorical data. Temporal blending,
-    // neighborhood clipping, exposure, and sharpening would hide single-pixel
-    // failures, so present them 1:1 while leaving the underlying guide-history
-    // update path independent of final TAA.
+    // Debug views describe the current frame. Do not mix them with the previous
+    // view through TAA, otherwise a newly selected diagnostic initially looks
+    // like Beauty and categorical failures become temporally blurred.
     uint debugMode = (uint)round(g_scene.debugOptions.x);
+    if (debugMode >= 1u && debugMode <= 40u)
+    {
+        g_finalResolvedHdr[pixel] = float4(max(current, 0.0f.xxx), 1.0f);
+        g_output[pixel] = float4(Tonemap(current), 1.0f);
+        return;
+    }
     if (debugMode >= 41u && debugMode <= 46u)
     {
         g_finalResolvedHdr[pixel] = float4(saturate(current), 1.0f);

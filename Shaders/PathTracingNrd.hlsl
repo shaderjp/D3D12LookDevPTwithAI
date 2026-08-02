@@ -59,9 +59,22 @@ void NRD_MaterialFactors(
 
 #include "PathTracingSceneConstants.hlsli"
 
+// ABI-compatible with RTXDI_PackedDIReservoir. The NRD composite also owns
+// presentation of shared ReSTIR diagnostics when both backends are active.
+struct RestirReservoir
+{
+    uint lightData;
+    uint uvData;
+    uint mVisibility;
+    uint distanceAge;
+    float targetPdf;
+    float weight;
+};
+
 VK_BINDING(3, 0) ConstantBuffer<SceneConstants> g_scene : register(b0, space0);
 
 VK_BINDING(0, 0) RWTexture2D<float4> g_output : register(u0, space0);
+VK_BINDING(10, 0) RWStructuredBuffer<RestirReservoir> g_restirHistory : register(u3, space0);
 VK_BINDING(13, 0) RWTexture2D<float4> g_denoiseAov0 : register(u5, space0);
 VK_BINDING(14, 0) RWTexture2D<float4> g_denoiseAov1 : register(u6, space0);
 VK_BINDING(15, 0) RWTexture2D<float4> g_denoiseAov2 : register(u7, space0);
@@ -88,6 +101,15 @@ VK_BINDING(47, 0) RWTexture2D<uint> g_previousSurfaceIdentity : register(u39, sp
 
 static const float NrdFp16Max = 65504.0f;
 static const float NrdEps = 1e-6f;
+
+uint RtxdiReservoirPointer(uint2 pixel, uint2 dimensions)
+{
+    static const uint BlockSize = 16u;
+    uint blockRowPitch = ((dimensions.x + BlockSize - 1u) / BlockSize) * BlockSize * BlockSize;
+    uint2 block = pixel / BlockSize;
+    uint2 local = pixel % BlockSize;
+    return block.y * blockRowPitch + block.x * BlockSize * BlockSize + local.y * BlockSize + local.x;
+}
 
 bool Invalid3(float3 value)
 {
@@ -403,16 +425,59 @@ void NrdCompositeCS(uint3 dispatchThreadId : SV_DispatchThreadID)
     MaterialFactors(pixel, dimensions, normal, roughness, max(aov1.rgb, 0.0f.xxx), metallic, diffuseFactor, specularFactor);
     float3 emission = max(g_signalResidual[pixel].rgb, 0.0f.xxx);
     float3 filtered = hit ? max(diffuse * diffuseFactor + specular * specularFactor + emission, 0.0f.xxx) : currentColor;
+    float3 denoisedColor = filtered;
 
     uint debugMode = (uint)round(g_scene.debugOptions.x);
+    float3 pathTracingDebug = max(g_postDenoiseHdr[pixel].rgb, 0.0f.xxx);
+    bool reprojectedHistory = hit && HasValidatedReprojectedHistory(pixel, dimensions);
+    float historyConfidence = min(g_nrdDiffuseConfidence[pixel], g_nrdSpecularConfidence[pixel]);
+    float denoiseDelta = length(currentColor - denoisedColor);
+    RestirReservoir reservoir = (RestirReservoir)0;
+    if (g_scene.pathOptions.w > 0.5f)
+    {
+        reservoir = g_restirHistory[RtxdiReservoirPointer(pixel, dimensions)];
+    }
+    uint reservoirAge = (reservoir.distanceAge >> 16u) & 0xffu;
+    bool reservoirValid = (reservoir.lightData & 0x80000000u) != 0u && reservoir.targetPdf > 0.0f;
+    bool reservoirTemporalReuse = reservoirValid && reservoirAge > 0u;
+    bool reservoirSpatialReuse = reservoirValid && (reservoir.distanceAge & 0xffffu) != 0u;
+    float reservoirWeight = reservoirValid
+        ? saturate(abs(reservoir.weight) / (1.0f + abs(reservoir.weight)))
+        : 0.0f;
+
+    // RayGen owns the primary material/path diagnostics. NRD must not replace
+    // those views with its reconstructed beauty output.
+    if (debugMode >= 1u && debugMode <= 12u) filtered = pathTracingDebug;
+    if (debugMode == 13u) filtered = reservoirWeight.xxx;
+    if (debugMode == 14u) filtered = (reservoirTemporalReuse ? 1.0f : 0.0f).xxx;
+    if (debugMode == 15u) filtered = (reservoirSpatialReuse ? 1.0f : 0.0f).xxx;
     if (debugMode == 16u) filtered = currentColor;
+    if (debugMode == 17u) filtered = denoisedColor;
+    if (debugMode == 18u) filtered = saturate(historyConfidence).xxx;
+    if (debugMode == 19u) filtered = saturate(denoiseDelta / (1.0f + denoiseDelta)).xxx;
     if (debugMode == 20u) filtered = float3(0.5f + g_denoiseAov2[pixel].x * 20.0f, 0.5f + g_denoiseAov2[pixel].y * 20.0f, 0.5f);
+    if (debugMode == 21u) filtered = (hit && !reprojectedHistory ? 1.0f : 0.0f).xxx;
+    if (debugMode == 22u) filtered = max(specular * specularFactor, 0.0f.xxx);
+    if (debugMode == 23u) filtered = abs(currentColor - denoisedColor) * 4.0f;
+    if (debugMode == 24u) filtered = saturate((float)reservoirAge / max(g_scene.restirStabilityOptions.w, 1.0f)).xxx;
+    if (debugMode == 25u) filtered = (reservoirValid ? 1.0f : 0.0f).xxx;
+    // RTXDI currently supplies DI only. GI-specific views intentionally remain
+    // black while the corresponding runtime is unavailable.
+    if (debugMode == 26u) filtered = 0.0f.xxx;
+    if (debugMode == 27u) filtered = reservoirWeight.xxx;
+    if (debugMode == 28u) filtered = 0.0f.xxx;
+    if (debugMode == 29u) filtered = (reservoirTemporalReuse ? 1.0f : 0.0f).xxx;
+    if (debugMode == 30u) filtered = 0.0f.xxx;
+    if (debugMode == 31u) filtered = (reservoirSpatialReuse ? 1.0f : 0.0f).xxx;
     if (debugMode == 32u) filtered = max(g_signalDirect[pixel].rgb, 0.0f.xxx);
     if (debugMode == 33u) filtered = max(g_signalIndirect[pixel].rgb, 0.0f.xxx);
     if (debugMode == 34u) filtered = max(g_signalResidual[pixel].rgb, 0.0f.xxx);
     if (debugMode == 35u) filtered = currentColor;
     if (debugMode == 36u) filtered = diffuse;
     if (debugMode == 37u) filtered = specular;
+    if (debugMode == 38u) filtered = (hit ? 1.0f - saturate(historyConfidence) : 0.0f).xxx;
+    if (debugMode == 39u) filtered = (reprojectedHistory ? 1.0f : 0.0f).xxx;
+    if (debugMode == 40u) filtered = saturate(historyConfidence).xxx;
     if (debugMode == 41u)
     {
         float4 normalRoughness = NRD_FrontEnd_UnpackNormalAndRoughness(g_nrdNormalRoughness[pixel]);

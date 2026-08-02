@@ -1027,6 +1027,7 @@ void DenoiseCompositeCS(uint3 dispatchThreadId : SV_DispatchThreadID)
     }
 
     uint debugMode = (uint)round(g_scene.debugOptions.x);
+    float3 pathTracingDebug = max(g_postDenoiseHdr[pixel].rgb, 0.0f.xxx);
     float3 currentColor = CurrentSignal(pixel);
     float4 temporalDiffuse = LoadCurrentDiffuseHistory(pixel);
     float4 temporalSpecular = LoadCurrentSpecularHistory(pixel);
@@ -1053,7 +1054,20 @@ void DenoiseCompositeCS(uint3 dispatchThreadId : SV_DispatchThreadID)
     }
     float maxHistory = max(g_scene.reconstructionOptions.y, 1.0f);
     float maxReservoirAge = max(g_scene.restirStabilityOptions.w, 1.0f);
+    uint reservoirAge = (reservoir.distanceAge >> 16u) & 0xffu;
+    bool reservoirValid = (reservoir.lightData & 0x80000000u) != 0u && reservoir.targetPdf > 0.0f;
+    bool reservoirTemporalReuse = reservoirValid && reservoirAge > 0u;
+    bool reservoirSpatialReuse = reservoirValid && (reservoir.distanceAge & 0xffffu) != 0u;
+    float reservoirWeight = reservoirValid
+        ? saturate(abs(reservoir.weight) / (1.0f + abs(reservoir.weight)))
+        : 0.0f;
 
+    // RayGen owns the primary material/path diagnostics. Preserve its published
+    // HDR result instead of replacing it with the denoised beauty image.
+    if (debugMode >= 1u && debugMode <= 12u) filtered = pathTracingDebug;
+    if (debugMode == 13u) filtered = reservoirWeight.xxx;
+    if (debugMode == 14u) filtered = (reservoirTemporalReuse ? 1.0f : 0.0f).xxx;
+    if (debugMode == 15u) filtered = (reservoirSpatialReuse ? 1.0f : 0.0f).xxx;
     if (debugMode == 16u) filtered = currentColor;
     if (debugMode == 17u) filtered = temporalColor;
     if (debugMode == 18u) filtered = saturate(min(historyLength.x, historyLength.y) / maxHistory).xxx;
@@ -1062,10 +1076,16 @@ void DenoiseCompositeCS(uint3 dispatchThreadId : SV_DispatchThreadID)
     if (debugMode == 21u) filtered = (min(historyLength.x, historyLength.y) <= 1.0f).xxx;
     if (debugMode == 22u) filtered = indirectSignal;
     if (debugMode == 23u) filtered = abs(temporalColor - filtered) * 4.0f;
-    uint reservoirAge = (reservoir.distanceAge >> 16u) & 0xffu;
-    bool reservoirValid = (reservoir.lightData & 0x80000000u) != 0u && reservoir.targetPdf > 0.0f;
     if (debugMode == 24u) filtered = saturate((float)reservoirAge / maxReservoirAge).xxx;
     if (debugMode == 25u) filtered = (reservoirValid ? 1.0f : 0.0f).xxx;
+    // RTXDI currently supplies DI only. GI-specific views intentionally remain
+    // black while the corresponding runtime is unavailable.
+    if (debugMode == 26u) filtered = 0.0f.xxx;
+    if (debugMode == 27u) filtered = reservoirWeight.xxx;
+    if (debugMode == 28u) filtered = 0.0f.xxx;
+    if (debugMode == 29u) filtered = (reservoirTemporalReuse ? 1.0f : 0.0f).xxx;
+    if (debugMode == 30u) filtered = 0.0f.xxx;
+    if (debugMode == 31u) filtered = (reservoirSpatialReuse ? 1.0f : 0.0f).xxx;
     if (debugMode == 32u) filtered = directSignal;
     if (debugMode == 33u) filtered = indirectSignal;
     if (debugMode == 34u) filtered = residualSignal;
@@ -1073,8 +1093,9 @@ void DenoiseCompositeCS(uint3 dispatchThreadId : SV_DispatchThreadID)
     if (debugMode == 36u) filtered = temporalColor;
     if (debugMode == 37u) filtered = filteredDiffuse.rgb + filteredSpecular.rgb + residualSignal;
     if (debugMode == 38u) filtered = max(historyLength.z, historyLength.w).xxx;
-    if (debugMode == 39u) filtered = min(g_diffuseHistoryConfidence[pixel], g_specularHistoryConfidence[pixel]).xxx;
-    if (debugMode == 40u) filtered = saturate(specularVariance / max(specularVariance + 1.0f, 0.0001f)).xxx;
+    float historyConfidence = min(g_diffuseHistoryConfidence[pixel], g_specularHistoryConfidence[pixel]);
+    if (debugMode == 39u) filtered = (min(historyLength.x, historyLength.y) > 1.0f && historyConfidence > 0.0f).xxx;
+    if (debugMode == 40u) filtered = saturate(historyConfidence).xxx;
     if (debugMode == 41u) filtered = DecodeNormal(g_denoiseAov0[pixel]) * 0.5f + 0.5f;
     if (debugMode == 42u) filtered = saturate(g_denoiseAov1[pixel].w).xxx;
     if (debugMode == 43u) filtered = VisualizeLinearViewZ(abs(g_denoiseAov0[pixel].w));

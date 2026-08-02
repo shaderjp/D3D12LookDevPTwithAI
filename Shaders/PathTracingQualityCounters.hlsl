@@ -289,8 +289,9 @@ void QualityCountersCS(
         uint resolvedWidth;
         uint resolvedHeight;
         g_finalResolvedHdr.GetDimensions(resolvedWidth, resolvedHeight);
+        uint debugMode = (uint)round(g_scene.debugOptions.x);
         bool taaActive = resolvedWidth == dimensions.x && resolvedHeight == dimensions.y &&
-            (uint)round(g_scene.debugOptions.x) < 41u;
+            (debugMode == 0u || debugMode >= 47u);
         bool acceptedByDilation;
         uint rejectReason;
         bool accepted = EvaluateHistoryAcceptance(pixel, dimensions, acceptedByDilation, rejectReason);

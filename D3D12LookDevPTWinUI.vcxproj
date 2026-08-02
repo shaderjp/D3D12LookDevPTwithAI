@@ -189,6 +189,9 @@
     </ClCompile>
     <ClCompile Include="Source\WinUI\RendererController.cpp" />
     <ClCompile Include="Source\WinUI\main.cpp" />
+    <ClCompile Include="Tests\McpServerHttpTests.cpp">
+      <ExcludedFromBuild>true</ExcludedFromBuild>
+    </ClCompile>
     <ClCompile Include="$(GeneratedFilesDir)module.g.cpp" />
   </ItemGroup>
   <ItemGroup>
@@ -229,6 +232,7 @@
   </ItemGroup>
   <ItemGroup>
     <None Include="BuildThirdParty.ps1" />
+    <None Include="Scripts\TestMcpServerHttp.ps1" />
     <None Include="Shaders\PathTracingABI.hlsli" />
     <None Include="Shaders\PathTracingSampling.hlsli" />
     <None Include="Shaders\PathTracingSceneConstants.hlsli" />

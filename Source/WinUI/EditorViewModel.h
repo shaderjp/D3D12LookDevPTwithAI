@@ -34,6 +34,8 @@ struct EditorViewModel : winrt::implements<
         Presets() const noexcept;
     [[nodiscard]] winrt::Windows::Foundation::Collections::IObservableVector<winrt::hstring>
         Approvals() const noexcept;
+    [[nodiscard]] winrt::Windows::Foundation::Collections::IObservableVector<winrt::hstring>
+        RecentRequests() const noexcept;
 
 private:
     void Raise(std::wstring_view property);
@@ -49,6 +51,7 @@ private:
     winrt::Windows::Foundation::Collections::IObservableVector<winrt::hstring> m_variants;
     winrt::Windows::Foundation::Collections::IObservableVector<winrt::hstring> m_presets;
     winrt::Windows::Foundation::Collections::IObservableVector<winrt::hstring> m_approvals;
+    winrt::Windows::Foundation::Collections::IObservableVector<winrt::hstring> m_recentRequests;
     winrt::event<winrt::Microsoft::UI::Xaml::Data::PropertyChangedEventHandler> m_propertyChanged;
 };
 }

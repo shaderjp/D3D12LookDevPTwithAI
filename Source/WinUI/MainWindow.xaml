@@ -697,12 +697,21 @@
                         </Grid.ColumnDefinitions>
                         <ScrollViewer Grid.Column="0">
                             <StackPanel Spacing="4">
-                                <TextBlock x:Name="McpStatusText" Text="Stopped" FontWeight="SemiBold" />
+                                <Border Padding="8,6"
+                                        Margin="0,0,0,4"
+                                        Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                                        BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                                        BorderThickness="1"
+                                        CornerRadius="4">
+                                    <StackPanel Spacing="2">
+                                        <TextBlock x:Name="McpStatusText" Text="Server stopped" FontWeight="SemiBold" />
+                                        <TextBlock x:Name="McpEndpointText" TextWrapping="Wrap" Opacity="0.75" />
+                                    </StackPanel>
+                                </Border>
                                 <TextBlock x:Name="McpCountsText" TextWrapping="Wrap" Opacity="0.75" />
-                                <TextBlock x:Name="McpEndpointText" TextWrapping="Wrap" />
                                 <StackPanel Orientation="Horizontal" Spacing="6">
-                                    <Button Content="Start" Tag="mcp.start" Click="OnActionClick" />
-                                    <Button Content="Stop" Tag="mcp.stop" Click="OnActionClick" />
+                                    <Button x:Name="McpStartButton" Content="Start" Tag="mcp.start" Click="OnActionClick" />
+                                    <Button x:Name="McpStopButton" Content="Stop" Tag="mcp.stop" Click="OnActionClick" IsEnabled="False" />
                                 </StackPanel>
                                 <TextBlock Text="Port" />
                                 <NumberBox x:Name="McpPortNumber" Tag="mcp.port" Minimum="1" Maximum="65535"
@@ -744,6 +753,13 @@
                             </Grid.RowDefinitions>
                             <TextBlock Text="Recent Requests" FontWeight="SemiBold" />
                             <ListView x:Name="RecentRequestsList" Grid.Row="1" />
+                            <TextBlock x:Name="McpIdleText"
+                                       Grid.Row="1"
+                                       Text="No requests"
+                                       HorizontalAlignment="Center"
+                                       VerticalAlignment="Center"
+                                       IsHitTestVisible="False"
+                                       Opacity="0.6" />
                         </Grid>
                     </Grid>
                 </TabViewItem>

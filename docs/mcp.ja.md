@@ -23,6 +23,7 @@ client 側では先に validation を通し、mutation tool を適用し、そ�
 - Session: `initialize` の response header で `MCP-Session-Id` を返し、以後の request では同じ header が必須
 - Server-Sent Events: 未実装。`GET /mcp` は `405 Method Not Allowed`
 - HTTP request body の上限: 16 MiB
+- HTTP/1.1 request body は `Content-Length` と `Transfer-Encoding: chunked` の両方に対応します。chunk extension と trailer は安全に消費し、両 framing header を同時指定した曖昧な request は拒否します。
 
 Bearer token と MCP 設定は以下に保存されます。
 

@@ -24,6 +24,7 @@ The client should validate settings first, apply mutation tools, then read state
 - Session: `initialize` returns `MCP-Session-Id`; all later requests must send it
 - Server-Sent Events: not implemented; `GET /mcp` returns `405 Method Not Allowed`
 - Maximum HTTP request body: 16 MiB
+- HTTP/1.1 request bodies accept either `Content-Length` or `Transfer-Encoding: chunked`. Chunk extensions and trailers are safely consumed; ambiguous requests containing both framing headers are rejected.
 
 The bearer token and MCP settings are stored in:
 

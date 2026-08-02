@@ -124,6 +124,9 @@
     <ClCompile Include="Source\McpServer.cpp">
       <Filter>Source Files\Services</Filter>
     </ClCompile>
+    <ClCompile Include="Tests\McpServerHttpTests.cpp">
+      <Filter>Source Files\Services</Filter>
+    </ClCompile>
     <ClCompile Include="Source\QualitySettingsJson.cpp">
       <Filter>Source Files\Services</Filter>
     </ClCompile>
@@ -299,6 +302,9 @@
       <Filter>Shaders\Denoising</Filter>
     </None>
     <None Include="BuildThirdParty.ps1">
+      <Filter>Build Scripts</Filter>
+    </None>
+    <None Include="Scripts\TestMcpServerHttp.ps1">
       <Filter>Build Scripts</Filter>
     </None>
   </ItemGroup>

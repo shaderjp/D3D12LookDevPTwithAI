@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <map>
 #include <mutex>
+#include <set>
 #include <string>
 #include <thread>
 #include <vector>
@@ -98,7 +99,7 @@ private:
 
     void Run();
     void HandleClient(uintptr_t socketValue);
-    bool ReadHttpRequest(uintptr_t socketValue, HttpRequest& request, std::string& error) const;
+    bool ReadHttpRequest(uintptr_t socketValue, HttpRequest& request, int& errorStatus, std::string& error) const;
     void SendHttpResponse(uintptr_t socketValue, const HttpResponse& response) const;
     HttpResponse HandleHttpRequest(const HttpRequest& request);
     HttpResponse HandleJsonRpc(const HttpRequest& request, const cld::JsonValue& rpc);
@@ -121,6 +122,7 @@ private:
     std::thread m_thread;
     mutable std::mutex m_mutex;
     std::vector<std::thread> m_workers;
+    std::set<uintptr_t> m_clientSockets;
     std::map<std::string, Session> m_sessions;
     std::vector<std::string> m_recentRequests;
     std::string m_lastError;

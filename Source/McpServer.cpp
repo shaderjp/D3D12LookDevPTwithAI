@@ -6,8 +6,10 @@
 
 #include <algorithm>
 #include <cctype>
+#include <charconv>
 #include <functional>
 #include <iomanip>
+#include <limits>
 #include <memory>
 #include <random>
 #include <sstream>
@@ -16,7 +18,106 @@ namespace
 {
     constexpr const char* SupportedProtocolVersion = "2025-11-25";
     constexpr const char* CompatProtocolVersion = "2025-06-18";
+    constexpr size_t MaxHttpHeaderBytes = 64u * 1024u;
+    constexpr size_t MaxHttpLineBytes = 8u * 1024u;
+    constexpr size_t MaxHttpChunkMetadataBytes = 64u * 1024u;
     constexpr size_t MaxHttpBodyBytes = 16u * 1024u * 1024u;
+
+    class SocketBufferReader
+    {
+    public:
+        explicit SocketBufferReader(SOCKET socket) : m_socket(socket) {}
+
+        bool ReadLine(std::string& line, size_t maximumBytes, std::string& error)
+        {
+            for (;;)
+            {
+                const size_t lineEnd = m_buffer.find("\r\n", m_offset);
+                if (lineEnd != std::string::npos)
+                {
+                    const size_t lineBytes = lineEnd - m_offset;
+                    if (lineBytes > maximumBytes)
+                    {
+                        error = "HTTP line is too long.";
+                        return false;
+                    }
+                    line.assign(m_buffer, m_offset, lineBytes);
+                    m_offset = lineEnd + 2;
+                    Compact();
+                    return true;
+                }
+                if (m_buffer.size() - m_offset > maximumBytes + 1)
+                {
+                    error = "HTTP line is too long.";
+                    return false;
+                }
+                if (!Receive(error))
+                {
+                    return false;
+                }
+            }
+        }
+
+        bool ReadExact(size_t byteCount, std::string& destination, std::string& error)
+        {
+            if (byteCount > (std::numeric_limits<size_t>::max)() - destination.size())
+            {
+                error = "HTTP body size overflow.";
+                return false;
+            }
+            while (byteCount > 0)
+            {
+                const size_t available = m_buffer.size() - m_offset;
+                if (available == 0)
+                {
+                    Compact();
+                    if (!Receive(error))
+                    {
+                        return false;
+                    }
+                    continue;
+                }
+                const size_t consumed = (std::min)(available, byteCount);
+                destination.append(m_buffer, m_offset, consumed);
+                m_offset += consumed;
+                byteCount -= consumed;
+                Compact();
+            }
+            return true;
+        }
+
+    private:
+        bool Receive(std::string& error)
+        {
+            char bytes[4096];
+            const int received = recv(m_socket, bytes, static_cast<int>(sizeof(bytes)), 0);
+            if (received <= 0)
+            {
+                error = "HTTP request read failed.";
+                return false;
+            }
+            m_buffer.append(bytes, static_cast<size_t>(received));
+            return true;
+        }
+
+        void Compact()
+        {
+            if (m_offset == m_buffer.size())
+            {
+                m_buffer.clear();
+                m_offset = 0;
+            }
+            else if (m_offset >= 4096)
+            {
+                m_buffer.erase(0, m_offset);
+                m_offset = 0;
+            }
+        }
+
+        SOCKET m_socket = INVALID_SOCKET;
+        std::string m_buffer;
+        size_t m_offset = 0;
+    };
 
     std::string ToLowerAscii(std::string text)
     {
@@ -30,6 +131,123 @@ namespace
     bool StartsWith(const std::string& text, const std::string& prefix)
     {
         return text.size() >= prefix.size() && text.compare(0, prefix.size(), prefix) == 0;
+    }
+
+    bool IsHttpToken(const std::string& text)
+    {
+        if (text.empty())
+        {
+            return false;
+        }
+        for (const unsigned char character : text)
+        {
+            const bool alphaNumeric = std::isalnum(character) != 0;
+            const bool punctuation = character == '!' || character == '#' || character == '$' ||
+                character == '%' || character == '&' || character == '\'' || character == '*' ||
+                character == '+' || character == '-' || character == '.' || character == '^' ||
+                character == '_' || character == '`' || character == '|' || character == '~';
+            if (!alphaNumeric && !punctuation)
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    bool ParseDecimalSize(const std::string& text, size_t& value)
+    {
+        if (text.empty())
+        {
+            return false;
+        }
+        unsigned long long parsed = 0;
+        const auto result = std::from_chars(text.data(), text.data() + text.size(), parsed, 10);
+        if (result.ec != std::errc{} || result.ptr != text.data() + text.size() ||
+            parsed > (std::numeric_limits<size_t>::max)())
+        {
+            return false;
+        }
+        value = static_cast<size_t>(parsed);
+        return true;
+    }
+
+    bool ParseHexSize(const std::string& text, size_t& value)
+    {
+        if (text.empty())
+        {
+            return false;
+        }
+        unsigned long long parsed = 0;
+        const auto result = std::from_chars(text.data(), text.data() + text.size(), parsed, 16);
+        if (result.ec != std::errc{} || result.ptr != text.data() + text.size() ||
+            parsed > (std::numeric_limits<size_t>::max)())
+        {
+            return false;
+        }
+        value = static_cast<size_t>(parsed);
+        return true;
+    }
+
+    struct TransferCoding
+    {
+        std::string name;
+        bool hasParameters = false;
+    };
+
+    bool ParseTransferCodings(const std::string& text, std::vector<TransferCoding>& codings)
+    {
+        size_t start = 0;
+        for (;;)
+        {
+            const size_t comma = text.find(',', start);
+            const std::string item = cld::TrimAscii(text.substr(
+                start, comma == std::string::npos ? std::string::npos : comma - start));
+            if (item.empty())
+            {
+                return false;
+            }
+            const size_t semicolon = item.find(';');
+            const std::string name = ToLowerAscii(cld::TrimAscii(item.substr(0, semicolon)));
+            if (!IsHttpToken(name))
+            {
+                return false;
+            }
+            codings.push_back({ name, semicolon != std::string::npos });
+            if (comma == std::string::npos)
+            {
+                return true;
+            }
+            start = comma + 1;
+        }
+    }
+
+    const char* HttpReasonPhrase(int status)
+    {
+        switch (status)
+        {
+        case 413: return "Payload Too Large";
+        case 431: return "Request Header Fields Too Large";
+        case 501: return "Not Implemented";
+        default: return "Bad Request";
+        }
+    }
+
+    bool SendAll(SOCKET socket, const char* bytes, size_t byteCount)
+    {
+        size_t offset = 0;
+        while (offset < byteCount)
+        {
+            const size_t remaining = byteCount - offset;
+            const int requested = static_cast<int>((std::min)(
+                remaining, static_cast<size_t>((std::numeric_limits<int>::max)())));
+            const int sent = send(socket, bytes + offset, requested, 0);
+            if (sent <= 0)
+            {
+                return false;
+            }
+            offset += static_cast<size_t>(sent);
+        }
+        return true;
     }
 
     bool ContainsHeaderToken(const std::string& header, const std::string& token)
@@ -265,7 +483,6 @@ bool Server::Start(const ServerSettings& settings, IServerHost* host)
     m_stopRequested = false;
     m_running = true;
     m_thread = std::thread(&Server::Run, this);
-    AppendLog("MCP server started on 127.0.0.1:" + std::to_string(settings.port));
     return true;
 }
 
@@ -282,16 +499,20 @@ void Server::Stop()
         std::lock_guard<std::mutex> lock(m_mutex);
         socketValue = m_listenSocket;
         m_listenSocket = 0;
+        for (const uintptr_t clientSocket : m_clientSockets)
+        {
+            shutdown(static_cast<SOCKET>(clientSocket), SD_BOTH);
+            closesocket(static_cast<SOCKET>(clientSocket));
+        }
+        m_clientSockets.clear();
     }
-    if (socketValue != 0 && static_cast<SOCKET>(socketValue) != INVALID_SOCKET)
-    {
-        shutdown(static_cast<SOCKET>(socketValue), SD_BOTH);
-        closesocket(static_cast<SOCKET>(socketValue));
-    }
-
     if (m_thread.joinable())
     {
         m_thread.join();
+    }
+    if (socketValue != 0 && static_cast<SOCKET>(socketValue) != INVALID_SOCKET)
+    {
+        closesocket(static_cast<SOCKET>(socketValue));
     }
 
     std::vector<std::thread> workers;
@@ -345,6 +566,27 @@ void Server::Run()
             break;
         }
 
+        fd_set readable;
+        FD_ZERO(&readable);
+        FD_SET(listenSocket, &readable);
+        timeval pollInterval{};
+        pollInterval.tv_usec = 200000;
+        const int ready = select(0, &readable, nullptr, nullptr, &pollInterval);
+        if (ready == 0)
+        {
+            continue;
+        }
+        if (ready == SOCKET_ERROR)
+        {
+            if (!m_stopRequested)
+            {
+                const int error = WSAGetLastError();
+                std::lock_guard<std::mutex> lock(m_mutex);
+                m_lastError = "MCP select failed: " + std::to_string(error);
+            }
+            break;
+        }
+
         SOCKET client = accept(listenSocket, nullptr, nullptr);
         if (client == INVALID_SOCKET)
         {
@@ -359,7 +601,15 @@ void Server::Run()
 
         {
             std::lock_guard<std::mutex> lock(m_mutex);
-            m_workers.emplace_back(&Server::HandleClient, this, static_cast<uintptr_t>(client));
+            if (m_stopRequested)
+            {
+                shutdown(client, SD_BOTH);
+                closesocket(client);
+                break;
+            }
+            const uintptr_t clientValue = static_cast<uintptr_t>(client);
+            m_clientSockets.insert(clientValue);
+            m_workers.emplace_back(&Server::HandleClient, this, clientValue);
         }
     }
 }
@@ -372,63 +622,69 @@ void Server::HandleClient(uintptr_t socketValue)
     setsockopt(client, SOL_SOCKET, SO_SNDTIMEO, reinterpret_cast<const char*>(&timeoutMs), sizeof(timeoutMs));
 
     HttpRequest request;
+    int errorStatus = 400;
     std::string error;
     HttpResponse response;
-    if (!ReadHttpRequest(socketValue, request, error))
+    if (!ReadHttpRequest(socketValue, request, errorStatus, error))
     {
-        response = JsonResponse(400, "Bad Request", MakeHttpErrorBody(-32700, error));
+        const int errorCode = errorStatus == 400 ? -32700 : -32000;
+        response = JsonResponse(
+            errorStatus,
+            HttpReasonPhrase(errorStatus),
+            MakeHttpErrorBody(errorCode, error));
     }
     else
     {
         response = HandleHttpRequest(request);
     }
 
-    SendHttpResponse(socketValue, response);
-    shutdown(client, SD_BOTH);
-    closesocket(client);
+    if (!m_stopRequested)
+    {
+        SendHttpResponse(socketValue, response);
+    }
+    bool ownsSocket = false;
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        ownsSocket = m_clientSockets.erase(socketValue) != 0;
+    }
+    if (ownsSocket)
+    {
+        shutdown(client, SD_BOTH);
+        closesocket(client);
+    }
 }
 
-bool Server::ReadHttpRequest(uintptr_t socketValue, HttpRequest& request, std::string& error) const
+bool Server::ReadHttpRequest(
+    uintptr_t socketValue,
+    HttpRequest& request,
+    int& errorStatus,
+    std::string& error) const
 {
-    SOCKET client = static_cast<SOCKET>(socketValue);
-    std::string buffer;
-    char chunk[4096];
-    size_t headerEnd = std::string::npos;
-
-    while (headerEnd == std::string::npos)
-    {
-        const int received = recv(client, chunk, sizeof(chunk), 0);
-        if (received <= 0)
-        {
-            error = "HTTP request read failed.";
-            return false;
-        }
-        buffer.append(chunk, chunk + received);
-        if (buffer.size() > MaxHttpBodyBytes)
-        {
-            error = "HTTP request is too large.";
-            return false;
-        }
-        headerEnd = buffer.find("\r\n\r\n");
-    }
-
-    const std::string headerText = buffer.substr(0, headerEnd);
-    std::istringstream headerStream(headerText);
+    errorStatus = 400;
+    SocketBufferReader reader(static_cast<SOCKET>(socketValue));
+    size_t headerBytes = 0;
     std::string requestLine;
-    if (!std::getline(headerStream, requestLine))
+    if (!reader.ReadLine(requestLine, MaxHttpLineBytes, error))
     {
-        error = "HTTP request line missing.";
+        if (error == "HTTP line is too long.")
+        {
+            errorStatus = 431;
+        }
         return false;
     }
-    if (!requestLine.empty() && requestLine.back() == '\r')
+    headerBytes = requestLine.size() + 2;
+    if (headerBytes > MaxHttpHeaderBytes)
     {
-        requestLine.pop_back();
+        errorStatus = 431;
+        error = "HTTP headers are too large.";
+        return false;
     }
 
     std::istringstream requestLineStream(requestLine);
     std::string version;
-    requestLineStream >> request.method >> request.target >> version;
-    if (request.method.empty() || request.target.empty())
+    std::string extra;
+    if (!(requestLineStream >> request.method >> request.target >> version) ||
+        requestLineStream >> extra)
     {
         error = "HTTP request line is invalid.";
         return false;
@@ -436,59 +692,189 @@ bool Server::ReadHttpRequest(uintptr_t socketValue, HttpRequest& request, std::s
     request.path = PathFromTarget(request.target);
 
     std::string line;
-    while (std::getline(headerStream, line))
+    for (;;)
     {
-        if (!line.empty() && line.back() == '\r')
+        if (!reader.ReadLine(line, MaxHttpLineBytes, error))
         {
-            line.pop_back();
+            if (error == "HTTP line is too long.")
+            {
+                errorStatus = 431;
+            }
+            return false;
+        }
+        if (line.size() + 2 > MaxHttpHeaderBytes - headerBytes)
+        {
+            errorStatus = 431;
+            error = "HTTP headers are too large.";
+            return false;
+        }
+        headerBytes += line.size() + 2;
+        if (line.empty())
+        {
+            break;
+        }
+        if (line.front() == ' ' || line.front() == '\t')
+        {
+            error = "Obsolete folded HTTP headers are not supported.";
+            return false;
         }
         const size_t colon = line.find(':');
         if (colon == std::string::npos)
         {
-            continue;
+            error = "HTTP header line is invalid.";
+            return false;
         }
         std::string name = ToLowerAscii(cld::TrimAscii(line.substr(0, colon)));
         std::string value = cld::TrimAscii(line.substr(colon + 1));
-        request.headers[name] = value;
+        if (!IsHttpToken(name))
+        {
+            error = "HTTP header name is invalid.";
+            return false;
+        }
+        const auto [header, inserted] = request.headers.emplace(name, value);
+        if (!inserted)
+        {
+            header->second += "," + value;
+        }
+    }
+
+    const auto transferEncoding = request.headers.find("transfer-encoding");
+    const auto contentLengthHeader = request.headers.find("content-length");
+    if (transferEncoding != request.headers.end() && contentLengthHeader != request.headers.end())
+    {
+        error = "Content-Length and Transfer-Encoding cannot be combined.";
+        return false;
+    }
+
+    if (transferEncoding != request.headers.end())
+    {
+        std::vector<TransferCoding> codings;
+        if (!ParseTransferCodings(transferEncoding->second, codings))
+        {
+            error = "Transfer-Encoding is invalid.";
+            return false;
+        }
+        if (codings.back().name != "chunked")
+        {
+            error = "The final transfer coding must be chunked.";
+            return false;
+        }
+        if (codings.back().hasParameters)
+        {
+            error = "The chunked transfer coding cannot have parameters.";
+            return false;
+        }
+        bool hasUnsupportedCoding = false;
+        for (size_t index = 0; index + 1 < codings.size(); ++index)
+        {
+            if (codings[index].name == "chunked")
+            {
+                error = "The chunked transfer coding must appear exactly once and last.";
+                return false;
+            }
+            hasUnsupportedCoding = true;
+        }
+        if (hasUnsupportedCoding)
+        {
+            errorStatus = 501;
+            error = "Transfer coding is not supported.";
+            return false;
+        }
+
+        size_t metadataBytes = 0;
+        for (;;)
+        {
+            std::string chunkSizeLine;
+            if (!reader.ReadLine(chunkSizeLine, MaxHttpLineBytes, error))
+            {
+                return false;
+            }
+            const size_t semicolon = chunkSizeLine.find(';');
+            if (semicolon != std::string::npos)
+            {
+                const size_t extensionBytes = chunkSizeLine.size() - semicolon;
+                if (extensionBytes > MaxHttpChunkMetadataBytes - metadataBytes)
+                {
+                    error = "HTTP chunk metadata is too large.";
+                    return false;
+                }
+                metadataBytes += extensionBytes;
+            }
+
+            const std::string sizeText = chunkSizeLine.substr(0, semicolon);
+            size_t chunkSize = 0;
+            if (!ParseHexSize(sizeText, chunkSize))
+            {
+                error = "HTTP chunk size is invalid.";
+                return false;
+            }
+
+            if (chunkSize == 0)
+            {
+                for (;;)
+                {
+                    std::string trailer;
+                    if (!reader.ReadLine(trailer, MaxHttpLineBytes, error))
+                    {
+                        return false;
+                    }
+                    if (trailer.size() + 2 > MaxHttpChunkMetadataBytes - metadataBytes)
+                    {
+                        error = "HTTP chunk metadata is too large.";
+                        return false;
+                    }
+                    metadataBytes += trailer.size() + 2;
+                    if (trailer.empty())
+                    {
+                        return true;
+                    }
+                    const size_t colon = trailer.find(':');
+                    if (trailer.front() == ' ' || trailer.front() == '\t' ||
+                        colon == std::string::npos ||
+                        !IsHttpToken(trailer.substr(0, colon)))
+                    {
+                        error = "HTTP trailer line is invalid.";
+                        return false;
+                    }
+                }
+            }
+
+            if (chunkSize > MaxHttpBodyBytes - request.body.size())
+            {
+                errorStatus = 413;
+                error = "HTTP body is too large.";
+                return false;
+            }
+            if (!reader.ReadExact(chunkSize, request.body, error))
+            {
+                return false;
+            }
+            std::string terminator;
+            if (!reader.ReadExact(2, terminator, error) || terminator != "\r\n")
+            {
+                error = "HTTP chunk data is not followed by CRLF.";
+                return false;
+            }
+        }
     }
 
     size_t contentLength = 0;
-    const std::string contentLengthText = HeaderValue(request.headers, "content-length");
-    if (!contentLengthText.empty())
+    if (contentLengthHeader != request.headers.end())
     {
-        try
-        {
-            contentLength = static_cast<size_t>(std::stoull(contentLengthText));
-        }
-        catch (...)
+        if (!ParseDecimalSize(contentLengthHeader->second, contentLength))
         {
             error = "Content-Length is invalid.";
             return false;
         }
         if (contentLength > MaxHttpBodyBytes)
         {
+            errorStatus = 413;
             error = "HTTP body is too large.";
             return false;
         }
     }
 
-    const size_t bodyStart = headerEnd + 4;
-    request.body = buffer.substr(bodyStart);
-    while (request.body.size() < contentLength)
-    {
-        const int received = recv(client, chunk, sizeof(chunk), 0);
-        if (received <= 0)
-        {
-            error = "HTTP body read failed.";
-            return false;
-        }
-        request.body.append(chunk, chunk + received);
-    }
-    if (request.body.size() > contentLength)
-    {
-        request.body.resize(contentLength);
-    }
-    return true;
+    return reader.ReadExact(contentLength, request.body, error);
 }
 
 void Server::SendHttpResponse(uintptr_t socketValue, const HttpResponse& response) const
@@ -509,7 +895,7 @@ void Server::SendHttpResponse(uintptr_t socketValue, const HttpResponse& respons
     out << "\r\n";
     out << response.body;
     const std::string text = out.str();
-    send(client, text.data(), static_cast<int>(text.size()), 0);
+    SendAll(client, text.data(), text.size());
 }
 
 Server::HttpResponse Server::HandleHttpRequest(const HttpRequest& request)

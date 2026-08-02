@@ -13,7 +13,8 @@ EditorViewModel::EditorViewModel() :
     m_materials(single_threaded_observable_vector<hstring>()),
     m_variants(single_threaded_observable_vector<hstring>()),
     m_presets(single_threaded_observable_vector<hstring>()),
-    m_approvals(single_threaded_observable_vector<hstring>())
+    m_approvals(single_threaded_observable_vector<hstring>()),
+    m_recentRequests(single_threaded_observable_vector<hstring>())
 {
 }
 
@@ -62,6 +63,7 @@ void EditorViewModel::Apply(EditorSnapshotPtr snapshot)
     std::vector<hstring> variants;
     std::vector<hstring> presets;
     std::vector<hstring> approvals;
+    std::vector<hstring> recentRequests;
     if (m_snapshot)
     {
         variants.reserve(m_snapshot->variants.size());
@@ -90,11 +92,17 @@ void EditorViewModel::Apply(EditorSnapshotPtr snapshot)
                     (std::max)(item.secondsRemaining, 0)) +
                 L" s)");
         }
+        recentRequests.reserve(m_snapshot->recentRequests.size());
+        for (std::wstring const& request : m_snapshot->recentRequests)
+        {
+            recentRequests.emplace_back(request);
+        }
     }
     RebuildMaterials();
     Replace(m_variants, variants);
     Replace(m_presets, presets);
     Replace(m_approvals, approvals);
+    Replace(m_recentRequests, recentRequests);
     Raise(L"Snapshot");
 }
 
@@ -199,6 +207,11 @@ IObservableVector<hstring> EditorViewModel::Presets() const noexcept
 IObservableVector<hstring> EditorViewModel::Approvals() const noexcept
 {
     return m_approvals;
+}
+
+IObservableVector<hstring> EditorViewModel::RecentRequests() const noexcept
+{
+    return m_recentRequests;
 }
 
 void EditorViewModel::Raise(std::wstring_view property)

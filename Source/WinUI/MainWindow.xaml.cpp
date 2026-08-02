@@ -74,6 +74,7 @@ MainWindow::MainWindow()
     VariantList().ItemsSource(m_viewModel->Variants());
     PresetList().ItemsSource(m_viewModel->Presets());
     ApprovalList().ItemsSource(m_viewModel->Approvals());
+    RecentRequestsList().ItemsSource(m_viewModel->RecentRequests());
 
     m_controller =
         std::make_unique<lookdevpt::winui::RendererController>();
@@ -711,6 +712,10 @@ void MainWindow::OnApprovalSelectionChanged(
     IInspectable const&,
     SelectionChangedEventArgs const&)
 {
+    if (m_refreshing)
+    {
+        return;
+    }
     auto snapshot = m_viewModel->Snapshot();
     const int index = ApprovalList().SelectedIndex();
     m_selectedApproval =
@@ -814,6 +819,27 @@ void MainWindow::RefreshSnapshot()
     m_refreshing = true;
     m_viewModel->Apply(snapshot);
 
+    // Approval labels include a live countdown, so their observable list is
+    // periodically rebuilt. Keep the selection stable by command id and
+    // select the first request when a new approval arrives.
+    int approvalIndex = -1;
+    for (size_t index = 0; index < snapshot->approvals.size(); ++index)
+    {
+        if (snapshot->approvals[index].id == m_selectedApproval)
+        {
+            approvalIndex = static_cast<int>(index);
+            break;
+        }
+    }
+    if (approvalIndex < 0 && !snapshot->approvals.empty())
+    {
+        approvalIndex = 0;
+    }
+    m_selectedApproval = approvalIndex >= 0
+        ? snapshot->approvals[static_cast<size_t>(approvalIndex)].id
+        : 0;
+    ApprovalList().SelectedIndex(approvalIndex);
+
     SceneNameText().Text(snapshot->sceneName);
     SceneSummaryText().Text(
         snapshot->projectName.empty()
@@ -828,7 +854,9 @@ void MainWindow::RefreshSnapshot()
             ? InfoBarSeverity::Error
             : InfoBarSeverity::Informational);
     McpStatusText().Text(
-        snapshot->mcpRunning ? L"Running" : L"Stopped");
+        snapshot->mcpRunning
+            ? L"Listening for requests"
+            : L"Server stopped");
     std::int64_t mcpSessions = 0;
     std::int64_t mcpActiveRequests = 0;
     std::int64_t mcpPendingCommands = 0;
@@ -843,6 +871,14 @@ void MainWindow::RefreshSnapshot()
         std::to_wstring(mcpActiveRequests) +
         L" · Pending commands: " +
         std::to_wstring(mcpPendingCommands));
+    McpIdleText().Text(
+        snapshot->mcpRunning
+            ? L"Waiting for requests\u2026"
+            : L"No requests");
+    McpIdleText().Visibility(
+        snapshot->recentRequests.empty()
+            ? Visibility::Visible
+            : Visibility::Collapsed);
     McpEndpointText().Text(snapshot->mcpEndpoint);
     McpTokenBox().Text(snapshot->mcpToken);
     McpErrorText().Text(snapshot->mcpLastError);
@@ -856,15 +892,9 @@ void MainWindow::RefreshSnapshot()
     ApplyPresetButton().IsEnabled(m_selectedPreset >= 0);
     ApproveButton().IsEnabled(m_selectedApproval != 0);
     RejectButton().IsEnabled(m_selectedApproval != 0);
+    McpStartButton().IsEnabled(!snapshot->mcpRunning);
+    McpStopButton().IsEnabled(snapshot->mcpRunning);
     McpPortNumber().IsEnabled(!snapshot->mcpRunning);
-
-    auto requests =
-        single_threaded_observable_vector<hstring>();
-    for (std::wstring const& request : snapshot->recentRequests)
-    {
-        requests.Append(hstring(request));
-    }
-    RecentRequestsList().ItemsSource(requests);
 
     auto updateNumber =
         [&](NumberBox const& control, wchar_t const* property)

@@ -1,4 +1,5 @@
 #include "SceneImporter.h"
+#include "PbrtSceneImporter.h"
 
 #include <assimp/Importer.hpp>
 #include <assimp/material.h>
@@ -297,6 +298,11 @@ SceneImportResult SceneImporter::ImportScene(const std::wstring& path)
         return result;
     }
 
+    if (IsPbrtScenePath(scenePath))
+    {
+        return ImportPbrtScene(path);
+    }
+
     Assimp::Importer importer;
     const unsigned int flags =
         aiProcess_Triangulate |
@@ -401,6 +407,21 @@ SceneImportResult SceneImporter::ImportScene(const std::wstring& path)
         result.scene = {};
         return result;
     }
+
+
+    SceneMesh canonicalMesh;
+    canonicalMesh.name = WideToUtf8(scenePath.filename().wstring());
+    canonicalMesh.vertices = result.scene.vertices;
+    canonicalMesh.indices = result.scene.indices;
+    canonicalMesh.draws = result.scene.draws;
+    canonicalMesh.boundsMin = result.scene.boundsMin;
+    canonicalMesh.boundsMax = result.scene.boundsMax;
+    result.scene.meshes.push_back(std::move(canonicalMesh));
+    SceneInstance canonicalInstance;
+    canonicalInstance.meshIndex = 0;
+    XMStoreFloat4x4(&canonicalInstance.transform, XMMatrixIdentity());
+    XMStoreFloat4x4(&canonicalInstance.normalTransform, XMMatrixIdentity());
+    result.scene.instances.push_back(canonicalInstance);
 
     std::ostringstream diagnostics;
     diagnostics << "Loaded " << scenePath.filename().string()

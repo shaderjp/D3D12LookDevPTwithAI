@@ -19,3 +19,7 @@
 [submodule "ThirdParty/RTXDI"]
 	path = ThirdParty/RTXDI
 	url = https://github.com/NVIDIA-RTX/RTXDI.git
+[submodule "ThirdParty/tinyexr"]
+	path = ThirdParty/tinyexr
+	url = https://github.com/syoyo/tinyexr.git
+	branch = release

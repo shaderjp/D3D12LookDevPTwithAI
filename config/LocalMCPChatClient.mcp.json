@@ -1,0 +1,15 @@
+{
+  "servers": {
+    "d3d12LookDevPT": {
+      "name": "D3D12LookDevPT",
+      "type": "http",
+      "url": "http://127.0.0.1:8777/mcp",
+      "headers": {
+        "Authorization": "Bearer ${env:D3D12LOOKDEVPT_MCP_TOKEN}"
+      },
+      "enableStandaloneGetStream": false,
+      "startupTimeoutSeconds": 10,
+      "toolTimeoutSeconds": 120
+    }
+  }
+}

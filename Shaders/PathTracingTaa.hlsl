@@ -130,6 +130,26 @@ float3 QuantizePostDenoiseHdr(float3 color)
     return f16tof32(f32tof16(max(color, 0.0f.xxx)));
 }
 
+float3 CompressInteractiveRadiance(float3 color)
+{
+    color = max(color, 0.0f.xxx);
+    if (any(isnan(color)) || any(isinf(color)))
+    {
+        return 0.0f.xxx;
+    }
+    // The path estimator and ReSTIR passes apply the same luminance contract,
+    // but material demodulation in an external denoiser can amplify a filtered
+    // outlier again. Reapply the interactive contribution limit at the final
+    // HDR reconstruction boundary. Reference Still never executes this shader.
+    float limit = max(g_scene.giOptions.y, 0.0f);
+    float luminance = Luminance(color);
+    if (limit > 0.0f && luminance > limit)
+    {
+        color *= limit / max(luminance, TaaEpsilon);
+    }
+    return color;
+}
+
 float3 LoadNrdReconstructedHdr(uint2 pixel, uint2 dimensions)
 {
     float3 currentColor = CurrentSignal(pixel);
@@ -172,11 +192,70 @@ float3 LoadNrdReconstructedHdr(uint2 pixel, uint2 dimensions)
 
 float3 LoadCurrentHdr(uint2 pixel, uint2 dimensions)
 {
+    float3 hdr;
     if (g_scene.postProcessOptions.x > 0.5f && (uint)round(g_scene.debugOptions.x) == 0u)
     {
-        return LoadNrdReconstructedHdr(pixel, dimensions);
+        hdr = LoadNrdReconstructedHdr(pixel, dimensions);
     }
-    return max(g_postDenoiseHdr[pixel].rgb, 0.0f.xxx);
+    else
+    {
+        hdr = g_postDenoiseHdr[pixel].rgb;
+    }
+    return CompressInteractiveRadiance(hdr);
+}
+
+uint2 RenderDimensions()
+{
+    return max((uint2)round(g_scene.renderOutputOptions.xy), uint2(1u, 1u));
+}
+
+uint2 OutputDimensions()
+{
+    return max((uint2)round(g_scene.renderOutputOptions.zw), uint2(1u, 1u));
+}
+
+uint2 OutputToRenderPixel(uint2 outputPixel, uint2 outputDimensions, uint2 renderDimensions)
+{
+    float2 sourcePosition =
+        (float2(outputPixel) + 0.5f.xx) *
+        (float2(renderDimensions) / float2(outputDimensions)) -
+        0.5f.xx;
+    return (uint2)clamp(
+        int2(round(sourcePosition)),
+        int2(0, 0),
+        int2(renderDimensions) - 1);
+}
+
+float3 LoadCurrentHdrUpscaled(
+    uint2 outputPixel,
+    uint2 outputDimensions,
+    uint2 renderDimensions)
+{
+    if (all(outputDimensions == renderDimensions))
+    {
+        return LoadCurrentHdr(outputPixel, renderDimensions);
+    }
+
+    float2 sourcePosition =
+        (float2(outputPixel) + 0.5f.xx) *
+        (float2(renderDimensions) / float2(outputDimensions)) -
+        0.5f.xx;
+    int2 basePixel = int2(floor(sourcePosition));
+    float2 fraction = frac(sourcePosition);
+    int2 maximumPixel = int2(renderDimensions) - 1;
+    uint2 p00 = (uint2)clamp(basePixel, int2(0, 0), maximumPixel);
+    uint2 p10 = (uint2)clamp(basePixel + int2(1, 0), int2(0, 0), maximumPixel);
+    uint2 p01 = (uint2)clamp(basePixel + int2(0, 1), int2(0, 0), maximumPixel);
+    uint2 p11 = (uint2)clamp(basePixel + int2(1, 1), int2(0, 0), maximumPixel);
+    float3 row0 = lerp(
+        LoadCurrentHdr(p00, renderDimensions),
+        LoadCurrentHdr(p10, renderDimensions),
+        fraction.x);
+    float3 row1 = lerp(
+        LoadCurrentHdr(p01, renderDimensions),
+        LoadCurrentHdr(p11, renderDimensions),
+        fraction.x);
+    return lerp(row0, row1, fraction.y);
 }
 
 bool IsInside(int2 pixel, uint2 dimensions)
@@ -284,8 +363,9 @@ float2 BackgroundMotion(uint2 pixel, uint2 dimensions)
 
 bool GatherResolvedHistory(
     float2 historyPosition,
-    uint2 dimensions,
-    float2 jitterDelta,
+    uint2 outputDimensions,
+    uint2 renderDimensions,
+    float2 jitterDeltaOutput,
     float4 currentAov0,
     float4 currentAov1,
     float4 currentAov2,
@@ -306,7 +386,7 @@ bool GatherResolvedHistory(
         for (int x = 0; x < 2; ++x)
         {
             int2 candidate = basePixel + int2(x, y);
-            if (!IsInside(candidate, dimensions))
+            if (!IsInside(candidate, outputDimensions))
             {
                 continue;
             }
@@ -320,12 +400,15 @@ bool GatherResolvedHistory(
             // previous SurfaceGuide is a raw jittered sample. Validate every
             // bilinear color tap at its corresponding guide location so a
             // moving silhouette cannot mix foreground and background history.
-            int2 guideCandidate = int2(round(float2(candidate) + jitterDelta));
-            if (!IsInside(guideCandidate, dimensions))
+            int2 guideCandidate = int2(round(float2(candidate) + jitterDeltaOutput));
+            if (!IsInside(guideCandidate, outputDimensions))
             {
                 continue;
             }
-            uint2 guidePixel = uint2(guideCandidate);
+            uint2 guidePixel = OutputToRenderPixel(
+                uint2(guideCandidate),
+                outputDimensions,
+                renderDimensions);
             if (!ValidateSurface(
                 currentAov0,
                 currentAov1,
@@ -382,7 +465,13 @@ bool GatherStationaryCoverageHistory(
     return true;
 }
 
-bool GatherHistory(uint2 pixel, uint2 dimensions, float2 motion, out float3 historyColor, out float historyLength)
+bool GatherHistory(
+    uint2 pixel,
+    uint2 outputDimensions,
+    uint2 renderDimensions,
+    float2 motion,
+    out float3 historyColor,
+    out float historyLength)
 {
     historyColor = 0.0f.xxx;
     historyLength = 0.0f;
@@ -394,19 +483,25 @@ bool GatherHistory(uint2 pixel, uint2 dimensions, float2 motion, out float3 hist
     }
 
     float2 jitterDelta = g_scene.jitterOptions.xy - g_scene.jitterOptions.zw;
+    float2 jitterDeltaOutput =
+        jitterDelta * (float2(outputDimensions) / float2(renderDimensions));
     // Previous SurfaceGuides are raw jittered samples, so their validation
     // position includes the current-to-previous jitter delta. TAA color history
     // is already resolved onto the non-jittered output grid and must not be
     // shifted again; doing so causes a stationary image to random-walk and blur.
-    float2 guideHistoryPosition = float2(pixel) + motion * float2(dimensions) + jitterDelta;
-    float2 resolvedHistoryPosition = float2(pixel) + motion * float2(dimensions);
+    float2 guideHistoryPosition =
+        float2(pixel) + motion * float2(outputDimensions) + jitterDeltaOutput;
+    float2 resolvedHistoryPosition =
+        float2(pixel) + motion * float2(outputDimensions);
     int2 basePixel = int2(floor(guideHistoryPosition));
     float2 fraction = frac(guideHistoryPosition);
     float totalWeight = 0.0f;
-    float4 currentAov0 = g_denoiseAov0[pixel];
-    float4 currentAov1 = g_denoiseAov1[pixel];
-    float4 currentAov2 = g_denoiseAov2[pixel];
-    uint currentIdentity = g_surfaceIdentity[pixel];
+    uint2 currentGuidePixel =
+        OutputToRenderPixel(pixel, outputDimensions, renderDimensions);
+    float4 currentAov0 = g_denoiseAov0[currentGuidePixel];
+    float4 currentAov1 = g_denoiseAov1[currentGuidePixel];
+    float4 currentAov2 = g_denoiseAov2[currentGuidePixel];
+    uint currentIdentity = g_surfaceIdentity[currentGuidePixel];
 
     [unroll]
     for (int y = 0; y < 2; ++y)
@@ -415,11 +510,14 @@ bool GatherHistory(uint2 pixel, uint2 dimensions, float2 motion, out float3 hist
         for (int x = 0; x < 2; ++x)
         {
             int2 candidate = basePixel + int2(x, y);
-            if (!IsInside(candidate, dimensions))
+            if (!IsInside(candidate, outputDimensions))
             {
                 continue;
             }
-            uint2 candidatePixel = uint2(candidate);
+            uint2 candidatePixel = OutputToRenderPixel(
+                uint2(candidate),
+                outputDimensions,
+                renderDimensions);
             if (!ValidateSurface(
                 currentAov0,
                 currentAov1,
@@ -454,11 +552,14 @@ bool GatherHistory(uint2 pixel, uint2 dimensions, float2 motion, out float3 hist
             for (int dilationX = -1; dilationX <= 1; ++dilationX)
             {
                 int2 candidate = centerPixel + int2(dilationX, dilationY);
-                if (!IsInside(candidate, dimensions))
+                if (!IsInside(candidate, outputDimensions))
                 {
                     continue;
                 }
-                uint2 candidatePixel = uint2(candidate);
+                uint2 candidatePixel = OutputToRenderPixel(
+                    uint2(candidate),
+                    outputDimensions,
+                    renderDimensions);
                 float4 previousAov0 = g_previousDenoiseAov0[candidatePixel];
                 float4 previousAov1 = g_previousDenoiseAov1[candidatePixel];
                 float4 previousAov2 = g_previousDenoiseAov2[candidatePixel];
@@ -502,8 +603,9 @@ bool GatherHistory(uint2 pixel, uint2 dimensions, float2 motion, out float3 hist
         }
         bool resolvedValid = GatherResolvedHistory(
             resolvedHistoryPosition,
-            dimensions,
-            jitterDelta,
+            outputDimensions,
+            renderDimensions,
+            jitterDeltaOutput,
             currentAov0,
             currentAov1,
             currentAov2,
@@ -518,8 +620,9 @@ bool GatherHistory(uint2 pixel, uint2 dimensions, float2 motion, out float3 hist
     }
     bool resolvedValid = GatherResolvedHistory(
         resolvedHistoryPosition,
-        dimensions,
-        jitterDelta,
+        outputDimensions,
+        renderDimensions,
+        jitterDeltaOutput,
         currentAov0,
         currentAov1,
         currentAov2,
@@ -561,11 +664,16 @@ void NeighborhoodBounds(uint2 groupThreadId, out float3 lowValue, out float3 hig
     neighborAverage /= max(weight, 1.0f);
 }
 
-float3 PreviousHistoryNeighborAverage(uint2 pixel, uint2 dimensions)
+float3 PreviousHistoryNeighborAverage(
+    uint2 pixel,
+    uint2 outputDimensions,
+    uint2 renderDimensions)
 {
     float3 average = 0.0f.xxx;
     float weight = 0.0f;
     int2 center = int2(pixel);
+    uint2 currentGuidePixel =
+        OutputToRenderPixel(pixel, outputDimensions, renderDimensions);
     const int2 offsets[4] =
     {
         int2(-1, 0), int2(1, 0), int2(0, -1), int2(0, 1)
@@ -574,7 +682,7 @@ float3 PreviousHistoryNeighborAverage(uint2 pixel, uint2 dimensions)
     for (uint index = 0u; index < 4u; ++index)
     {
         int2 candidate = center + offsets[index];
-        if (!IsInside(candidate, dimensions))
+        if (!IsInside(candidate, outputDimensions))
         {
             continue;
         }
@@ -583,18 +691,22 @@ float3 PreviousHistoryNeighborAverage(uint2 pixel, uint2 dimensions)
         {
             continue;
         }
+        uint2 previousGuidePixel = OutputToRenderPixel(
+            uint2(candidate),
+            outputDimensions,
+            renderDimensions);
         // Do not sharpen across a silhouette, material boundary, or unrelated
         // primitive. Those boundaries are where an unguarded unsharp mask
         // creates the most visible halo and temporal crawling.
         if (!ValidateSurface(
-            g_denoiseAov0[pixel],
-            g_denoiseAov1[pixel],
-            g_denoiseAov2[pixel],
-            g_surfaceIdentity[pixel],
-            g_previousDenoiseAov0[uint2(candidate)],
-            g_previousDenoiseAov1[uint2(candidate)],
-            g_previousDenoiseAov2[uint2(candidate)],
-            g_previousSurfaceIdentity[uint2(candidate)]))
+            g_denoiseAov0[currentGuidePixel],
+            g_denoiseAov1[currentGuidePixel],
+            g_denoiseAov2[currentGuidePixel],
+            g_surfaceIdentity[currentGuidePixel],
+            g_previousDenoiseAov0[previousGuidePixel],
+            g_previousDenoiseAov1[previousGuidePixel],
+            g_previousDenoiseAov2[previousGuidePixel],
+            g_previousSurfaceIdentity[previousGuidePixel]))
         {
             continue;
         }
@@ -635,8 +747,27 @@ void FinalTaaCS(
     uint3 groupThreadId : SV_GroupThreadID,
     uint3 groupId : SV_GroupID)
 {
-    uint2 dimensions = (uint2)round(g_scene.rayOptions.zw);
+    uint2 renderDimensions = RenderDimensions();
+    uint2 dimensions = OutputDimensions();
     uint2 pixel = dispatchThreadId.xy;
+
+    // A successful DLSS-RR evaluation has already written display-resolution
+    // HDR into the parity-selected final texture. Do not feed that output into
+    // the native TAA history; only tone-map it for presentation.
+    if (g_scene.postProcessOptions.y > 0.5f)
+    {
+        if (all(pixel < dimensions))
+        {
+            float3 dlssHdr = max(g_finalResolvedHdr[pixel].rgb, 0.0f.xxx);
+            if (any(isnan(dlssHdr)) || any(isinf(dlssHdr)))
+            {
+                dlssHdr = 0.0f.xxx;
+            }
+            g_finalResolvedHdr[pixel] = float4(dlssHdr, 1.0f);
+            g_output[pixel] = float4(Tonemap(dlssHdr), 1.0f);
+        }
+        return;
+    }
 
     // Reconstruct each current HDR sample once per 8x8 group, including a
     // one-pixel halo for the existing 3x3 clamp. This keeps fusion from
@@ -647,9 +778,14 @@ void FinalTaaCS(
     {
         uint tileX = tileIndex % 10u;
         uint tileY = tileIndex / 10u;
-        int2 sourcePixel = int2(groupId.xy * 8u) + int2(tileX, tileY) - 1;
-        sourcePixel = clamp(sourcePixel, int2(0, 0), int2(dimensions) - 1);
-        g_currentHdrTile[tileIndex] = LoadCurrentHdr(uint2(sourcePixel), dimensions);
+        int2 sourcePixel =
+            int2(groupId.xy * 8u) + int2(tileX, tileY) - 1;
+        sourcePixel =
+            clamp(sourcePixel, int2(0, 0), int2(dimensions) - 1);
+        g_currentHdrTile[tileIndex] = LoadCurrentHdrUpscaled(
+            uint2(sourcePixel),
+            dimensions,
+            renderDimensions);
     }
     GroupMemoryBarrierWithGroupSync();
 
@@ -681,11 +817,21 @@ void FinalTaaCS(
         return;
     }
 
-    bool hit = g_denoiseAov2[pixel].w > 0.0f;
-    float2 motion = hit ? g_denoiseAov2[pixel].xy : BackgroundMotion(pixel, dimensions);
+    uint2 guidePixel =
+        OutputToRenderPixel(pixel, dimensions, renderDimensions);
+    bool hit = g_denoiseAov2[guidePixel].w > 0.0f;
+    float2 motion = hit
+        ? g_denoiseAov2[guidePixel].xy
+        : BackgroundMotion(pixel, dimensions);
     float3 historyColor;
     float historyLength;
-    bool validHistory = GatherHistory(pixel, dimensions, motion, historyColor, historyLength);
+    bool validHistory = GatherHistory(
+        pixel,
+        dimensions,
+        renderDimensions,
+        motion,
+        historyColor,
+        historyLength);
     StoreQualityTaaDecision(pixel, dimensions, true, validHistory);
 
     // Scene/material/light edits invalidate the TAA domain on the host. Within
@@ -745,14 +891,16 @@ void FinalTaaCS(
     float nextHistoryLength = validHistory
         ? min(historyLength + 1.0f, 512.0f)
         : 1.0f;
-    StoreCurrentHistory(pixel, float4(resolved, nextHistoryLength));
 
     // Sharpen only a genuinely static locked history and derive its neighborhood
     // from the immutable previous resolve. Using the current denoiser output here
     // leaks jitter/noise back into an otherwise stable result.
     float2 motionPixels = motion * float2(dimensions);
     float staticSharpen = 1.0f - saturate(length(motionPixels) * 4.0f);
-    float3 stableNeighborAverage = PreviousHistoryNeighborAverage(pixel, dimensions);
+    float3 stableNeighborAverage = PreviousHistoryNeighborAverage(
+        pixel,
+        dimensions,
+        renderDimensions);
     float resolvedLuma = Luminance(resolved);
     float neighborLuma = Luminance(stableNeighborAverage);
     float relativeContrast = abs(resolvedLuma - neighborLuma) /
@@ -770,7 +918,11 @@ void FinalTaaCS(
     float3 clippedSharpenedYCoCg = clamp(LinearToYCoCg(sharpened), lowValue - extent * 0.1f, highValue + extent * 0.1f);
     // Current-frame bounds remain a safety net for young/reactive history only.
     float finalClipStrength = saturate(1.0f - historyLock);
-    float3 finalHdr = YCoCgToLinear(lerp(LinearToYCoCg(sharpened), clippedSharpenedYCoCg, finalClipStrength));
+    float3 finalHdr = CompressInteractiveRadiance(
+        YCoCgToLinear(lerp(
+            LinearToYCoCg(sharpened),
+            clippedSharpenedYCoCg,
+            finalClipStrength)));
     if (debugMode == 47u)
     {
         finalHdr = (saturate(historyLength / 512.0f)).xxx;
@@ -779,6 +931,9 @@ void FinalTaaCS(
     {
         finalHdr = (validHistory ? 1.0f : 0.0f).xxx;
     }
-    g_finalResolvedHdr[pixel] = float4(finalHdr, 1.0f);
+    // Final HDR and next-frame history intentionally share the parity-selected
+    // A/B texture. Alpha retains the history length while RGB is the exact HDR
+    // value used for display and benchmark capture.
+    g_finalResolvedHdr[pixel] = float4(finalHdr, nextHistoryLength);
     g_output[pixel] = float4(Tonemap(finalHdr), 1.0f);
 }

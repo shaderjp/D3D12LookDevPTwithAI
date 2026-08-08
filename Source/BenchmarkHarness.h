@@ -154,7 +154,7 @@ struct ArtifactRecord
 // records in double precision and publish the metric names described in the
 // benchmark manifest. The D3D12 backend allocates these records only while the
 // deterministic benchmark harness is active.
-inline constexpr std::uint32_t QualityCounterAbiVersion = 1;
+inline constexpr std::uint32_t QualityCounterAbiVersion = 2;
 struct alignas(16) QualityCounterTileV1
 {
     std::uint32_t surfaceHistoryTested = 0;
@@ -176,13 +176,25 @@ struct alignas(16) QualityCounterTileV1
     float contributionOutputEnergy = 0.0f;
     float contributionClampedEnergy = 0.0f;
     std::uint32_t nonFinitePixels = 0;
+
+    std::uint32_t primaryRays = 0;
+    std::uint32_t secondaryRays = 0;
+    std::uint32_t shadowRays = 0;
+    std::uint32_t diVisibilityRays = 0;
+
+    std::uint32_t giVisibilityRays = 0;
+    std::uint32_t ptVisibilityRays = 0;
+    std::uint32_t anyHitInvocations = 0;
+    std::uint32_t reserved = 0;
 };
-static_assert(sizeof(QualityCounterTileV1) == 64);
+static_assert(sizeof(QualityCounterTileV1) == 96);
 static_assert(alignof(QualityCounterTileV1) == 16);
 static_assert(offsetof(QualityCounterTileV1, surfaceHistoryTested) == 0);
 static_assert(offsetof(QualityCounterTileV1, taaHistoryTested) == 32);
 static_assert(offsetof(QualityCounterTileV1, contributionInputEnergy) == 48);
 static_assert(offsetof(QualityCounterTileV1, nonFinitePixels) == 60);
+static_assert(offsetof(QualityCounterTileV1, primaryRays) == 64);
+static_assert(offsetof(QualityCounterTileV1, anyHitInvocations) == 88);
 
 // Reduces GPU-written tile records in double precision and appends the
 // quality-counter metric contract to `metrics`. Invalid/non-finite records are

@@ -1,8 +1,8 @@
-# Optional NVIDIA RTXDI ReSTIR DI
+# Optional NVIDIA RTXDI ReSTIR DI / GI / PT
 
 Japanese documentation: [NVIDIA RTXDI ReSTIR DI](rtxdi.ja.md)
 
-D3D12LookDevPTWinUI has an optional integration boundary for the official NVIDIA RTXDI SDK. It currently implements ReSTIR DI for the renderer's local mesh-emitter and analytic-area-light list. ReSTIR PT/GI is not integrated, and Sun/Environment sampling is not yet folded into the RTXDI candidate set.
+D3D12LookDevPTWinUI has an optional integration of the official NVIDIA RTXDI SDK. It implements ReSTIR DI, ReSTIR GI, and checkerboard ReSTIR PT. Sun, Environment, emissive triangles, and analytic area lights share one light identity/sample/evaluate/PDF contract.
 
 Pinned revisions:
 
@@ -34,13 +34,13 @@ RTXDI is disabled at compile time by default:
 msbuild .\D3D12LookDevPTWinUI.sln /m /p:Configuration=Release /p:Platform=x64 /p:EnableRTXDI=false
 ```
 
-Enable the current ReSTIR DI backend with:
+Enable the ReSTIR DI/GI/PT backends with:
 
 ```powershell
 msbuild .\D3D12LookDevPTWinUI.sln /m /p:Configuration=Release /p:Platform=x64 /p:EnableRTXDI=true
 ```
 
-When enabled and present, `BuildThirdParty.ps1` builds only `ThirdParty/RTXDI/Libraries/Rtxdi` as `Rtxdi.lib`. The application validates the official runtime ABI (`RTXDI_RuntimeParameters` and the 24-byte `RTXDI_PackedDIReservoir`) and uses RTXDI's block-linear reservoir layout.
+When enabled and present, `BuildThirdParty.ps1` builds only `ThirdParty/RTXDI/Libraries/Rtxdi` as `Rtxdi.lib`. That upstream CMake file is an `add_subdirectory` fragment, so `CMake/RtxdiRuntime/CMakeLists.txt` supplies the standalone `project()` context without modifying the pinned submodule. The application validates `RTXDI_RuntimeParameters` plus the official 24-byte DI, 32-byte GI, and 64-byte PT packed reservoir ABIs and uses RTXDI's block-linear layouts.
 
 If `EnableRTXDI=true` is requested without the pinned headers and sources, MSBuild emits a warning and compiles `D3D12LOOKDEVPT_WITH_RTXDI=0`. No SDK include or library link is added, and every ReSTIR mode remains a Baseline PT fallback.
 
@@ -68,12 +68,14 @@ Reservoirs use the official packed ABI and retain sample/light identity, reservo
 
 ## Candidate Scope And Estimator Boundary
 
-The current RTXDI candidate list is the renderer's `RtLight` table:
+The unified candidate space contains:
 
 - emissive mesh triangles, sampled with their light alias-table probability;
-- procedural analytic area lights.
+- procedural analytic area lights;
+- Sun;
+- lat-long or procedural Environment.
 
-The target is positive luminance of the evaluated diffuse plus specular contribution. The current implementation evaluates the material/emissive texture and BSDF for each candidate; the planned cheap average-radiance target is not implemented yet. Sun and lat-long Environment lighting continue through the Baseline path-tracing techniques, and the secondary one-light mixture is not yet unified with RTXDI.
+Candidate selection uses a cheap average-radiance target. The selected sample is then re-evaluated with its exact texture, BSDF, source PDF, and final visibility. Baseline vertices use one power-weighted light-family sample and MIS it against the BSDF technique; emissive-hit and environment-miss PDFs use the same mixture probability.
 
 Temporal reprojection uses the non-jitter 2.5D surface motion plus the current/previous jitter delta at history lookup. Each bilinear tap is validated against depth, normal, albedo, roughness, and packed surface identity. Spatial reuse applies equivalent current-surface guide checks. Ordinary camera motion preserves reuse; camera cuts, projection/resize, geometry changes, and lighting-domain invalidation reject the affected history.
 
@@ -84,24 +86,28 @@ The existing mode names remain compatible:
 | Render mode | Effective implementation today |
 |---|---|
 | Baseline PT | Baseline MIS path tracer |
-| ReSTIR DI | RTXDI DI for local direct lights + Baseline indirect/Sun/Environment |
-| ReSTIR GI | Baseline MIS path tracer; RTXDI GI/PT is not integrated |
-| ReSTIR GI + DI | RTXDI DI for local direct lights + Baseline indirect/Sun/Environment |
+| ReSTIR DI | RTXDI DI + Baseline indirect |
+| ReSTIR GI | Baseline one-light direct + RTXDI GI |
+| ReSTIR GI + DI | RTXDI DI + RTXDI GI |
+| ReSTIR PT | Baseline one-light direct + checkerboard RTXDI PT |
+| ReSTIR PT + DI | RTXDI DI + checkerboard RTXDI PT |
 
 RTXDI runs only when all of the following are true:
 
 - the SDK was compiled and its runtime ABI check passed;
 - project quality uses `restirBackend: "rtxdi"`;
-- the mode uses DI;
+- the selected mode's DI/GI/PT pipelines are evaluation-ready;
 - the quality profile is not `reference_still`.
 
 Otherwise the renderer falls back to Baseline PT without changing the accepted project mode name. `restirBackend: "off"` explicitly disables RTXDI. `reference_still` does not consume RTXDI history; selecting the profile also configures unclamped Baseline MIS accumulation, although later path-tracing edits can override those accumulator controls.
 
-The UI and MCP expose requested versus effective state, SDK/runtime revisions, `diEvaluationReady`, `giEvaluationReady`, per-mode activity, and a fallback reason. Read these fields from `lookdevpt.get_state` under `restir.rtxdiStatus`; the lower-cost `lookdevpt.get_stats` snapshot does not duplicate that status object.
+The UI and MCP expose requested versus effective state, SDK/runtime revisions, `diEvaluationReady`, `giEvaluationReady`, `ptEvaluationReady`, active indirect algorithm, per-mode activity, logical reservoir bytes, and a fallback reason.
 
 ## Resource And History Behavior
 
-- Full-size reservoirs are allocated only when an interactive DI mode can use RTXDI; other configurations keep descriptor-valid placeholders.
+- Full-size reservoirs are allocated only for the selected interactive algorithm; GI and PT are never simultaneously resident.
+- DI scratch and the current parity's GI/PT output are placed at offset zero in the same heap with explicit aliasing barriers.
+- Final TAA HDR output is the next A/B history resource. The normal fused NRD/TAA path keeps `postDenoiseHdr` as a 1x1 placeholder.
 - The fixed A-history/B-scratch descriptors are created with the output resources and are not rewritten while the GPU is executing.
 - Surface guides and identity use their own immutable A/B descriptor tables selected by frame parity, removing the former full-resolution guide publish copy.
 - ReSTIR shade writes directly into the split diffuse/specular signals. When a denoiser consumes those signals, the redundant accumulation, intermediate post-denoise HDR, and LDR writes are skipped.
@@ -110,4 +116,4 @@ The UI and MCP expose requested versus effective state, SDK/runtime revisions, `
 
 Validate ReSTIR DI with fixed seed/camera paths, alpha foliage, small emissive lights, high dynamic range, camera cuts, and motion. Performance benchmarks omit full-screen quality counters; quality/combined runs retain them. Compare mean energy and temporal error against a high-SPP Baseline reference rather than judging only a single still frame.
 
-The two-pass DI implementation is functional, but the following plan items remain open: RTXDI ReSTIR PT/GI, Sun/Environment integration into the candidate table, the cheap candidate target, the unified secondary one-light estimator, and final cross-scene 1080p60 quality gates.
+The independent Primary Visibility/compact secondary-task graph is available for eligible DXR 1.1 Interactive Baseline/DI frames. It is intentionally not used for GI/PT or the formal GI+DI gate, and its secondary tasks currently retrace the camera sample instead of continuing from the stored primary intersection. The remaining large items are full SDK-equivalent hybrid-shift path replay beyond the current reconnection target shift, feature-active DLSS-RR certification with an NVIDIA-issued NGX application ID, and final cross-scene temporal/reference quality gates.

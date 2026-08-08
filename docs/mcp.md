@@ -20,13 +20,13 @@ The client should validate settings first, apply mutation tools, then read state
 - Bind address: `127.0.0.1` only
 - Transport: Streamable HTTP-style JSON-RPC over `POST /mcp`
 - Protocol versions accepted: `2025-11-25`, `2025-06-18`
-- Authentication: `Authorization: Bearer <token>` is required
+- Authentication: `bearer_token` (default) or `none`; `bearer_token` requires `Authorization: Bearer <token>`
 - Session: `initialize` returns `MCP-Session-Id`; all later requests must send it
 - Server-Sent Events: not implemented; `GET /mcp` returns `405 Method Not Allowed`
 - Maximum HTTP request body: 16 MiB
 - HTTP/1.1 request bodies accept either `Content-Length` or `Transfer-Encoding: chunked`. Chunk extensions and trailers are safely consumed; ambiguous requests containing both framing headers are rejected.
 
-The bearer token and MCP settings are stored in:
+The authentication mode, bearer token, and other MCP settings are stored in:
 
 ```text
 %APPDATA%\D3D12LookDevPTWinUI\settings.json
@@ -44,14 +44,26 @@ Use the dockable `MCP Server` panel:
 - `Port`
 - `Request Timeout`
 - `Access Mode`
+- `Authentication`
 - `Copy Token`
 - `Regenerate Token`
+- `Export mcp.json...`
 - pending approvals and recent request log
+
+`Export mcp.json...` writes a VS Code-compatible MCP configuration containing
+the current endpoint and protocol version. By default it uses a password-style
+`inputs` prompt and does not write the bearer token. Enable `Embed bearer token
+in exported mcp.json` only when a self-contained local configuration is
+required; the token is then stored as plain text, so keep that file outside
+source control and do not share it. Request timeout and access mode remain
+application-local server settings and are not part of VS Code's `mcp.json`
+schema. When `Authentication` is `None`, the exported file omits both `inputs`
+and the `Authorization` header.
 
 The server is disabled by default. It can also be started from the command line:
 
 ```powershell
-.\Bin\x64\Debug\D3D12LookDevPTWinUI.exe --mcp-server --mcp-port 8777 --mcp-token <token> --mcp-access confirm_mutations
+.\Bin\x64\Debug\D3D12LookDevPTWinUI.exe --mcp-server --mcp-port 8777 --mcp-auth bearer_token --mcp-token <token> --mcp-access confirm_mutations
 ```
 
 Access modes:
@@ -59,6 +71,17 @@ Access modes:
 - `read_only`: read tools work; mutation tools are rejected.
 - `confirm_mutations`: mutation tools wait for approval in the WinUI `MCP` panel.
 - `allow_mutations`: mutation tools execute without UI approval.
+
+Authentication modes:
+
+- `bearer_token`: the default. Every request must carry the configured bearer token.
+- `none`: requests do not require an `Authorization` header. The server remains fixed to `127.0.0.1`; this mode is not exposed on external interfaces. Prefer `read_only` or `confirm_mutations` when authentication is disabled.
+
+To start without authentication from the command line:
+
+```powershell
+.\Bin\x64\Debug\D3D12LookDevPTWinUI.exe --mcp-server --mcp-port 8777 --mcp-auth none --mcp-access confirm_mutations
+```
 
 The mutation queue is processed at a renderer-thread safe point and has a limit of 16 queued requests. Mutations never touch D3D12 or WinUI state directly from the HTTP server thread.
 
@@ -104,12 +127,29 @@ Example `.vscode/mcp.json`:
 }
 ```
 
+With `Authentication` set to `None`, omit the token input and authorization
+header:
+
+```json
+{
+  "servers": {
+    "d3d12LookDevPT": {
+      "type": "http",
+      "url": "http://127.0.0.1:8777/mcp",
+      "headers": {
+        "MCP-Protocol-Version": "2025-11-25"
+      }
+    }
+  }
+}
+```
+
 Use `MCP: List Servers` to start or restart the server entry after editing the file. Use `MCP: Reset Cached Tools` if the tool list changes after rebuilding D3D12LookDevPTWinUI.
 
 Notes:
 
 - Start D3D12LookDevPTWinUI and its MCP server before starting the VS Code MCP entry.
-- If the token is regenerated in the WinUI MCP panel, restart the VS Code MCP server entry and enter the new token.
+- With `bearer_token`, if the token is regenerated in the WinUI MCP panel, restart the VS Code MCP server entry and enter the new token.
 - This server supports HTTP POST JSON-RPC. Clients that require SSE-only MCP will not work.
 
 ## JSON-RPC Flow
@@ -154,6 +194,10 @@ $initialized = @{
 
 Invoke-WebRequest -Uri $endpoint -Method Post -Headers $sessionHeaders -ContentType "application/json" -Body $initialized
 ```
+
+When the server uses `Authentication: None`, omit `Authorization` from both
+`$headers` and `$sessionHeaders`; the session and protocol headers are still
+required as shown.
 
 Call a read tool:
 
@@ -636,7 +680,7 @@ Save a project without a dialog:
 
 ## Troubleshooting
 
-- `401 Unauthorized`: token mismatch. Copy the token from the WinUI `MCP` panel and restart the client connection.
+- `401 Unauthorized`: `bearer_token` authentication is enabled and the token is missing or does not match. Copy the token from the WinUI `MCP` panel and restart the client connection, or explicitly select `None` before starting the server.
 - `403 Forbidden`: client sent a disallowed `Origin` header.
 - `400 Unsupported MCP-Protocol-Version`: use `2025-11-25` or `2025-06-18`.
 - `400 MCP-Session-Id is required`: call `initialize` first, then send the returned `MCP-Session-Id`.

@@ -7,7 +7,7 @@ This guide is intended for students of real-time rendering and path tracing who 
 A good reading order is to start with the full-frame overview, inspect the stages that interest you through Debug Views, and then read the linked shaders.
 
 > [!NOTE]
-> This document describes the current implementation, not a target architecture. Primary Visibility is produced inside the Path Tracing RayGen rather than in an independent pass. RTXDI currently extends through ReSTIR DI, while DLSS Ray Reconstruction currently extends only through its runtime probe.
+> This document describes the current implementation, not a target architecture. Eligible DXR 1.1 Interactive Baseline/DI frames use an independent Primary Visibility and compact secondary-task graph; RTXDI GI/PT, Reference Still, DXR 1.0, and diagnostic runs retain the megakernel. RTXDI provides DI, GI, and checkerboard PT, and DLSS Ray Reconstruction has a complete per-frame tagging/evaluation path.
 
 ## 1. Two Output Goals
 
@@ -26,36 +26,45 @@ The ordinary Interactive Beauty path follows the host-side [`D3D12PathTracingBac
 
 ```mermaid
 flowchart LR
-    FS["FrameState / camera / jitter / history validity"] --> PT["DXR DispatchRays<br/>path tracing + first-hit guides"]
+    FS["FrameState / camera / jitter / history validity"] --> W{"Compact secondary<br/>eligible?"}
+    W -->|"yes"| PV["Primary Visibility<br/>full guides and IDs"]
+    PV --> CW["SPP prefix scan<br/>SecondaryTask list"]
+    CW --> SI["1D ExecuteIndirect<br/>secondary tasks + resolve"]
+    W -->|"no"| PT["DXR megakernel<br/>path tracing + first-hit guides"]
+    SI --> G
     PT --> G["Surface guides<br/>normal, view-Z, motion, identity"]
+    SI --> S
     PT --> S["Lighting signals<br/>diffuse, specular, residual"]
     G --> R{"RTXDI ReSTIR DI<br/>active?"}
     S --> R
     R -->|"yes"| RA["Pass A<br/>candidate + temporal"]
     RA --> RB["Pass B<br/>spatial + visibility + shade"]
-    R -->|"no"| D
-    RB --> D{"Denoiser"}
+    RB --> GI["Optional RTXDI GI / PT<br/>initial + fused reuse/shading"]
+    R -->|"no"| GI
+    GI --> D{"Reconstruction"}
     D -->|"NRD"| N["NrdPrepareCS<br/>REBLUR / RELAX"]
     D -->|"Internal"| I["Temporal + moments<br/>hit-distance-aware A-Trous"]
     D -->|"Off"| O["Current HDR"]
-    N --> T["FinalTaaCS<br/>HDR resolve + sharpen"]
+    D -->|"DLSS-RR"| DL["Guide prepare + tags<br/>slEvaluateFeature"]
+    N --> T["FinalTaaCS<br/>HDR TAA/TAAU + sharpen"]
     I --> T
     O --> T
+    DL --> TM
     T --> TM["Exposure + None / Reinhard / ACES fitted<br/>gamma encoding"]
-    TM --> P["Swap-chain copy + PRESENT transition"]
-    P --> C["DXGI composition + WinUI"]
+    TM --> P["Swapchain copy + WinUI composition + Present"]
 ```
 
 The actual command-list order is:
 
-1. `DispatchRays`
+1. `DispatchRays`, or Primary Visibility + compact task generation + 1D `ExecuteIndirect` + pixel resolve
 2. `RunRestirReusePass`
-3. `RunDenoisePass`
-4. `RunFinalTaaPass`
-5. `RunQualityCounterPass` during normal execution and combined/quality benchmarks; skipped only for performance benchmarks
-6. `SealSurfaceGuideFrame`
-7. `CopyOutputToBackBuffer`
-8. Transition the composition swap-chain buffer to `PRESENT` and present it
+3. `RunRestirGiPass` / `RunRestirPtPass` for the selected indirect algorithm
+4. `RunDenoisePass`, including DLSS-RR preparation/evaluation when selected and ready
+5. `RunFinalTaaPass` for native reconstruction; successful DLSS-RR bypasses it
+6. `RunQualityCounterPass` during normal execution and combined/quality benchmarks; skipped only for performance benchmarks
+7. `SealSurfaceGuideFrame`
+8. `CopyOutputToBackBuffer`
+9. Present through the WinUI swap-chain panel. Render Only Mode hides the editor chrome
 
 Tone mapping is conceptually the final stage, but it normally runs at the end of `FinalTaaCS`. Paths that do not use Final TAA perform the same display transform in RayGen or the denoiser composite.
 
@@ -80,7 +89,7 @@ DXR uses the following acceleration structures:
 - BLAS: a structure for traversing the triangles in mesh geometry
 - TLAS: a structure that combines instances and BLASes for traversal of the full scene
 
-Non-alpha geometry is marked with `D3D12_RAYTRACING_GEOMETRY_FLAG_OPAQUE` to avoid unnecessary AnyHit invocations. Editing an alpha mask also changes the geometry flag, so the BLAS is updated.
+Non-alpha geometry is marked with `D3D12_RAYTRACING_GEOMETRY_FLAG_OPAQUE` to avoid unnecessary AnyHit invocations. Editing an alpha mask also changes the geometry flag, so the BLAS is updated. Static BLAS builds request compaction, query the post-build compacted size, compact-copy before TLAS construction, and release the original result and scratch resources after initialization.
 
 ### 3.2 Shader Stages and Small Payloads
 
@@ -130,6 +139,8 @@ Surface shading combines:
 - Minimum roughness of `0.04`: avoids numerical instability from highlights that approach an extreme delta distribution
 
 A continuation ray selects one lobe from the diffuse/specular mixture. The specular direction uses Heitz-style isotropic GGX VNDF sampling to efficiently sample visible microfacet normals even at grazing angles. Throughput is updated by dividing the full BSDF, not only the selected lobe, by the same mixture PDF.
+
+PBRT `dielectric` materials use a separate delta-interface path. The renderer preserves the entering/exiting orientation, evaluates exact unpolarized Fresnel reflectance, handles total internal reflection, and applies Snell refraction with the radiance relative-IOR Jacobian. PBRT `thindielectric` keeps the ray direction unchanged on transmission and uses the effective two-interface Fresnel term. These delta boundaries do not consume the diffuse/glossy bounce budget. RTXDI receives the exact world-space receiver position and incident direction after refraction; shadow and inline GI visibility remain straight-through approximations because refractive caustics are outside the current estimator.
 
 ### 4.2 Next Event Estimation and MIS
 
@@ -206,7 +217,7 @@ The current GPU texture pack has these meanings:
 | `g_signalResidual` | Unfiltered residual RGB such as emission/sky, plus metallic |
 | Confidence textures | Per-lobe diffuse/specular sample and history confidence |
 
-The resource names `Direct` and `Indirect` are legacy names. Their current meanings are the Diffuse and Specular lobes. The public C++ semantic contract is defined by `SurfaceGuides` and `LightingSignals` in [`RenderStabilityTypes.h`](../Source/RenderStabilityTypes.h). However, those public structures describe a semantic contract that includes room for future extensions; the current GPU pack does not keep geometric and shading normals as separate AOVs, nor does it store full individual IDs and the ray footprint separately.
+The resource names `Direct` and `Indirect` are legacy names. Their current meanings are the Diffuse and Specular lobes. The public C++ semantic contract is defined by `SurfaceGuides` and `LightingSignals` in [`RenderStabilityTypes.h`](../Source/RenderStabilityTypes.h). The compact Primary Visibility path additionally writes position plus ray-cone width, geometric normal plus cone spread, and exact instance/geometry/primitive/material IDs. The shading normal remains in the common guide pack.
 
 Primary and secondary hit distances are not interchangeable. To judge the spatial extent of a reflection or diffuse lobe, the denoiser needs to know how far that lobe's first continuation ray traveled. When adaptive half skips a secondary sample, hit distance 0 is used as an "unsampled" sentinel.
 
@@ -290,7 +301,7 @@ flowchart LR
 
 Pass A keeps the local candidate in registers while combining it with the previous reservoir, then writes once to scratch B. Pass B reads only scratch, combining four neighbors for stable history or up to eight for young/disoccluded history. The selected sample is finally re-evaluated at the current surface for its target, PDF, emissive texture, BSDF, and visibility.
 
-The current RTXDI candidate set includes emissive mesh triangles and procedural analytic area lights. The Baseline path tracer handles Sun, Environment, and lighting at secondary vertices. RTXDI ReSTIR GI/PT is not implemented, so selecting the `ReSTIR GI` name still uses the Baseline fallback for indirect lighting. See [RTXDI ReSTIR DI](rtxdi.md) for details.
+RTXDI and Baseline share a unified light contract covering emissive mesh triangles, analytic area lights, Sun, and Environment. `ReSTIR GI` runs Baseline one-light direct plus RTXDI GI; the combined mode runs RTXDI DI plus GI. See [RTXDI](rtxdi.md) for details.
 
 ## 9. Denoising
 
@@ -337,7 +348,7 @@ The denoiser mainly stabilizes surface lighting, but temporal variation remains 
 6. Apply contrast-adaptive sharpening only to mature, stationary history
 7. Save HDR history, then apply exposure, the tone mapper, and gamma
 
-A long history window suppresses stationary noise, but locking too early would also preserve the denoiser's initial blur. The current implementation keeps an update aperture of up to roughly 32 frames during REBLUR's maturity period, then transitions to a longer stability window. Sharpening is capped by the configured strength, whose default is `0.15`, and weakens in flat regions, across extreme edges, and during motion.
+A long history window suppresses stationary noise, but locking too early would also preserve the denoiser's initial blur. The current implementation keeps an update aperture of up to roughly 32 frames during REBLUR's maturity period, then transitions to a longer stability window. Sharpening is capped by the configured strength and weakens in flat regions, across extreme edges, and during motion. It is opt-in (`0` by default), because nonzero sharpening can amplify residual Monte Carlo variance in difficult scenes.
 
 The available tone mappers are `None`, Reinhard, and an ACES fitted curve. The ACES option here is not a complete ACES color-management pipeline. None of these options changes the path estimator; they are display transforms that map HDR values into a displayable range.
 
@@ -351,7 +362,9 @@ Interactive dynamically adjusts the following to balance frame time and quality:
 - Sustained GPU budget pressure: reduce the additional-sample quota, then bounce count, and finally the secondary shading rate
 - A sufficiently long period below budget: restore quality one step at a time
 
-Adaptive-SPP classification currently runs per pixel inside RayGen. With the internal denoiser it uses previous moments; with an external backend it uses the luminance residual between sample 0 and validated TAA history. The independent secondary pass with an 8x8 compact tile work list and `ExecuteIndirect` has not been implemented.
+Adaptive-SPP classification remains per pixel. With the internal denoiser it uses previous moments; with an external backend it uses the luminance residual between sample 0 and validated TAA history. On eligible Interactive Baseline/DI frames, a 256-thread local prefix scan and group scan turn those SPP counts into a pixel/sample-ordered `SecondaryTask` list and a 1D DispatchRays argument. `ExecuteIndirect` writes one task result per entry, then an 8x8 pixel resolve averages the results without competing pixel writes.
+
+The compact path currently retraces the complete camera sample per secondary task instead of continuing directly from the stored primary intersection. It establishes the workload graph and exact primary AOV contract, but is not yet claimed as a performance optimization. DXR 1.0, Reference Still, RTXDI GI/PT, and quality-diagnostic paths use the full-dispatch megakernel.
 
 `adaptive_half` keeps primary visibility and primary-vertex direct lighting at full resolution, but skips half of the BSDF continuations in a checkerboard pattern. The following pixels are promoted back to full rate:
 
@@ -365,7 +378,7 @@ Adaptive-SPP classification currently runs per pixel inside RayGen. With the int
 
 At 1 spp, a rare high-energy path appears as an isolated firefly. Interactive applies a shared scale to path contributions that exceed the luminance limit.
 
-The important detail is that the same scale is applied to the Diffuse/Specular signals instead of clamping only Beauty. Otherwise, the energy seen by the denoiser would disagree with the final estimator. Quality benchmarks record energy before and after compression.
+The important detail is that the same scale is applied to the Diffuse/Specular signals instead of clamping only Beauty. Otherwise, the energy seen by the denoiser would disagree with the final estimator. External denoiser material demodulation can amplify a filtered outlier again, so the same luminance contract is re-applied once at the final HDR reconstruction boundary before TAA. Quality benchmarks record energy before and after estimator compression.
 
 Reference Still sets the limit to zero, disabling contribution compression and temporal clamping.
 
@@ -377,8 +390,10 @@ Reference Still sets the limit to zero, disabling contribution compression and t
 |---|---|
 | `Baseline PT` | Baseline MIS direct + indirect |
 | `ReSTIR DI` | RTXDI local-light DI + Baseline indirect / Sun / Environment |
-| `ReSTIR GI` | Baseline direct + indirect; ReSTIR GI/PT is not implemented |
-| `ReSTIR GI + DI` | RTXDI local-light DI + Baseline indirect; GI/PT falls back |
+| `ReSTIR GI` | Baseline one-light direct + RTXDI GI |
+| `ReSTIR GI + DI` | RTXDI DI + RTXDI GI |
+| `ReSTIR PT` | Baseline one-light direct + checkerboard RTXDI PT |
+| `ReSTIR PT + DI` | RTXDI DI + checkerboard RTXDI PT |
 
 The renderer falls back to Baseline PT when RTXDI was not built, the runtime ABI check fails, `restirBackend: off` is selected, or Reference Still is active.
 
@@ -403,7 +418,7 @@ In addition to image-quality algorithms, the implementation contains techniques 
 - Fuse ReSTIR DI into two passes and remove the reservoir publish copy
 - Remove the full-resolution Surface Guide history copy
 - Fuse Composite and Final TAA on the ordinary NRD Beauty path
-- Keep WinUI composition outside the renderer GPU command list; Render Only Mode collapses the editor chrome
+- Skip hidden WinUI editor panels and collapse the editor chrome in Render Only Mode
 - Do not run full-screen quality counters in performance benchmarks
 
 Their effects are visible in `Diagnostics / Stats` and the per-pass benchmark timestamps.
@@ -440,29 +455,29 @@ Benchmarks with a fixed seed and camera path are well suited to reproducible com
 | Path loop, BSDF, MIS, ray cones, and AOV output | [`PathTracingABI.hlsli`](../Shaders/PathTracingABI.hlsli) |
 | Sobol / Owen sampling | [`PathTracingSampling.hlsli`](../Shaders/PathTracingSampling.hlsli) |
 | RTXDI two-pass ReSTIR DI | [`ReSTIRResolve.hlsl`](../Shaders/ReSTIRResolve.hlsl) |
+| RTXDI GI / checkerboard PT | [`PathTracingReSTIR.hlsl`](../Shaders/PathTracingReSTIR.hlsl), [`PathTracingReSTIRPT.hlsl`](../Shaders/PathTracingReSTIRPT.hlsl) |
+| Primary Visibility and compact secondary tasks | [`PathTracingSecondaryWork.hlsl`](../Shaders/PathTracingSecondaryWork.hlsl) |
 | Internal temporal / A-Trous | [`PathTracingDenoise.hlsl`](../Shaders/PathTracingDenoise.hlsl) |
 | NRD input packing / composite | [`PathTracingNrd.hlsl`](../Shaders/PathTracingNrd.hlsl) |
-| HDR TAA / sharpening / tone mapping | [`PathTracingTaa.hlsl`](../Shaders/PathTracingTaa.hlsl) |
+| HDR TAA/TAAU / sharpening / tone mapping | [`PathTracingTaa.hlsl`](../Shaders/PathTracingTaa.hlsl) |
+| DLSS-RR guide preparation | [`PathTracingDlss.hlsl`](../Shaders/PathTracingDlss.hlsl) |
 | NRD SDK bridge | [`NrdBackend.cpp`](../Source/NrdBackend.cpp) |
 | RTXDI SDK/build boundary | [`RtxdiBackend.cpp`](../Source/RtxdiBackend.cpp) |
 | Texture mips and alpha coverage | [`TextureLoader.cpp`](../Source/TextureLoader.cpp) |
 
 ## 17. Current Limitations
 
-The following items are future extensions and must not be treated as implemented:
+The following items remain future extensions and must not be treated as complete:
 
-- An independent Primary Visibility pass and compact secondary work list
-- Separate AOVs for geometric and shading normals, and complete instance/material/primitive IDs
-- RTXDI ReSTIR PT / GI
-- A unified RTXDI candidate table that includes Sun / Environment
-- Secondary one-light mixture MIS
-- BLAS compaction
-- Real ray counters for hardware traversal / AnyHit
+- Continuing compact secondary tasks from the stored primary intersection instead of retracing the camera sample
+- Full RTXDI Full Sample-equivalent PT hybrid-shift path replay beyond the current reconnection target shift
 - Previous transforms for moving instances, skinning, and continuous deformation
-- DLSS Ray Reconstruction frame resource tagging and evaluation
-- Dynamic resolution, TAAU, and reduced-resolution NRD
+- Active DLSS-RR certification with an NVIDIA-issued NGX application ID and the complete supported-GPU/failure matrix
+- Final temporal/reference quality acceptance across every required Bistro/HDRI/material scene
 - A raster fallback for GPUs without DXR support
 - Applying the `movingJitterScale` value retained in the UI/JSON to the actual jitter amplitude
+
+Shader counters report primary, secondary, shadow, DI/GI/PT visibility, and AnyHit invocations. Standard DXR does not expose BVH-node visit counts, so these metrics are not labeled as hardware traversal.
 
 An optional backend being able to start does not mean it meets the 1080p60, blur, and ghosting quality gates in every scene. Each scene must be validated with a fixed camera path, a high-SPP reference, and per-pass timings.
 

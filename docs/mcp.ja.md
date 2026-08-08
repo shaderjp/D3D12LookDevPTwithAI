@@ -19,13 +19,13 @@ client 側では先に validation を通し、mutation tool を適用し、そ�
 - Bind address: `127.0.0.1` のみ
 - Transport: Streamable HTTP 形式の JSON-RPC over `POST /mcp`
 - 対応 protocol version: `2025-11-25`、`2025-06-18`
-- 認証: `Authorization: Bearer <token>` が必須
+- 認証: `bearer_token`（default）または `none`。`bearer_token` では `Authorization: Bearer <token>` が必須
 - Session: `initialize` の response header で `MCP-Session-Id` を返し、以後の request では同じ header が必須
 - Server-Sent Events: 未実装。`GET /mcp` は `405 Method Not Allowed`
 - HTTP request body の上限: 16 MiB
 - HTTP/1.1 request body は `Content-Length` と `Transfer-Encoding: chunked` の両方に対応します。chunk extension と trailer は安全に消費し、両 framing header を同時指定した曖昧な request は拒否します。
 
-Bearer token と MCP 設定は以下に保存されます。
+認証 mode、Bearer token、その他の MCP 設定は以下に保存されます。
 
 ```text
 %APPDATA%\D3D12LookDevPTWinUI\settings.json
@@ -43,14 +43,25 @@ dockable な `MCP Server` panel から操作できます。
 - `Port`
 - `Request Timeout`
 - `Access Mode`
+- `Authentication`
 - `Copy Token`
 - `Regenerate Token`
+- `Export mcp.json...`
 - pending approvals と recent request log
+
+`Export mcp.json...` は、現在の endpoint と protocol version を含む VS Code
+互換 MCP 設定を書き出します。default では password 形式の `inputs` prompt を使い、
+Bearer token は file に保存しません。自己完結した local 設定が必要な場合だけ
+`Embed bearer token in exported mcp.json` を有効にしてください。この場合 token は
+平文で保存されるため、source control の外で保管し、共有しないでください。
+Request timeout と access mode は application-local な server 設定であり、VS Code
+の `mcp.json` schema には含まれないため export 対象外です。`Authentication` が
+`None` の場合、export file から `inputs` と `Authorization` header の両方を省略します。
 
 server は default disabled です。command line から明示的に起動することもできます。
 
 ```powershell
-.\Bin\x64\Debug\D3D12LookDevPTWinUI.exe --mcp-server --mcp-port 8777 --mcp-token <token> --mcp-access confirm_mutations
+.\Bin\x64\Debug\D3D12LookDevPTWinUI.exe --mcp-server --mcp-port 8777 --mcp-auth bearer_token --mcp-token <token> --mcp-access confirm_mutations
 ```
 
 Access mode:
@@ -58,6 +69,17 @@ Access mode:
 - `read_only`: read tool は使えます。mutation tool は拒否されます。
 - `confirm_mutations`: mutation tool は WinUI の `MCP` panel で Approve されるまで待ちます。
 - `allow_mutations`: mutation tool を UI 承認なしで実行します。
+
+Authentication mode:
+
+- `bearer_token`: default。すべての request に設定済み Bearer token が必要です。
+- `none`: `Authorization` header なしで接続できます。server は引き続き `127.0.0.1` 固定で、外部 interface には公開されません。認証を無効にする場合は `read_only` または `confirm_mutations` の利用を推奨します。
+
+command line から認証なしで起動する例:
+
+```powershell
+.\Bin\x64\Debug\D3D12LookDevPTWinUI.exe --mcp-server --mcp-port 8777 --mcp-auth none --mcp-access confirm_mutations
+```
 
 mutation queue は renderer-thread の safe point で処理され、同時に保持できる request は 16 件までです。HTTP server thread から D3D12 / WinUI state を直接触りません。
 
@@ -103,12 +125,28 @@ VS Code の MCP server 設定は、workspace の `.vscode/mcp.json` または us
 }
 ```
 
+`Authentication` が `None` の場合は token input と Authorization header を省略します。
+
+```json
+{
+  "servers": {
+    "d3d12LookDevPT": {
+      "type": "http",
+      "url": "http://127.0.0.1:8777/mcp",
+      "headers": {
+        "MCP-Protocol-Version": "2025-11-25"
+      }
+    }
+  }
+}
+```
+
 編集後は VS Code の `MCP: List Servers` から server entry を start / restart してください。D3D12LookDevPTWinUI を rebuild して tool list が変わった場合は `MCP: Reset Cached Tools` を実行してください。
 
 注意:
 
 - VS Code 側の server entry を start する前に、D3D12LookDevPTWinUI 本体と MCP server を起動しておきます。
-- WinUI の MCP panel で token を regenerate した場合は、VS Code 側の MCP server entry を restart し、新しい token を入力します。
+- `bearer_token` 利用時に WinUI の MCP panel で token を regenerate した場合は、VS Code 側の MCP server entry を restart し、新しい token を入力します。
 - この server は HTTP POST JSON-RPC 対応です。SSE-only の MCP client では利用できません。
 
 ## JSON-RPC の流れ
@@ -153,6 +191,9 @@ $initialized = @{
 
 Invoke-WebRequest -Uri $endpoint -Method Post -Headers $sessionHeaders -ContentType "application/json" -Body $initialized
 ```
+
+server が `Authentication: None` の場合は `$headers` と `$sessionHeaders` の両方から
+`Authorization` を省略します。session header と protocol header は引き続き必要です。
 
 read tool の呼び出し:
 
@@ -635,7 +676,7 @@ dialog なしで project 保存:
 
 ## Troubleshooting
 
-- `401 Unauthorized`: token が一致していません。WinUI の `MCP` panel から token を copy し、client connection を再起動してください。
+- `401 Unauthorized`: `bearer_token` 認証が有効で、token がないか一致していません。WinUI の `MCP` panel から token を copy して client connection を再起動するか、server 起動前に明示的に `None` を選択してください。
 - `403 Forbidden`: client が許可されていない `Origin` header を送っています。
 - `400 Unsupported MCP-Protocol-Version`: `2025-11-25` または `2025-06-18` を使ってください。
 - `400 MCP-Session-Id is required`: 最初に `initialize` を呼び、返ってきた `MCP-Session-Id` を送ってください。

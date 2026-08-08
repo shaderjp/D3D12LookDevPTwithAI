@@ -57,7 +57,7 @@ def _read_byte(stream) -> int:
 
 
 def load_radiance_hdr(path: Path) -> np.ndarray:
-    """Load the 32-bit RLE RGBE variant written by DirectXTex."""
+    """Load the adaptive RLE/raw RGBE rows written by DirectXTex."""
     with path.open("rb") as stream:
         if stream.readline().rstrip() not in (b"#?RADIANCE", b"#?RGBE"):
             raise ValueError(f"Not a Radiance HDR file: {path}")
@@ -89,7 +89,17 @@ def load_radiance_hdr(path: Path) -> np.ndarray:
             scanline_header = stream.read(4)
             expected = bytes((2, 2, (width >> 8) & 0xFF, width & 0xFF))
             if scanline_header != expected:
-                raise ValueError(f"Unsupported non-RLE HDR scanline {y}: {path}")
+                # DirectXTex's adaptive encoder falls back to a raw RGBE row
+                # whenever its RLE representation would not be smaller. This
+                # decision is made independently for every scanline, so an HDR
+                # file can legitimately mix compressed and raw rows.
+                remaining = stream.read((width - 1) * 4)
+                if len(remaining) != (width - 1) * 4:
+                    raise ValueError(f"Truncated raw HDR scanline {y}: {path}")
+                rgbe[y] = np.frombuffer(
+                    scanline_header + remaining,
+                    dtype=np.uint8).reshape(width, 4)
+                continue
             channels = np.empty((4, width), dtype=np.uint8)
             for channel in range(4):
                 x = 0

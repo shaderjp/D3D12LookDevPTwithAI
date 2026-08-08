@@ -33,6 +33,29 @@ inline bool ReadUnsignedQualitySetting(
     value = static_cast<std::uint32_t>(member->number);
     return true;
 }
+
+inline bool ReadFloatQualitySetting(
+    const cld::JsonValue& object,
+    const char* name,
+    float minimum,
+    float maximum,
+    float& value,
+    std::string& diagnostics)
+{
+    const cld::JsonValue* member = cld::FindMember(object, name);
+    if (!member)
+    {
+        return true;
+    }
+    if (member->type != cld::JsonValue::Type::Number || !std::isfinite(member->number) ||
+        member->number < minimum || member->number > maximum)
+    {
+        diagnostics = std::string("quality.") + name + " is outside the supported range.";
+        return false;
+    }
+    value = static_cast<float>(member->number);
+    return true;
+}
 }
 
 // Parses either a project file's top-level "quality" object or set_quality
@@ -96,6 +119,37 @@ inline bool TryParseQualitySettings(
             diagnostics = "quality.restirBackend is invalid.";
             return false;
         }
+    }
+    if (const cld::JsonValue* resolutionMode = cld::FindMember(value, "resolutionMode"))
+    {
+        if (resolutionMode->type != cld::JsonValue::Type::String ||
+            !TryParseResolutionMode(resolutionMode->string, settings.resolutionMode))
+        {
+            diagnostics = "quality.resolutionMode is invalid.";
+            return false;
+        }
+    }
+    if (!detail::ReadFloatQualitySetting(value, "fixedRenderScale", 0.25f, 1.0f, settings.fixedRenderScale, diagnostics) ||
+        !detail::ReadFloatQualitySetting(value, "minRenderScale", 0.25f, 1.0f, settings.minRenderScale, diagnostics) ||
+        !detail::ReadFloatQualitySetting(value, "maxRenderScale", 0.25f, 1.0f, settings.maxRenderScale, diagnostics))
+    {
+        return false;
+    }
+    if (settings.minRenderScale > settings.maxRenderScale)
+    {
+        diagnostics = "quality.minRenderScale must not exceed maxRenderScale.";
+        return false;
+    }
+    if (settings.fixedRenderScale < settings.minRenderScale ||
+        settings.fixedRenderScale > settings.maxRenderScale)
+    {
+        diagnostics = "quality.fixedRenderScale must be within minRenderScale and maxRenderScale.";
+        return false;
+    }
+    if (settings.qualityProfile == QualityProfile::ReferenceStill)
+    {
+        settings.resolutionMode = ResolutionMode::Native;
+        settings.fixedRenderScale = 1.0f;
     }
 
     if (const cld::JsonValue* budget = cld::FindMember(value, "rayBudget"))
@@ -166,7 +220,11 @@ inline std::string QualitySettingsToJson(const QualitySettings& settings)
     json << "{\"qualityProfile\":\"" << QualityProfileName(settings.qualityProfile)
          << "\",\"restirBackend\":\"" << RestirBackendName(settings.restirBackend)
          << "\",\"secondaryShadingRate\":\"" << SecondaryShadingRateName(settings.secondaryShadingRate)
-         << "\",\"rayBudget\":{\"movingSpp\":" << settings.rayBudget.movingSpp
+         << "\",\"resolutionMode\":\"" << ResolutionModeName(settings.resolutionMode)
+         << "\",\"fixedRenderScale\":" << settings.fixedRenderScale
+         << ",\"minRenderScale\":" << settings.minRenderScale
+         << ",\"maxRenderScale\":" << settings.maxRenderScale
+         << ",\"rayBudget\":{\"movingSpp\":" << settings.rayBudget.movingSpp
          << ",\"movingBounces\":" << settings.rayBudget.movingBounces
          << ",\"staticBaseSpp\":" << settings.rayBudget.staticBaseSpp
          << ",\"staticMaxSpp\":" << settings.rayBudget.staticMaxSpp

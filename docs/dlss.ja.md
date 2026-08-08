@@ -1,12 +1,12 @@
-# Optional DLSS Ray Reconstruction probe
+# Optional DLSS Ray Reconstruction
 
-English documentation: [Optional DLSS Ray Reconstruction Probe](dlss.md)
+English documentation: [Optional DLSS Ray Reconstruction](dlss.md)
 
-D3D12LookDevPTWinUI には、optional で safety-first な Streamline / DLSS Ray Reconstruction integration boundary があります。現在の code は Streamline の dynamic load、D3D12 device 登録、adapter / driver support の照会、推奨 render size の取得まで行えます。rendering resource の tag 付けと DLSS-RR evaluation はまだ呼び出しません。そのため `evaluationReady` は常に false のままで、`dlss_rr` を選択しても現在は internal denoiser で描画します。
+D3D12LookDevPTWinUI には optional の Streamline / DLSS Ray Reconstruction backend があります。Streamline の dynamic load、adapter/driver 検証、render/output 解像度の分離、guide resource の生成と frame tag、renderer の D3D12 command list 内での `slEvaluateFeature` まで実装しています。
 
-この区別は意図的です。compile / runtime detection は実装済みですが、この version の DLSS-RR は production denoising backend ではなく、RTX 4070 / 1080p60 の完了 gate にも含めません。
+DLSS-RR は RTX 4070 / 1080p60 の ReSTIR GI+DI gate とは独立です。binary 不足、非対応 adapter/driver、application identity 不足、runtime evaluation failure の場合は、Streamline を process-load dependency にせず native reconstruction を使用します。
 
-## 依存関係
+## 依存関係と application identity
 
 固定 submodule:
 
@@ -19,7 +19,7 @@ D3D12LookDevPTWinUI には、optional で safety-first な Streamline / DLSS Ray
 git submodule update --init --recursive ThirdParty/Streamline ThirdParty/DLSS
 ```
 
-DLSS SDK は `nvngx_dlss.dll` と `nvngx_dlssd.dll` を提供します。source-only の Streamline checkout には prebuilt runtime / feature DLL が含まれない場合があります。file が存在する場合、build は次を `Bin/x64/<Config>/Streamline/` へ copy します。
+DLSS SDK は `nvngx_dlss.dll` と `nvngx_dlssd.dll` を提供します。source-only の Streamline checkout には prebuilt runtime / feature DLL がすべて含まれない場合があります。存在する file は `Bin/x64/<Config>/Streamline/` へ copy します。
 
 ```text
 sl.interposer.dll
@@ -30,7 +30,15 @@ nvngx_dlss.dll
 nvngx_dlssd.dll
 ```
 
-runtime probe は `ThirdParty/Streamline/bin/x64/` も確認します。通常の setup check では runtime DLL 不足を warning とし、strict DLSS validation の場合だけ failure にします。
+production NGX component には NVIDIA が発行した application identity も必要です。10進数 ID は source control の外で管理し、起動前に設定します。
+
+```powershell
+$env:D3D12LOOKDEVPT_NGX_APPLICATION_ID = "<NVIDIA 発行の10進数 ID>"
+```
+
+renderer は temporary ID や架空の ID を代用しません。変数がない場合は `applicationIdentityConfigured=false`、failure stage `applicationIdentity` を報告し、native reconstruction を使用します。
+
+strict setup check は runtime DLL 不足を failure にします。
 
 ```powershell
 .\Scripts\CheckSetup.ps1 -CheckDLSS
@@ -38,48 +46,66 @@ runtime probe は `ThirdParty/Streamline/bin/x64/` も確認します。通常�
 
 ## Build switch と matrix
 
-DLSS header support は compile 時に default で有効です。
+DLSS header support は default で有効です。
 
 ```powershell
 msbuild .\D3D12LookDevPTWinUI.sln /m /p:Configuration=Release /p:Platform=x64
 ```
 
-Streamline / DLSS submodule がない場合や dependency-free path を検証する場合は無効化します。
+dependency-free path を検証する場合は無効化します。
 
 ```powershell
 msbuild .\D3D12LookDevPTWinUI.sln /m /p:Configuration=Release /p:Platform=x64 /p:EnableDLSS=false
 ```
 
-`EnableDLSS=false` では Streamline / DLSS include path と optional runtime copy を使わず、status は `compiled=false` を返し、`dlss_rr` selection は `internal` へ fallback します。
+`EnableDLSS=false` では Streamline/DLSS include path と optional runtime copy を使わず、status は `compiled=false` を返し、`dlss_rr` は native internal reconstruction へ fallback します。
 
-全 backend build matrix は all-enabled、no-NRD、no-RTXDI、no-DLSS、all-disabled、現在の target（`NRD=true`、`RTXDI=true`、`DLSS=false`）を含みます。
+backend matrix は all-enabled、no-NRD、no-RTXDI、no-DLSS、all-disabled、repository target を含みます。
 
 ```powershell
 .\Scripts\BuildBackendMatrix.ps1 -Configuration Release
 ```
 
-## 現在の probe が行うこと
+## Frame evaluation
 
-起動時に `DlssBackend` は次を実行します。
+初期化時は次を行います。
 
-1. `sl.interposer.dll` を検索して dynamic load
-2. 必須 Streamline core entry point を解決
-3. frame-based resource tagging を要求して D3D12 用 Streamline を initialize
-4. D3D12 device を登録
-5. 選択 adapter / driver に対する `kFeatureDLSS_RR` support を確認
-6. DLSS-RR option / optimal-settings function を解決し、Quality / Balanced / Performance / Ultra Performance mode の推奨 input size を照会
+1. `sl.interposer.dll` を load し、必須 core function を解決
+2. frame-based resource tagging を有効にして D3D12 用 Streamline を initialize
+3. D3D12 device を登録
+4. NVIDIA 発行 application identity を検証
+5. 選択 adapter/driver の `kFeatureDLSS_RR` support を確認
+6. 推奨 render size を取得し、選択 DLSS mode を設定
 
-6 段階すべてに成功しても、backend は意図的に次を報告します。
+eligible な各 frame で `PathTracingDlss.hlsl` は次を準備します。
 
-```text
-DLSS-RR support was detected, but resource-tag evaluation is not enabled in this build.
+- HDR scaling-input color
+- 正の linear depth
+- 2D motion vector
+- packed world normal / roughness
+- diffuse albedo / specular albedo
+- 1x1 exposure resource
+
+backend は camera matrix、jitter、reset、render/output extent、8個の resource tag を設定し、active command list 内で `kFeatureDLSS_RR` を evaluate します。成功すると display-resolution HDR を生成し、NRD、internal denoiser、Final TAA を迂回して tone map します。
+
+evaluation が失敗した場合、部分出力は表示しません。同じ frame は native reconstruction し、以後の evaluation を無効化して次 frame の native resource rebuild を要求します。resize、camera cut、明示 reset は DLSS history reset へ伝播します。
+
+## 解像度と runtime status
+
+quality schema は render/output 解像度を分離します。
+
+```json
+{
+  "resolutionMode": "dynamic",
+  "fixedRenderScale": 0.75,
+  "minRenderScale": 0.5,
+  "maxRenderScale": 1.0
+}
 ```
 
-未実装なのは per-frame Streamline constant / resource tagging と `slEvaluateFeature` path です。color、depth、motion、normal、roughness、albedo、specular、exposure、reset の正確な契約も含みます。この実装と品質 gate が完了するまでは internal denoiser が実効 backend です。
+`resolutionMode` は `native`、`fixed`、`dynamic` を受理し、旧 project は `native` になります。Dynamic は既存 GPU budget と settle hysteresis を使い、1/16 刻みで調整します。非 DLSS 経路で render/output size が異なる場合は TAAU を使い、NRD は render 解像度で動作します。
 
-## 実行時の選択と status
-
-Denoise panel または MCP から probe を選択できます。
+Denoise panel または MCP から選択できます。
 
 ```json
 {
@@ -92,18 +118,6 @@ Denoise panel または MCP から probe を選択できます。
 }
 ```
 
-setup failure を診断できるよう、要求 backend は `dlss_rr` のまま表示し、`activeBackend` は `internal` になります。`reference_still` はこの選択にかかわらず全 real-time denoiser を無効にします。
+`lookdevpt.get_state` / `lookdevpt.get_stats` の `denoise.dlss` / `denoiser.dlss` は compile/load/init/device/application-identity/support/evaluation 状態、推奨・active 解像度、成功/失敗回数、last result code/failure stage、runtime path、error、fallback reason を公開します。benchmark にも同じ activation/failure evidence を出力します。
 
-`lookdevpt.get_state` または `lookdevpt.get_stats` の `denoise.dlss` / `denoiser.dlss` を確認してください。status は次を含みます。
-
-- compiled、runtime-loaded、initialized、device-registered 状態
-- adapter / driver feature support と `evaluationReady`
-- 選択 mode、推奨 render resolution、output resolution
-- runtime DLL path、last error、fallback reason
-- 要求された history reset 状態
-
-## Resource の挙動と現在の制限
-
-evaluation が ready にならないため、この version は DLSS-RR 固有の full-resolution input / output graph を割り当てません。代わりに renderer は internal fallback resource を割り当てます。これにより非 NVIDIA GPU、未対応 driver、DLL 不足環境、`EnableDLSS=false` build でも、Streamline を process-load dependency にせず動作できます。
-
-以前の DLSS fallback screenshot は古い Denoise panel を表示していたため、この page から削除しました。replacement は現在の quality-profile / status UI を build し、requested / effective backend field の表示を確認した後に capture してください。
+この checkout の local 環境には NVIDIA 発行 NGX application ID がないため、DLSS-RR active evaluation の認証は未完了です。identity 不足時の fallback は確認済みですが、feature-active 検証には発行済み ID、対応 GPU/driver、production runtime DLL が必要です。

@@ -462,6 +462,10 @@ const MetricDefinition& DescribeMetric(const std::string& name)
         { "gpu_restir_spatial_ms", { "ms", "gpu_timestamp", "ReSTIR spatial resampling segment." } },
         { "gpu_restir_shade_ms", { "ms", "gpu_timestamp", "ReSTIR visibility and shading segment." } },
         { "gpu_restir_publish_ms", { "ms", "gpu_timestamp", "ReSTIR history publication segment." } },
+        { "gpu_restir_gi_initial_ms", { "ms", "gpu_timestamp", "ReSTIR GI secondary-path initial sampling segment." } },
+        { "gpu_restir_gi_fused_ms", { "ms", "gpu_timestamp", "ReSTIR GI temporal/spatial reuse, final visibility, and shading segment." } },
+        { "gpu_restir_pt_initial_ms", { "ms", "gpu_timestamp", "ReSTIR PT initial path sampling segment." } },
+        { "gpu_restir_pt_fused_ms", { "ms", "gpu_timestamp", "ReSTIR PT temporal/spatial shift and final shading segment." } },
         { "gpu_denoise_ms", { "ms", "gpu_timestamp", "Denoising and final temporal resolve segment." } },
         { "gpu_denoise_prepare_ms", { "ms", "gpu_timestamp", "Denoiser input preparation or fallback temporal stage." } },
         { "gpu_denoise_core_ms", { "ms", "gpu_timestamp", "NRD dispatch graph or fallback spatial filtering stage." } },
@@ -484,8 +488,32 @@ const MetricDefinition& DescribeMetric(const std::string& name)
         { "history_valid", { "boolean", "renderer", "Coarse denoiser-history validity; not a per-pixel acceptance rate." } },
         { "accumulated_samples", { "samples", "renderer", "Progressive accumulation sample count." } },
         { "frame_history_mib", { "MiB", "resource_accounting", "Frame and history resource allocation, excluding documented backend pools." } },
+        { "vram_frame_history_peak_mib", { "MiB", "resource_accounting", "Peak resident frame/history allocation after lifetime aliasing." } },
+        { "vram_restir_alias_heap_mib", { "MiB", "resource_accounting", "Resident placed-resource heaps shared by DI scratch and GI history." } },
+        { "compacted_blas_bytes", { "bytes", "resource_accounting", "Resident bottom-level acceleration structure size after compaction." } },
+        { "blas_compaction_ratio", { "ratio", "resource_accounting", "Compacted BLAS bytes divided by original build-result bytes." } },
         { "render_width", { "pixels", "renderer", "Native render width." } },
         { "render_height", { "pixels", "renderer", "Native render height." } },
+        { "output_width", { "pixels", "renderer", "Display/output width." } },
+        { "output_height", { "pixels", "renderer", "Display/output height." } },
+        { "render_scale", { "ratio", "renderer", "Internal render scale quantized to 1/16 steps." } },
+        { "dynamic_resolution_active", { "boolean", "renderer", "One while the dynamic-resolution controller is selected." } },
+        { "taau_active", { "boolean", "renderer", "One when Final TAA temporally upsamples to display resolution." } },
+        { "primary_visibility_separate", { "boolean", "renderer", "One when interactive primary visibility runs as an independent DXR pass." } },
+        { "compact_secondary_worklist", { "boolean", "renderer", "One when per-pixel SPP requirements are prefix-summed into a compact task list." } },
+        { "secondary_execute_indirect", { "boolean", "renderer", "One when the compact 1D DXR workload uses ExecuteIndirect on DXR 1.1." } },
+        { "secondary_task_capacity", { "tasks", "resource_accounting", "Allocated compact secondary task/result capacity." } },
+        { "requested_dlss_rr", { "boolean", "renderer", "One when DLSS Ray Reconstruction is selected and enabled." } },
+        { "dlss_runtime_available", { "boolean", "streamline", "One when the Streamline interposer was loaded." } },
+        { "dlss_initialized", { "boolean", "streamline", "One after successful Streamline initialization." } },
+        { "dlss_device_registered", { "boolean", "streamline", "One after the D3D12 device is registered." } },
+        { "dlss_application_identity_configured", { "boolean", "streamline", "One when a NVIDIA-issued NGX application ID is configured through the process environment." } },
+        { "dlss_feature_supported", { "boolean", "streamline", "One when DLSS Ray Reconstruction is supported by the adapter and driver." } },
+        { "dlss_evaluation_ready", { "boolean", "streamline", "One while the complete DLSS-RR evaluation contract is ready." } },
+        { "active_dlss_rr", { "boolean", "streamline", "One only after DLSS-RR evaluated successfully for the frame." } },
+        { "dlss_successful_evaluations", { "evaluations", "streamline", "Cumulative successful DLSS-RR evaluations." } },
+        { "dlss_failed_evaluations", { "evaluations", "streamline", "Cumulative failed DLSS-RR evaluations." } },
+        { "dlss_last_result_code", { "enum", "streamline", "Numeric Streamline result from the latest setup or evaluation operation." } },
         { "surface_history_tested_pixels", { "pixels", "gpu_quality_counter", "Surface pixels offered to validated reprojection." } },
         { "surface_history_accepted_pixels", { "pixels", "gpu_quality_counter", "Surface pixels with accepted reprojection." } },
         { "surface_history_reject_oob_pixels", { "pixels", "gpu_quality_counter", "Surface history rejected outside the previous viewport." } },
@@ -502,6 +530,13 @@ const MetricDefinition& DescribeMetric(const std::string& name)
         { "contribution_clamped_energy", { "linear-radiance-sum", "gpu_quality_counter", "Luminance energy removed by contribution compression." } },
         { "contribution_clamped_samples", { "samples", "gpu_quality_counter", "Pixel estimators modified by contribution compression." } },
         { "non_finite_pixels", { "pixels", "gpu_quality_counter", "Validation pixels containing NaN or infinity." } },
+        { "primary_rays_actual", { "rays", "gpu_shader_counter", "Primary TraceRay invocations measured by the path-tracing shaders." } },
+        { "secondary_rays_actual", { "rays", "gpu_shader_counter", "Secondary path TraceRay or inline-RayQuery invocations." } },
+        { "shadow_rays_actual", { "rays", "gpu_shader_counter", "Baseline next-event visibility TraceRay invocations." } },
+        { "di_visibility_rays_actual", { "rays", "gpu_shader_counter", "RTXDI DI final visibility RayQuery invocations." } },
+        { "gi_visibility_rays_actual", { "rays", "gpu_shader_counter", "RTXDI GI secondary-light and final visibility RayQuery invocations." } },
+        { "pt_visibility_rays_actual", { "rays", "gpu_shader_counter", "RTXDI PT path-light and final reconnection visibility RayQuery invocations." } },
+        { "anyhit_invocations_actual", { "invocations", "gpu_shader_counter", "DXR AnyHit shader invocations; this is not a BVH node-traversal count." } },
     };
     static const MetricDefinition fallback;
     const auto found = definitions.find(name);
@@ -515,7 +550,7 @@ struct QualityMetricContract
     const char* description;
 };
 
-constexpr std::array<QualityMetricContract, 16> QualityMetricContracts =
+constexpr std::array<QualityMetricContract, 23> QualityMetricContracts =
 {{
     { "surface_history_tested_pixels", "pixels", "Surface pixels offered to validated reprojection." },
     { "surface_history_accepted_pixels", "pixels", "Surface pixels with at least one accepted reprojection tap." },
@@ -533,6 +568,13 @@ constexpr std::array<QualityMetricContract, 16> QualityMetricContracts =
     { "contribution_clamped_energy", "linear-radiance-sum", "Energy removed by contribution compression or clamping." },
     { "contribution_clamped_samples", "samples", "Contributions modified by compression or clamping." },
     { "non_finite_pixels", "pixels", "Pixels containing NaN or infinity at validation output." },
+    { "primary_rays_actual", "rays", "Measured primary path TraceRay invocations." },
+    { "secondary_rays_actual", "rays", "Measured secondary path ray invocations." },
+    { "shadow_rays_actual", "rays", "Measured Baseline visibility TraceRay invocations." },
+    { "di_visibility_rays_actual", "rays", "Measured RTXDI DI final visibility rays." },
+    { "gi_visibility_rays_actual", "rays", "Measured RTXDI GI visibility rays." },
+    { "pt_visibility_rays_actual", "rays", "Measured RTXDI PT visibility rays." },
+    { "anyhit_invocations_actual", "invocations", "Measured AnyHit shader invocations, not BVH traversal nodes." },
 }};
 }
 
@@ -572,6 +614,13 @@ bool AggregateQualityCounterTiles(
     std::uint64_t disoccludedPixels = 0;
     std::uint64_t clampedSamples = 0;
     std::uint64_t nonFinitePixels = 0;
+    std::uint64_t primaryRays = 0;
+    std::uint64_t secondaryRays = 0;
+    std::uint64_t shadowRays = 0;
+    std::uint64_t diVisibilityRays = 0;
+    std::uint64_t giVisibilityRays = 0;
+    std::uint64_t ptVisibilityRays = 0;
+    std::uint64_t anyHitInvocations = 0;
     double contributionInputEnergy = 0.0;
     double contributionOutputEnergy = 0.0;
     double contributionClampedEnergy = 0.0;
@@ -599,6 +648,13 @@ bool AggregateQualityCounterTiles(
         disoccludedPixels += tile.disoccludedPixels;
         clampedSamples += tile.clampedSamples;
         nonFinitePixels += tile.nonFinitePixels;
+        primaryRays += tile.primaryRays;
+        secondaryRays += tile.secondaryRays;
+        shadowRays += tile.shadowRays;
+        diVisibilityRays += tile.diVisibilityRays;
+        giVisibilityRays += tile.giVisibilityRays;
+        ptVisibilityRays += tile.ptVisibilityRays;
+        anyHitInvocations += tile.anyHitInvocations;
         contributionInputEnergy += static_cast<double>(tile.contributionInputEnergy);
         contributionOutputEnergy += static_cast<double>(tile.contributionOutputEnergy);
         contributionClampedEnergy += static_cast<double>(tile.contributionClampedEnergy);
@@ -620,6 +676,13 @@ bool AggregateQualityCounterTiles(
     metrics["contribution_clamped_energy"] = contributionClampedEnergy;
     metrics["contribution_clamped_samples"] = static_cast<double>(clampedSamples);
     metrics["non_finite_pixels"] = static_cast<double>(nonFinitePixels);
+    metrics["primary_rays_actual"] = static_cast<double>(primaryRays);
+    metrics["secondary_rays_actual"] = static_cast<double>(secondaryRays);
+    metrics["shadow_rays_actual"] = static_cast<double>(shadowRays);
+    metrics["di_visibility_rays_actual"] = static_cast<double>(diVisibilityRays);
+    metrics["gi_visibility_rays_actual"] = static_cast<double>(giVisibilityRays);
+    metrics["pt_visibility_rays_actual"] = static_cast<double>(ptVisibilityRays);
+    metrics["anyhit_invocations_actual"] = static_cast<double>(anyHitInvocations);
     diagnostics = "GPU quality-counter tiles aggregated.";
     return true;
 }

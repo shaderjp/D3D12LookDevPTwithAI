@@ -71,11 +71,12 @@ namespace
 
 namespace Bistro
 {
-    void FpsCamera::Reset(const XMFLOAT3& position, float yawRadians, float pitchRadians)
+    void FpsCamera::Reset(const XMFLOAT3& position, float yawRadians, float pitchRadians, float rollRadians)
     {
         m_position = position;
         m_yaw = yawRadians;
         m_pitch = std::clamp(pitchRadians, -1.45f, 1.45f);
+        m_roll = std::isfinite(rollRadians) ? rollRadians : 0.0f;
     }
 
     void FpsCamera::SetActive(bool active)
@@ -363,11 +364,23 @@ namespace Bistro
         return m_pitch;
     }
 
+    float FpsCamera::GetRollRadians() const
+    {
+        return m_roll;
+    }
+
     XMMATRIX FpsCamera::GetViewMatrix() const
     {
         XMVECTOR eye = XMLoadFloat3(&m_position);
         XMVECTOR forward = CameraForward(m_yaw, m_pitch);
-        return XMMatrixLookAtLH(eye, eye + forward, XMVectorSet(0.0f, 1.0f, 0.0f, 0.0f));
+        XMVECTOR right = XMVector3Normalize(XMVector3Cross(XMVectorSet(0.0f, 1.0f, 0.0f, 0.0f), forward));
+        if (XMVectorGetX(XMVector3LengthSq(right)) < 1.0e-8f)
+        {
+            right = XMVectorSet(1.0f, 0.0f, 0.0f, 0.0f);
+        }
+        XMVECTOR up = XMVector3Normalize(XMVector3Cross(forward, right));
+        const XMVECTOR rolledUp = up * std::cos(m_roll) + right * std::sin(m_roll);
+        return XMMatrixLookAtLH(eye, eye + forward, rolledUp);
     }
 
     XMFLOAT3 FpsCamera::GetPosition() const

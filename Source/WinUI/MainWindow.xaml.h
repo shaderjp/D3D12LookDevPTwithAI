@@ -122,6 +122,9 @@ struct MainWindow : MainWindowT<MainWindow>
     void OnCopyToken(
         Windows::Foundation::IInspectable const&,
         Microsoft::UI::Xaml::RoutedEventArgs const&);
+    void OnExportMcpSettings(
+        Windows::Foundation::IInspectable const&,
+        Microsoft::UI::Xaml::RoutedEventArgs const&);
     void OnLeftSplitterDrag(
         Windows::Foundation::IInspectable const&,
         Microsoft::UI::Xaml::Controls::Primitives::DragDeltaEventArgs const&);
@@ -152,6 +155,7 @@ private:
     Windows::Foundation::IAsyncAction PickTexture(
         std::int32_t slot);
     Windows::Foundation::IAsyncAction SaveProjectAs();
+    Windows::Foundation::IAsyncAction ExportMcpSettings();
     HWND WindowHandle();
     static LRESULT CALLBACK WindowSubclassProc(
         HWND window,

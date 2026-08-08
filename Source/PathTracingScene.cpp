@@ -81,6 +81,7 @@ namespace
     {
         const std::wstring extension = path.extension().wstring();
         return _wcsicmp(extension.c_str(), L".hdr") == 0 ||
+            _wcsicmp(extension.c_str(), L".exr") == 0 ||
             _wcsicmp(extension.c_str(), L".dds") == 0 ||
             _wcsicmp(extension.c_str(), L".tga") == 0 ||
             _wcsicmp(extension.c_str(), L".png") == 0 ||
@@ -502,12 +503,12 @@ namespace Bistro
         std::vector<RtLight> emissiveCandidates;
         emissiveCandidates.reserve(1024);
 
-        for (uint32_t geometryIndex = 0; geometryIndex < static_cast<uint32_t>(scene.draws.size()); ++geometryIndex)
+        auto appendGeometryLights = [&](uint32_t geometryIndex, uint32_t instanceIndex, FXMMATRIX objectToWorld)
         {
             const DrawItem& draw = scene.draws[geometryIndex];
             if (draw.materialIndex >= scene.materials.size())
             {
-                continue;
+                return;
             }
 
             const Material& material = scene.materials[draw.materialIndex];
@@ -515,7 +516,7 @@ namespace Bistro
             const float materialEmission = Max3(material.emissiveFactor.x, material.emissiveFactor.y, material.emissiveFactor.z) * (std::max)(material.emissiveFactor.w, 0.0f);
             if (!hasEmissiveTexture && materialEmission <= 0.0f)
             {
-                continue;
+                return;
             }
 
             // This is an importance estimate only. Shading evaluates the real
@@ -536,9 +537,12 @@ namespace Bistro
                     continue;
                 }
 
-                const XMFLOAT3& p0 = scene.vertices[i0].position;
-                const XMFLOAT3& p1 = scene.vertices[i1].position;
-                const XMFLOAT3& p2 = scene.vertices[i2].position;
+                XMFLOAT3 p0;
+                XMFLOAT3 p1;
+                XMFLOAT3 p2;
+                XMStoreFloat3(&p0, XMVector3TransformCoord(XMLoadFloat3(&scene.vertices[i0].position), objectToWorld));
+                XMStoreFloat3(&p1, XMVector3TransformCoord(XMLoadFloat3(&scene.vertices[i1].position), objectToWorld));
+                XMStoreFloat3(&p2, XMVector3TransformCoord(XMLoadFloat3(&scene.vertices[i2].position), objectToWorld));
                 const XMFLOAT3 edge0 = Subtract(p1, p0);
                 const XMFLOAT3 edge1 = Subtract(p2, p0);
                 const float area = Length(Cross(edge0, edge1)) * 0.5f;
@@ -549,14 +553,42 @@ namespace Bistro
 
                 RtLight light{};
                 light.positionArea = XMFLOAT4(p0.x, p0.y, p0.z, area);
-                light.edge0Type = XMFLOAT4(edge0.x, edge0.y, edge0.z, 0.0f);
+                light.edge0Type = XMFLOAT4(edge0.x, edge0.y, edge0.z, material.twoSidedEmission ? -1.0f : 0.0f);
                 light.edge1 = XMFLOAT4(edge1.x, edge1.y, edge1.z, 0.0f);
                 light.radianceCdf = XMFLOAT4(radiance.x, radiance.y, radiance.z, 0.0f);
-                light.meshIdentity = XMUINT4(geometryIndex, i / 3u, draw.materialIndex, 1u);
+                light.meshIdentity = XMUINT4(geometryIndex, i / 3u, draw.materialIndex, instanceIndex);
                 emissiveCandidates.push_back(light);
+            }
+        };
+
+        if (!scene.meshes.empty() && !scene.instances.empty())
+        {
+            for (uint32_t instanceIndex = 0; instanceIndex < static_cast<uint32_t>(scene.instances.size()); ++instanceIndex)
+            {
+                const SceneInstance& instance = scene.instances[instanceIndex];
+                if (instance.meshIndex >= scene.meshes.size()) continue;
+                const MeshRange& mesh = scene.meshes[instance.meshIndex];
+                const XMMATRIX objectToWorld = XMLoadFloat4x4(&instance.transform);
+                for (uint32_t localGeometry = 0; localGeometry < mesh.drawCount; ++localGeometry)
+                {
+                    appendGeometryLights(mesh.drawOffset + localGeometry, instanceIndex, objectToWorld);
+                }
+            }
+        }
+        else
+        {
+            for (uint32_t geometryIndex = 0; geometryIndex < static_cast<uint32_t>(scene.draws.size()); ++geometryIndex)
+            {
+                appendGeometryLights(geometryIndex, 0u, XMMatrixIdentity());
             }
         }
 
+        std::sort(emissiveCandidates.begin(), emissiveCandidates.end(), [](const RtLight& left, const RtLight& right)
+        {
+            if (left.meshIdentity.x != right.meshIdentity.x) return left.meshIdentity.x < right.meshIdentity.x;
+            if (left.meshIdentity.y != right.meshIdentity.y) return left.meshIdentity.y < right.meshIdentity.y;
+            return left.meshIdentity.w < right.meshIdentity.w;
+        });
         const size_t emissiveStride = emissiveCandidates.size() > maxEmissiveTriangleLights && maxEmissiveTriangleLights > 0
             ? (emissiveCandidates.size() + maxEmissiveTriangleLights - 1) / maxEmissiveTriangleLights
             : 1;
@@ -565,6 +597,19 @@ namespace Bistro
             result.lights.push_back(emissiveCandidates[i]);
         }
         result.emissiveTriangleCount = static_cast<uint32_t>(result.lights.size());
+
+        for (const AnalyticLight& source : scene.analyticLights)
+        {
+            RtLight light{};
+            light.positionArea = XMFLOAT4(source.position.x, source.position.y, source.position.z, 1.0f);
+            const float type = source.type == AnalyticLightType::Spot ? 3.0f : source.type == AnalyticLightType::Distant ? 4.0f : 2.0f;
+            light.edge0Type = XMFLOAT4(source.direction.x, source.direction.y, source.direction.z, type);
+            const float outerCosine = std::cos(XMConvertToRadians(source.coneAngleDegrees));
+            const float innerCosine = std::cos(XMConvertToRadians((std::max)(source.coneAngleDegrees - source.coneDeltaDegrees, 0.0f)));
+            light.edge1 = XMFLOAT4(innerCosine, outerCosine, 0.0f, 0.0f);
+            light.radianceCdf = XMFLOAT4(source.radiance.x, source.radiance.y, source.radiance.z, 0.0f);
+            result.lights.push_back(light);
+        }
 
         const XMFLOAT3 extent(
             (std::max)(scene.boundsMax.x - scene.boundsMin.x, 1.0f),
@@ -575,14 +620,17 @@ namespace Bistro
             (scene.boundsMin.y + scene.boundsMax.y) * 0.5f,
             (scene.boundsMin.z + scene.boundsMax.z) * 0.5f);
 
-        const float windowWidth = (std::max)(extent.x * 0.055f, 3.0f);
-        const float windowHeight = (std::max)(extent.y * 0.050f, 2.0f);
-        const float frontZ = scene.boundsMin.z + extent.z * 0.16f;
-        const float windowY = scene.boundsMin.y + extent.y * 0.34f;
-        PushRectLight(result.lights, XMFLOAT3(center.x - extent.x * 0.17f, windowY, frontZ), XMFLOAT3(windowWidth, 0.0f, 0.0f), XMFLOAT3(0.0f, windowHeight, 0.0f), XMFLOAT3(1.0f, 0.74f, 0.42f));
-        PushRectLight(result.lights, XMFLOAT3(center.x + extent.x * 0.12f, windowY + extent.y * 0.02f, frontZ), XMFLOAT3(windowWidth * 1.2f, 0.0f, 0.0f), XMFLOAT3(0.0f, windowHeight * 0.9f, 0.0f), XMFLOAT3(0.55f, 0.78f, 1.0f));
-        PushRectLight(result.lights, XMFLOAT3(center.x, scene.boundsMin.y + extent.y * 0.48f, center.z), XMFLOAT3(extent.x * 0.08f, 0.0f, 0.0f), XMFLOAT3(0.0f, 0.0f, extent.z * 0.08f), XMFLOAT3(1.0f, 0.82f, 0.55f));
-        result.proceduralAreaCount = 3;
+        if (!scene.hasAuthoredLighting)
+        {
+            const float windowWidth = (std::max)(extent.x * 0.055f, 3.0f);
+            const float windowHeight = (std::max)(extent.y * 0.050f, 2.0f);
+            const float frontZ = scene.boundsMin.z + extent.z * 0.16f;
+            const float windowY = scene.boundsMin.y + extent.y * 0.34f;
+            PushRectLight(result.lights, XMFLOAT3(center.x - extent.x * 0.17f, windowY, frontZ), XMFLOAT3(windowWidth, 0.0f, 0.0f), XMFLOAT3(0.0f, windowHeight, 0.0f), XMFLOAT3(1.0f, 0.74f, 0.42f));
+            PushRectLight(result.lights, XMFLOAT3(center.x + extent.x * 0.12f, windowY + extent.y * 0.02f, frontZ), XMFLOAT3(windowWidth * 1.2f, 0.0f, 0.0f), XMFLOAT3(0.0f, windowHeight * 0.9f, 0.0f), XMFLOAT3(0.55f, 0.78f, 1.0f));
+            PushRectLight(result.lights, XMFLOAT3(center.x, scene.boundsMin.y + extent.y * 0.48f, center.z), XMFLOAT3(extent.x * 0.08f, 0.0f, 0.0f), XMFLOAT3(0.0f, 0.0f, extent.z * 0.08f), XMFLOAT3(1.0f, 0.82f, 0.55f));
+            result.proceduralAreaCount = 3;
+        }
 
         BuildLightAliasTable(result.lights);
         result.activeLightCount = static_cast<uint32_t>(result.lights.size());

@@ -18,8 +18,14 @@ enum class TextureSlot : std::uint32_t
     Metallic,
     Occlusion,
     Emissive,
+    Alpha,
     Count
 };
+static_assert(static_cast<std::uint32_t>(TextureSlot::BaseColor) == 0u);
+static_assert(static_cast<std::uint32_t>(TextureSlot::Emissive) == 5u,
+    "Existing project texture-slot values must remain stable.");
+static_assert(static_cast<std::uint32_t>(TextureSlot::Alpha) == 6u,
+    "Alpha must remain the appended seventh texture slot.");
 
 enum class AlphaMode : std::uint32_t
 {

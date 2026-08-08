@@ -161,6 +161,7 @@ constexpr wchar_t const* TextureNames[] =
     L"Metallic",
     L"Occlusion",
     L"Emissive",
+    L"Alpha",
 };
 }
 
@@ -287,6 +288,10 @@ void D3D12PathTracingBackend::ApplyEditorCommand(
         else if (action == L"history.reset")
         {
             ResetRenderingHistory();
+        }
+        else if (action == L"scene.cancelLoad")
+        {
+            CancelAsyncSceneLoad();
         }
         else if (action == L"camera.reset")
         {
@@ -534,12 +539,17 @@ void D3D12PathTracingBackend::ApplyEditorCommand(
     {
         m_mode = static_cast<PathTracingMode>(
             std::clamp<std::int64_t>(
-                Integer(command.value), 0, 3));
+                Integer(command.value), 0, 5));
+        RequestGpuResourceRefresh(PendingGpuResourceRefresh::FullScene);
         invalidate(rb::FrameChangeMask::Backend);
     }
     else if (property == L"viewport.debugView")
     {
         SetNumber(command.value, m_debugViewMode, 0, 64);
+        if (IsNrdSelected())
+        {
+            RequestGpuResourceRefresh(PendingGpuResourceRefresh::FullScene);
+        }
         invalidate(rb::FrameChangeMask::View);
     }
     else if (property == L"viewport.normalYFlip")
@@ -564,6 +574,135 @@ void D3D12PathTracingBackend::ApplyEditorCommand(
         SetNumber(command.value, m_gamma, 1.0f, 3.0f);
         invalidate(rb::FrameChangeMask::View);
     }
+    else if (property == L"quality.profile")
+    {
+        m_qualitySettings.qualityProfile =
+            static_cast<rb::QualityProfile>(std::clamp<std::int64_t>(
+                Integer(command.value), 0, 2));
+        ApplyQualitySettingsToRenderer();
+        RequestGpuResourceRefresh(PendingGpuResourceRefresh::FullScene);
+        invalidate(
+            rb::FrameChangeMask::Backend |
+            rb::FrameChangeMask::QualityProfile);
+    }
+    else if (property == L"quality.restirBackend")
+    {
+        m_qualitySettings.restirBackend =
+            static_cast<rb::RestirBackend>(std::clamp<std::int64_t>(
+                Integer(command.value), 0, 1));
+        RequestGpuResourceRefresh(PendingGpuResourceRefresh::FullScene);
+        invalidate(rb::FrameChangeMask::Backend);
+    }
+    else if (property == L"quality.secondaryRate")
+    {
+        m_qualitySettings.secondaryShadingRate =
+            static_cast<rb::SecondaryShadingRate>(
+                std::clamp<std::int64_t>(Integer(command.value), 0, 2));
+        RequestGpuResourceRefresh(PendingGpuResourceRefresh::FullScene);
+        invalidate(rb::FrameChangeMask::Backend);
+    }
+    else if (property == L"quality.resolutionMode")
+    {
+        m_qualitySettings.resolutionMode =
+            static_cast<rb::ResolutionMode>(std::clamp<std::int64_t>(
+                Integer(command.value), 0, 2));
+        ApplyConfiguredRenderScale(true);
+        RequestGpuResourceRefresh(PendingGpuResourceRefresh::FullScene);
+        invalidate(rb::FrameChangeMask::Resolution);
+    }
+    else if (property == L"quality.fixedRenderScale" ||
+             property == L"quality.minRenderScale" ||
+             property == L"quality.maxRenderScale")
+    {
+        if (property == L"quality.fixedRenderScale")
+        {
+            SetNumber(
+                command.value,
+                m_qualitySettings.fixedRenderScale,
+                0.25f,
+                1.0f);
+        }
+        else if (property == L"quality.minRenderScale")
+        {
+            SetNumber(
+                command.value,
+                m_qualitySettings.minRenderScale,
+                0.25f,
+                m_qualitySettings.maxRenderScale);
+        }
+        else
+        {
+            SetNumber(
+                command.value,
+                m_qualitySettings.maxRenderScale,
+                m_qualitySettings.minRenderScale,
+                1.0f);
+        }
+        m_qualitySettings.fixedRenderScale = std::clamp(
+            m_qualitySettings.fixedRenderScale,
+            m_qualitySettings.minRenderScale,
+            m_qualitySettings.maxRenderScale);
+        ApplyConfiguredRenderScale(true);
+        RequestGpuResourceRefresh(PendingGpuResourceRefresh::FullScene);
+        invalidate(rb::FrameChangeMask::Resolution);
+    }
+    else if (property == L"quality.finalTaa")
+    {
+        m_qualitySettings.finalTaa = Boolean(command.value);
+        RequestGpuResourceRefresh(PendingGpuResourceRefresh::FullScene);
+        invalidate(rb::FrameChangeMask::DenoiserSettings);
+    }
+    else if (property == L"quality.sharpen")
+    {
+        SetNumber(
+            command.value,
+            m_qualitySettings.sharpenStrength,
+            0.0f,
+            1.0f);
+        invalidate(rb::FrameChangeMask::View);
+    }
+    else if (property == L"quality.movingSpp" ||
+             property == L"quality.movingBounces" ||
+             property == L"quality.staticBaseSpp" ||
+             property == L"quality.staticMaxSpp" ||
+             property == L"quality.staticBounces" ||
+             property == L"quality.settleFrames" ||
+             property == L"quality.targetGpuMs" ||
+             property == L"quality.referenceSpp")
+    {
+        auto& budget = m_qualitySettings.rayBudget;
+        if (property == L"quality.movingSpp")
+            SetNumber(command.value, budget.movingSpp, 1u, 8u);
+        else if (property == L"quality.movingBounces")
+            SetNumber(command.value, budget.movingBounces, 1u, 16u);
+        else if (property == L"quality.staticBaseSpp")
+            SetNumber(command.value, budget.staticBaseSpp, 1u, 8u);
+        else if (property == L"quality.staticMaxSpp")
+            SetNumber(command.value, budget.staticMaxSpp, 1u, 16u);
+        else if (property == L"quality.staticBounces")
+            SetNumber(command.value, budget.staticBounces, 1u, 16u);
+        else if (property == L"quality.settleFrames")
+            SetNumber(command.value, budget.settleFrames, 0u, 120u);
+        else if (property == L"quality.targetGpuMs")
+            SetNumber(command.value, budget.targetGpuMs, 1.0f, 100.0f);
+        else
+            SetNumber(
+                command.value,
+                m_qualitySettings.referenceSpp,
+                1u,
+                1048576u);
+        budget.staticMaxSpp = (std::max)(
+            budget.staticMaxSpp,
+            budget.staticBaseSpp);
+        if (m_qualitySettings.qualityProfile ==
+                rb::QualityProfile::ReferenceStill)
+        {
+            m_maxAccumulatedFrames = static_cast<int>(
+                (std::min)(m_qualitySettings.referenceSpp, 1048576u));
+        }
+        RequestGpuResourceRefresh(PendingGpuResourceRefresh::FullScene);
+        invalidate(rb::FrameChangeMask::Backend);
+    }
     else if (property == L"viewport.vsync")
     {
         m_vsyncEnabled = Boolean(command.value);
@@ -584,11 +723,14 @@ void D3D12PathTracingBackend::ApplyEditorCommand(
              property == L"camera.position.y" ||
              property == L"camera.position.z" ||
              property == L"camera.yawDegrees" ||
-             property == L"camera.pitchDegrees")
+             property == L"camera.pitchDegrees" ||
+             property == L"camera.rollDegrees" ||
+             property == L"camera.fovDegrees")
     {
         XMFLOAT3 position = m_camera.GetPosition();
         float yaw = m_camera.GetYawRadians();
         float pitch = m_camera.GetPitchRadians();
+        float roll = m_camera.GetRollRadians();
         if (property == L"camera.position.x")
             SetNumber(command.value, position.x, -10000.0f, 10000.0f);
         else if (property == L"camera.position.y")
@@ -598,10 +740,15 @@ void D3D12PathTracingBackend::ApplyEditorCommand(
         else if (property == L"camera.yawDegrees")
             yaw = XMConvertToRadians(static_cast<float>(
                 std::clamp(Number(command.value), -360.0, 360.0)));
-        else
+        else if (property == L"camera.pitchDegrees")
             pitch = XMConvertToRadians(static_cast<float>(
                 std::clamp(Number(command.value), -83.0, 83.0)));
-        m_camera.Reset(position, yaw, pitch);
+        else if (property == L"camera.rollDegrees")
+            roll = XMConvertToRadians(static_cast<float>(
+                std::clamp(Number(command.value), -180.0, 180.0)));
+        else
+            SetNumber(command.value, m_cameraFovDegrees, 1.0f, 179.0f);
+        m_camera.Reset(position, yaw, pitch, roll);
         invalidate(rb::FrameChangeMask::CameraCut);
     }
     else if (property == L"gamepad.enabled")
@@ -923,6 +1070,10 @@ void D3D12PathTracingBackend::ApplyEditorCommand(
     else if (property == L"denoise.enabled")
     {
         m_denoiserEnabled = Boolean(command.value);
+        if (IsNrdSelected())
+        {
+            RequestGpuResourceRefresh(PendingGpuResourceRefresh::FullScene);
+        }
         ResetDenoiseHistory();
         m_projectDirty = true;
     }
@@ -936,6 +1087,8 @@ void D3D12PathTracingBackend::ApplyEditorCommand(
             m_nrdBackendRuntime.UpdateMethod(
                 m_device.Get(), SelectedNrdMethod());
         }
+        ApplyConfiguredRenderScale(true);
+        RequestGpuResourceRefresh(PendingGpuResourceRefresh::FullScene);
         ResetDenoiseHistory();
         m_projectDirty = true;
     }
@@ -946,11 +1099,17 @@ void D3D12PathTracingBackend::ApplyEditorCommand(
                 Integer(command.value), 0, 3));
         m_dlssBackendRuntime.UpdateMode(
             m_width, m_height, m_dlssMode);
+        ApplyConfiguredRenderScale(true);
+        RequestGpuResourceRefresh(PendingGpuResourceRefresh::FullScene);
         ResetDenoiseHistory();
+        m_projectDirty = true;
     }
     else if (property == L"denoise.dlssAvailable")
     {
         m_dlssEnabledWhenAvailable = Boolean(command.value);
+        RequestGpuResourceRefresh(PendingGpuResourceRefresh::FullScene);
+        ResetDenoiseHistory();
+        m_projectDirty = true;
     }
     else if (property == L"denoise.preset")
     {
@@ -1231,6 +1390,20 @@ void D3D12PathTracingBackend::ApplyEditorCommand(
         }
         SaveMcpUserSettings();
     }
+    else if (property == L"mcp.auth")
+    {
+        if (!m_mcpServer.GetStatus().running)
+        {
+            {
+                std::lock_guard lock(m_mcpSettingsMutex);
+                m_mcpSettings.authenticationMode =
+                    static_cast<mcp::AuthenticationMode>(
+                        std::clamp<std::int64_t>(
+                            Integer(command.value), 0, 1));
+            }
+            SaveMcpUserSettings();
+        }
+    }
 }
 
 lookdevpt::winui::EditorSnapshot
@@ -1248,8 +1421,19 @@ D3D12PathTracingBackend::CaptureEditorSnapshot() const
     snapshot.projectName = m_projectPath.empty()
         ? std::wstring{}
         : std::filesystem::path(m_projectPath).filename().wstring();
-    snapshot.status = L"Rendering " + std::to_wstring(m_width) +
-        L" × " + std::to_wstring(m_height);
+    const SceneLoadStage sceneLoadStage =
+        m_sceneLoadStage.load(std::memory_order_relaxed);
+    const bool sceneLoading =
+        sceneLoadStage == SceneLoadStage::Parsing ||
+        sceneLoadStage == SceneLoadStage::LoadingAssets ||
+        sceneLoadStage == SceneLoadStage::BuildingBLAS ||
+        sceneLoadStage == SceneLoadStage::BuildingTLAS;
+    snapshot.status = sceneLoading
+        ? L"Loading scene"
+        : L"Rendering " + std::to_wstring(m_renderWidth) + L" × " +
+            std::to_wstring(m_renderHeight) + L" → " +
+            std::to_wstring(m_width) + L" × " +
+            std::to_wstring(m_height);
     snapshot.diagnostics =
         Widen(m_sceneDiagnostics + "\n" +
               m_projectDiagnostics + "\n" +
@@ -1258,6 +1442,7 @@ D3D12PathTracingBackend::CaptureEditorSnapshot() const
     std::wostringstream stats;
     NrdStatus const& nrdStatus = m_nrdBackendRuntime.Status();
     DlssStatus const& dlssStatus = m_dlssBackendRuntime.Status();
+    RtxdiStatus const& rtxdiStatus = m_rtxdiBackendRuntime.Status();
     wchar_t const* requestedDenoise = L"Internal";
     switch (m_denoiseBackend)
     {
@@ -1278,11 +1463,23 @@ D3D12PathTracingBackend::CaptureEditorSnapshot() const
     }
     stats << L"Direct3D 12 DXR\n"
           << L"Adapter: " << m_adapterDescription << L"\n"
-          << L"Output: " << m_width << L" × " << m_height << L"\n"
+          << L"Resolution: " << m_renderWidth << L" × "
+          << m_renderHeight << L" → " << m_width << L" × "
+          << m_height << L" (" << m_activeRenderScale << L"×"
+          << (UsesTemporalUpscale() ? L", TAAU" : L"") << L")\n"
+          << L"Quality: "
+          << Widen(rb::QualityProfileName(
+              m_qualitySettings.qualityProfile)) << L"\n"
           << L"GPU PT pipeline: " << std::fixed
           << std::setprecision(3) << m_gpuFrameMs << L" ms\n"
           << L"Path trace: " << m_gpuPathTraceMs << L" ms\n"
           << L"ReSTIR: " << m_gpuRestirMs << L" ms\n"
+          << L"ReSTIR GI initial / fused: "
+          << m_gpuRestirGiInitialMs << L" / "
+          << m_gpuRestirGiFusedMs << L" ms\n"
+          << L"ReSTIR PT initial / fused: "
+          << m_gpuRestirPtInitialMs << L" / "
+          << m_gpuRestirPtFusedMs << L" ms\n"
           << L"Denoise: " << m_gpuDenoiseMs << L" ms\n"
           << L"Copy/final transition: " << m_gpuCopyMs
           << L" / " << m_gpuUiMs << L" ms\n"
@@ -1291,6 +1488,11 @@ D3D12PathTracingBackend::CaptureEditorSnapshot() const
           << m_scene.draws.size() << L" / "
           << m_scene.materials.size() << L" / "
           << m_scene.indices.size() / 3 << L"\n"
+          << L"BLAS geometries / TLAS instances: "
+          << m_geometryRecords.size() << L" / "
+          << (m_scene.instances.empty()
+              ? size_t{ 1 }
+              : m_scene.instances.size()) << L"\n"
           << L"Textures / lights: " << m_textures.size()
           << L" / " << m_activeLightCount << L"\n"
           << L"Denoise requested / active: "
@@ -1322,6 +1524,48 @@ D3D12PathTracingBackend::CaptureEditorSnapshot() const
         static_cast<std::int64_t>(m_toneMapper);
     values[L"viewport.exposure"] = static_cast<double>(m_exposure);
     values[L"viewport.gamma"] = static_cast<double>(m_gamma);
+    values[L"quality.profile"] = static_cast<std::int64_t>(
+        m_qualitySettings.qualityProfile);
+    values[L"quality.restirBackend"] = static_cast<std::int64_t>(
+        m_qualitySettings.restirBackend);
+    values[L"quality.secondaryRate"] = static_cast<std::int64_t>(
+        m_qualitySettings.secondaryShadingRate);
+    values[L"quality.resolutionMode"] = static_cast<std::int64_t>(
+        m_qualitySettings.resolutionMode);
+    values[L"quality.fixedRenderScale"] =
+        static_cast<double>(m_qualitySettings.fixedRenderScale);
+    values[L"quality.minRenderScale"] =
+        static_cast<double>(m_qualitySettings.minRenderScale);
+    values[L"quality.maxRenderScale"] =
+        static_cast<double>(m_qualitySettings.maxRenderScale);
+    values[L"quality.finalTaa"] = m_qualitySettings.finalTaa;
+    values[L"quality.sharpen"] =
+        static_cast<double>(m_qualitySettings.sharpenStrength);
+    values[L"quality.movingSpp"] = static_cast<std::int64_t>(
+        m_qualitySettings.rayBudget.movingSpp);
+    values[L"quality.movingBounces"] = static_cast<std::int64_t>(
+        m_qualitySettings.rayBudget.movingBounces);
+    values[L"quality.staticBaseSpp"] = static_cast<std::int64_t>(
+        m_qualitySettings.rayBudget.staticBaseSpp);
+    values[L"quality.staticMaxSpp"] = static_cast<std::int64_t>(
+        m_qualitySettings.rayBudget.staticMaxSpp);
+    values[L"quality.staticBounces"] = static_cast<std::int64_t>(
+        m_qualitySettings.rayBudget.staticBounces);
+    values[L"quality.settleFrames"] = static_cast<std::int64_t>(
+        m_qualitySettings.rayBudget.settleFrames);
+    values[L"quality.targetGpuMs"] =
+        static_cast<double>(m_qualitySettings.rayBudget.targetGpuMs);
+    values[L"quality.referenceSpp"] = static_cast<std::int64_t>(
+        m_qualitySettings.referenceSpp);
+    values[L"quality.renderWidth"] =
+        static_cast<std::int64_t>(m_renderWidth);
+    values[L"quality.renderHeight"] =
+        static_cast<std::int64_t>(m_renderHeight);
+    values[L"quality.outputWidth"] = static_cast<std::int64_t>(m_width);
+    values[L"quality.outputHeight"] = static_cast<std::int64_t>(m_height);
+    values[L"quality.activeScale"] =
+        static_cast<double>(m_activeRenderScale);
+    values[L"quality.taau"] = UsesTemporalUpscale();
     values[L"camera.moveSpeed"] =
         static_cast<double>(m_baseMoveSpeed);
     values[L"camera.fastSpeed"] =
@@ -1339,6 +1583,11 @@ D3D12PathTracingBackend::CaptureEditorSnapshot() const
     values[L"camera.pitchDegrees"] =
         static_cast<double>(XMConvertToDegrees(
             m_camera.GetPitchRadians()));
+    values[L"camera.rollDegrees"] =
+        static_cast<double>(XMConvertToDegrees(
+            m_camera.GetRollRadians()));
+    values[L"camera.fovDegrees"] =
+        static_cast<double>(m_cameraFovDegrees);
     values[L"gamepad.enabled"] = m_camera.IsGamepadEnabled();
     values[L"gamepad.connected"] = m_camera.IsGamepadConnected();
     values[L"gamepad.calibrating"] =
@@ -1474,6 +1723,23 @@ D3D12PathTracingBackend::CaptureEditorSnapshot() const
     values[L"denoise.nrdReady"] = nrdStatus.instanceCreated;
     values[L"denoise.dlssCompiled"] = dlssStatus.compiled;
     values[L"denoise.dlssRuntime"] = dlssStatus.runtimeAvailable;
+    values[L"denoise.dlssIdentity"] =
+        dlssStatus.applicationIdentityConfigured;
+    values[L"denoise.dlssSupported"] = dlssStatus.featureSupported;
+    values[L"denoise.dlssReady"] = dlssStatus.evaluationReady;
+    values[L"denoise.dlssLastSucceeded"] =
+        dlssStatus.lastEvaluationSucceeded;
+    values[L"denoise.dlssSuccesses"] = static_cast<std::int64_t>(
+        dlssStatus.successfulEvaluations);
+    values[L"denoise.dlssFailures"] = static_cast<std::int64_t>(
+        dlssStatus.failedEvaluations);
+    values[L"denoise.dlssResultCode"] = static_cast<std::int64_t>(
+        dlssStatus.lastResultCode);
+    values[L"denoise.dlssFailureStage"] =
+        Widen(dlssStatus.lastFailureStage);
+    values[L"denoise.dlssFallbackReason"] =
+        Widen(dlssStatus.fallbackReason);
+    values[L"denoise.dlssError"] = Widen(dlssStatus.lastError);
     values[L"restir.temporal"] = m_restirTemporalReuse;
     values[L"restir.spatialPasses"] =
         static_cast<std::int64_t>(m_restirSpatialReusePasses);
@@ -1496,8 +1762,34 @@ D3D12PathTracingBackend::CaptureEditorSnapshot() const
         m_restirGiValidationRay;
     values[L"restir.active"] =
         m_mode != PathTracingMode::Pathtracing;
+    values[L"restir.rtxdiCompiled"] = rtxdiStatus.compiled;
+    values[L"restir.rtxdiReady"] = rtxdiStatus.evaluationReady;
+    values[L"restir.giReady"] = rtxdiStatus.giEvaluationReady;
+    values[L"restir.ptReady"] = rtxdiStatus.ptEvaluationReady;
+    values[L"restir.diReady"] = rtxdiStatus.diEvaluationReady;
+    values[L"restir.fallbackReason"] =
+        Widen(rtxdiStatus.fallbackReason);
     values[L"restir.maxAge"] =
         static_cast<std::int64_t>(m_reservoirMaxAge);
+    values[L"scene.loading"] = sceneLoading;
+    values[L"scene.loadStage"] =
+        static_cast<std::int64_t>(sceneLoadStage);
+    const std::uint64_t sceneLoadCompleted =
+        m_sceneLoadCompleted.load(std::memory_order_relaxed);
+    const std::uint64_t sceneLoadTotal =
+        m_sceneLoadTotal.load(std::memory_order_relaxed);
+    values[L"scene.loadCompleted"] =
+        static_cast<std::int64_t>(sceneLoadCompleted);
+    values[L"scene.loadTotal"] =
+        static_cast<std::int64_t>(sceneLoadTotal);
+    values[L"scene.loadFraction"] = sceneLoadTotal > 0
+        ? static_cast<double>(sceneLoadCompleted) /
+            static_cast<double>(sceneLoadTotal)
+        : 0.0;
+    {
+        std::scoped_lock lock(m_sceneLoadProgressMutex);
+        values[L"scene.loadCurrentAsset"] = m_sceneLoadCurrentAsset;
+    }
     values[L"material.compare.hasA"] = m_hasMaterialCompareA;
     values[L"material.compare.hasB"] = m_hasMaterialCompareB;
 
@@ -1623,7 +1915,9 @@ D3D12PathTracingBackend::CaptureEditorSnapshot() const
     snapshot.mcpEndpoint = Widen(status.endpoint);
     snapshot.mcpLastError = Widen(status.lastError);
     values[L"mcp.sessions"] =
-        static_cast<std::int64_t>(status.activeSessions);
+        static_cast<std::int64_t>(status.activeLegacySessions);
+    values[L"mcp.subscriptions"] =
+        static_cast<std::int64_t>(status.activeSubscriptions);
     values[L"mcp.activeRequests"] =
         static_cast<std::int64_t>(status.activeRequests);
     values[L"mcp.pendingCommands"] =
@@ -1643,6 +1937,9 @@ D3D12PathTracingBackend::CaptureEditorSnapshot() const
                 m_mcpSettings.requestTimeoutSeconds);
         values[L"mcp.access"] =
             static_cast<std::int64_t>(m_mcpSettings.accessMode);
+        values[L"mcp.auth"] =
+            static_cast<std::int64_t>(
+                m_mcpSettings.authenticationMode);
     }
     for (mcp::PendingApproval const& approval :
          m_mcpDispatcher.PendingApprovals())

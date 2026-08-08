@@ -10,14 +10,22 @@ shell with C++/WinRT and WinUI 3.
 
 This repository was ported from
 [shaderjp/D3D12LookDevPT](https://github.com/shaderjp/D3D12LookDevPT) commit
-`605fe99dc7bc42863c3d374d532ccc134b9f651d`. The renderer and HLSL baseline
-are kept compatible with that revision.
+`605fe99dc7bc42863c3d374d532ccc134b9f651d`. The current renderer and HLSL
+also include the later ImGui-edition work for PBRT v4 / TinyEXR import,
+RTXDI ReSTIR GI and checkerboard PT, DLSS Ray Reconstruction evaluation,
+dynamic internal resolution with TAAU, compact secondary work dispatch, BLAS
+compaction / instancing, shader ray counters, asynchronous scene loading, and
+the MCP `2026-07-28` transport.
 
 ## Screenshots
 
 | Bistro Interior | Bistro Exterior |
 |:---:|:---:|
 | ![Bistro Interior rendered in the dark-themed WinUI editor](docs/images/screenshot001.jpg) | ![Bistro Exterior rendered in the dark-themed WinUI editor](docs/images/screenshot002.jpg) |
+
+The WinUI controls expose all six render modes, quality profiles and ray
+budgets, fixed/dynamic render scale, camera roll/FOV, scene-load progress and
+cancellation, the seventh alpha texture slot, and detailed RTXDI / DLSS status.
 
 ## Supported environment
 
@@ -98,7 +106,8 @@ Launch the editor with the preview cube:
 .\Bin\x64\Debug\D3D12LookDevPTWinUI.exe
 ```
 
-Open a scene, environment, or schema-v2 project from the Project menu, or pass
+Open a PBRT / glTF / GLB / FBX / OBJ scene, environment, or schema-v2 project
+from the Project menu, or pass
 the same paths used by the original application:
 
 ```powershell
@@ -131,9 +140,11 @@ and the selected theme are stored in:
 %APPDATA%\D3D12LookDevPTWinUI\ui.json
 ```
 
-Internal render resolution is independent of the window size. The 720p,
-1080p, and 4K choices resize the DXR and swap-chain resources; WinUI displays
-the 16:9 composition surface with aspect-fit letterboxing.
+Display resolution is independent of the window size. The 720p, 1080p, and 4K
+choices resize the output and swap-chain resources; the Path Tracing panel
+separately selects native, fixed-scale, or budget-driven dynamic internal
+resolution. Non-DLSS scaled rendering uses TAAU. WinUI displays the 16:9
+composition surface with aspect-fit letterboxing.
 
 The viewport keeps the original controls:
 
@@ -190,7 +201,9 @@ Project paths may be absolute or relative to `baseDirectory`. See
 The MCP panel can start a local endpoint at
 `http://127.0.0.1:<port>/mcp`. The bearer token is stored in the WinUI-specific
 `settings.json`. Read-only, confirm-mutations, and allow-mutations modes are
-supported. Confirmed mutations are approved or rejected in the MCP panel and
+supported. The same endpoint serves stateless MCP `2026-07-28`, legacy
+session-based clients, and resource subscriptions. Confirmed mutations are
+approved or rejected in the MCP panel and
 are executed at the same renderer-thread safe point as editor commands.
 
 For command-line startup:
@@ -235,6 +248,11 @@ Run the inherited and WinUI boundary tests from PowerShell:
 .\Scripts\TestBenchmarkHarness.ps1
 .\Scripts\TestBenchmarkSequenceAnalyzer.ps1
 .\Scripts\TestRendererCommandQueue.ps1
+.\Scripts\TestPbrtSceneImporter.ps1
+.\Scripts\TestTinyExrLoader.ps1
+.\Scripts\TestTransientResourceAllocator.ps1
+.\Scripts\TestMcpServer.ps1
+.\Scripts\TestPbrtDxrContracts.ps1
 ```
 
 The final test covers command coalescing, FIFO barriers, indexed targets, and
@@ -253,16 +271,18 @@ source baseline:
 | RTXDI | `274141af082050c9d0ad6e01a2e591d0d66b7955` |
 | Streamline | `e8aaa6eaac968711fb62473d4ae8256dde20919b` |
 | Assimp | `e04b60f61522e1d5594ef25addcfae7cb156f085` |
+| TinyEXR | `1b106618644dbf8a0935c2348ba51a2d863dd7c2` |
 
 The RTXDI repository records its `Libraries/Rtxdi` nested dependency at
 `a14e079c727ed8c4fd3173bd2aea8244c9d9f6d6`.
 
 ## Shaders
 
-The HLSL and HLSLI files are unchanged from the recorded source commit.
-`CompileShaders` preserves the original DXC profiles, defines, incremental
-inputs/outputs, `.cso` filenames, and executable-side output. No WinUI-specific
-shader is added; composition scaling is handled by DXGI.
+The renderer uses the shared current HLSL/HLSLI pipeline, including ReSTIR GI
+and PT passes, DLSS preparation, compact secondary-work generation, TAAU, and
+quality counters. `CompileShaders` tracks every source/output pair and copies
+the resulting `.cso` files beside the executable. WinUI composition remains a
+DXGI concern and does not add a UI shader pass.
 
 ## More documentation
 

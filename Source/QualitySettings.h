@@ -1,5 +1,7 @@
 #pragma once
 
+#include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <string_view>
 
@@ -25,6 +27,13 @@ enum class SecondaryShadingRate : std::uint32_t
     AdaptiveHalf,
 };
 
+enum class ResolutionMode : std::uint32_t
+{
+    Native,
+    Fixed,
+    Dynamic,
+};
+
 enum class CameraHistoryMode : std::uint32_t
 {
     Auto,
@@ -48,11 +57,49 @@ struct QualitySettings
     QualityProfile qualityProfile = QualityProfile::InteractiveGame;
     RestirBackend restirBackend = RestirBackend::Rtxdi;
     SecondaryShadingRate secondaryShadingRate = SecondaryShadingRate::Auto;
+    ResolutionMode resolutionMode = ResolutionMode::Native;
     RayBudgetSettings rayBudget;
     bool finalTaa = true;
-    float sharpenStrength = 0.15f;
+    // Stochastic renderers retain small high-frequency variance after temporal
+    // reconstruction. Keep sharpening opt-in so it cannot turn that variance
+    // into persistent colored stipple in the default Interactive path.
+    float sharpenStrength = 0.0f;
+    float fixedRenderScale = 1.0f;
+    float minRenderScale = 0.5f;
+    float maxRenderScale = 1.0f;
     std::uint32_t referenceSpp = 4096;
 };
+
+struct RenderExtent
+{
+    std::uint32_t width = 1;
+    std::uint32_t height = 1;
+    float scale = 1.0f;
+};
+
+inline float QuantizeRenderScale(float scale)
+{
+    const float finiteScale = std::isfinite(scale) ? scale : 1.0f;
+    return std::clamp(std::round(finiteScale * 16.0f) / 16.0f, 1.0f / 16.0f, 1.0f);
+}
+
+inline RenderExtent ResolveRenderExtent(
+    std::uint32_t outputWidth,
+    std::uint32_t outputHeight,
+    float requestedScale)
+{
+    RenderExtent result;
+    result.scale = QuantizeRenderScale(requestedScale);
+    result.width = (std::max)(
+        1u,
+        static_cast<std::uint32_t>(std::lround(
+            static_cast<double>((std::max)(outputWidth, 1u)) * result.scale)));
+    result.height = (std::max)(
+        1u,
+        static_cast<std::uint32_t>(std::lround(
+            static_cast<double>((std::max)(outputHeight, 1u)) * result.scale)));
+    return result;
+}
 
 constexpr std::string_view QualityProfileName(QualityProfile profile)
 {
@@ -151,6 +198,40 @@ inline bool TryParseSecondaryShadingRate(std::string_view name, SecondaryShading
     if (name == "adaptive_half")
     {
         rate = SecondaryShadingRate::AdaptiveHalf;
+        return true;
+    }
+    return false;
+}
+
+constexpr std::string_view ResolutionModeName(ResolutionMode mode)
+{
+    switch (mode)
+    {
+    case ResolutionMode::Native:
+        return "native";
+    case ResolutionMode::Fixed:
+        return "fixed";
+    case ResolutionMode::Dynamic:
+        return "dynamic";
+    }
+    return "native";
+}
+
+inline bool TryParseResolutionMode(std::string_view name, ResolutionMode& mode)
+{
+    if (name == "native")
+    {
+        mode = ResolutionMode::Native;
+        return true;
+    }
+    if (name == "fixed")
+    {
+        mode = ResolutionMode::Fixed;
+        return true;
+    }
+    if (name == "dynamic")
+    {
+        mode = ResolutionMode::Dynamic;
         return true;
     }
     return false;

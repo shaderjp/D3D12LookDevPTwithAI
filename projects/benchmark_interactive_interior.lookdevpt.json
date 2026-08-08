@@ -17,7 +17,7 @@
       "targetGpuMs": 14.5
     },
     "finalTaa": true,
-    "sharpenStrength": 0.15,
+    "sharpenStrength": 0.0,
     "referenceSpp": 4096
   },
   "denoise": {

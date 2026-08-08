@@ -238,6 +238,31 @@ int wmain()
         }
         Require(std::abs(probabilitySum - 1.0) < 1.0e-5, "realized environment PMF is not normalized");
 
+        Bistro::TextureData constantEnvironment;
+        constantEnvironment.width = 1;
+        constantEnvironment.height = 4;
+        constantEnvironment.mipLevels = 1;
+        constantEnvironment.format = DXGI_FORMAT_R32G32B32A32_FLOAT;
+        constantEnvironment.mips.push_back({ 1, 4, 0, sizeof(float) * 4, sizeof(float) * 16 });
+        constantEnvironment.pixels.resize(sizeof(float) * 16);
+        float* constantPixels = reinterpret_cast<float*>(constantEnvironment.pixels.data());
+        for (size_t pixel = 0; pixel < 4; ++pixel)
+        {
+            constantPixels[pixel * 4 + 0] = 1.0f;
+            constantPixels[pixel * 4 + 1] = 1.0f;
+            constantPixels[pixel * 4 + 2] = 1.0f;
+            constantPixels[pixel * 4 + 3] = 1.0f;
+        }
+        const auto equalAreaAlias = Bistro::BuildEnvironmentAliasTable(constantEnvironment, true);
+        const auto latLongAlias = Bistro::BuildEnvironmentAliasTable(constantEnvironment, false);
+        for (const Bistro::EnvironmentAliasEntry& entry : equalAreaAlias)
+        {
+            Require(std::abs(entry.texelProbability - 0.25f) < 1.0e-6f,
+                "equal-area environment texels did not receive equal solid-angle weight");
+        }
+        Require(latLongAlias.front().texelProbability < latLongAlias[1].texelProbability,
+            "legacy lat-long environment weighting lost its polar Jacobian");
+
         Bistro::TextureData oversized;
         oversized.width = 4097;
         oversized.height = 4097;

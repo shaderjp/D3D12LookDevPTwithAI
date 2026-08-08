@@ -1,4 +1,5 @@
 #include "TextureLoader.h"
+#include "TinyExrLoader.h"
 
 #include <algorithm>
 #include <cmath>
@@ -258,7 +259,41 @@ namespace
             Bistro::EnvironmentImportanceMaxDimension);
         DirectX::TexMetadata metadata{};
         DirectX::ScratchImage image;
-        HRESULT hr = LoadTextureFile(path, metadata, image);
+        HRESULT hr = E_FAIL;
+        const std::filesystem::path sourcePath(path);
+        if (_wcsicmp(sourcePath.extension().c_str(), L".exr") == 0)
+        {
+            Bistro::ExrImage exr;
+            std::string diagnostics;
+            if (!Bistro::LoadExrRgba32Float(path, exr, diagnostics))
+            {
+                return MakeLinearRadianceFallbackTexture(fallback);
+            }
+            hr = image.Initialize2D(
+                DXGI_FORMAT_R32G32B32A32_FLOAT,
+                exr.width,
+                exr.height,
+                1,
+                1);
+            const DirectX::Image* destination = SUCCEEDED(hr) ? image.GetImage(0, 0, 0) : nullptr;
+            const size_t sourceRowPitch = static_cast<size_t>(exr.width) * sizeof(float) * 4u;
+            if (destination == nullptr || destination->rowPitch < sourceRowPitch)
+            {
+                return MakeLinearRadianceFallbackTexture(fallback);
+            }
+            for (size_t y = 0; y < exr.height; ++y)
+            {
+                std::memcpy(
+                    destination->pixels + y * destination->rowPitch,
+                    exr.rgba.data() + y * static_cast<size_t>(exr.width) * 4u,
+                    sourceRowPitch);
+            }
+            metadata = image.GetMetadata();
+        }
+        else
+        {
+            hr = LoadTextureFile(path, metadata, image);
+        }
         if (FAILED(hr) || image.GetImageCount() == 0)
         {
             return MakeLinearRadianceFallbackTexture(fallback);
@@ -435,7 +470,8 @@ namespace Bistro
         DirectX::ScratchImage image;
         HRESULT hr = E_FAIL;
         std::filesystem::path fsPath(path);
-        if (_wcsicmp(fsPath.extension().c_str(), L".hdr") == 0)
+        if (_wcsicmp(fsPath.extension().c_str(), L".hdr") == 0 ||
+            _wcsicmp(fsPath.extension().c_str(), L".exr") == 0)
         {
             return LoadHdrTexture(path);
         }
@@ -526,7 +562,8 @@ namespace Bistro
         }
 
         std::filesystem::path fsPath(path);
-        if (_wcsicmp(fsPath.extension().c_str(), L".hdr") == 0)
+        if (_wcsicmp(fsPath.extension().c_str(), L".hdr") == 0 ||
+            _wcsicmp(fsPath.extension().c_str(), L".exr") == 0)
         {
             return LoadHdrTexture(path);
         }
@@ -568,7 +605,8 @@ namespace Bistro
         }
 
         std::filesystem::path fsPath(path);
-        if (_wcsicmp(fsPath.extension().c_str(), L".hdr") == 0)
+        if (_wcsicmp(fsPath.extension().c_str(), L".hdr") == 0 ||
+            _wcsicmp(fsPath.extension().c_str(), L".exr") == 0)
         {
             return LoadHdrTexture(path);
         }
@@ -618,7 +656,9 @@ namespace Bistro
         return LoadLinearRadianceTexture(path, fallback, maxDimension, true);
     }
 
-    std::vector<EnvironmentAliasEntry> BuildEnvironmentAliasTable(const TextureData& texture)
+    std::vector<EnvironmentAliasEntry> BuildEnvironmentAliasTable(
+        const TextureData& texture,
+        bool equalAreaMapping)
     {
         static_assert(std::numeric_limits<float>::digits >= 24, "Environment alias indices require exact 24-bit float integers.");
         const uint32_t width = std::max(texture.width, 1u);
@@ -702,7 +742,9 @@ namespace Bistro
                         + 0.7152 * finiteNonNegative(pixel[1])
                         + 0.0722 * finiteNonNegative(pixel[2]);
                     const size_t index = static_cast<size_t>(y) * width + x;
-                    weights[index] = luminance * sinTheta;
+                    // Every PBRT v4 equal-area texel covers 4*pi/(w*h).
+                    // Legacy lat-long images retain their sin(theta) Jacobian.
+                    weights[index] = luminance * (equalAreaMapping ? 1.0 : sinTheta);
                     totalWeight += weights[index];
                 }
             }

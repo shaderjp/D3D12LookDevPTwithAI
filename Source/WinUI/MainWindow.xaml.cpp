@@ -1,6 +1,7 @@
 #include "pch.h"
 #include "MainWindow.xaml.h"
 
+#include "SceneImporter.h"
 #include "SimpleJson.h"
 
 #include <commctrl.h>
@@ -12,6 +13,8 @@
 
 #include <filesystem>
 #include <fstream>
+#include <iomanip>
+#include <cwctype>
 #include <sstream>
 
 #if __has_include("MainWindow.g.cpp")
@@ -105,6 +108,7 @@ void MainWindow::OnLoaded(
     m_windowHandle = WindowHandle();
     if (m_windowHandle)
     {
+        DragAcceptFiles(m_windowHandle, TRUE);
         SetWindowSubclass(
             m_windowHandle,
             WindowSubclassProc,
@@ -128,6 +132,7 @@ void MainWindow::OnClosed(
     m_closing = true;
     if (m_windowHandle)
     {
+        DragAcceptFiles(m_windowHandle, FALSE);
         RemoveWindowSubclass(
             m_windowHandle,
             WindowSubclassProc,
@@ -764,6 +769,13 @@ void MainWindow::OnCopyToken(
     Clipboard::SetContent(package);
 }
 
+void MainWindow::OnExportMcpSettings(
+    IInspectable const&,
+    RoutedEventArgs const&)
+{
+    ExportMcpSettings();
+}
+
 void MainWindow::OnLeftSplitterDrag(
     IInspectable const&,
     DragDeltaEventArgs const& args)
@@ -846,6 +858,45 @@ void MainWindow::RefreshSnapshot()
             ? L"No project file"
             : snapshot->projectName +
                 (snapshot->projectDirty ? L" *" : L""));
+    bool sceneLoading = false;
+    std::int64_t sceneLoadStage = 0;
+    std::int64_t sceneLoadCompleted = 0;
+    std::int64_t sceneLoadTotal = 0;
+    double sceneLoadFraction = 0.0;
+    TryBool(*snapshot, L"scene.loading", sceneLoading);
+    TryInteger(*snapshot, L"scene.loadStage", sceneLoadStage);
+    TryInteger(*snapshot, L"scene.loadCompleted", sceneLoadCompleted);
+    TryInteger(*snapshot, L"scene.loadTotal", sceneLoadTotal);
+    TryDouble(*snapshot, L"scene.loadFraction", sceneLoadFraction);
+    std::wstring sceneLoadAsset;
+    if (auto found = snapshot->values.find(L"scene.loadCurrentAsset");
+        found != snapshot->values.end())
+    {
+        if (auto value = std::get_if<std::wstring>(&found->second))
+        {
+            sceneLoadAsset = *value;
+        }
+    }
+    constexpr wchar_t const* SceneLoadStages[] = {
+        L"Idle", L"Parsing", L"Loading assets", L"Building BLAS",
+        L"Building TLAS", L"Completed", L"Failed", L"Cancelled" };
+    const size_t stageIndex = static_cast<size_t>(std::clamp<std::int64_t>(
+        sceneLoadStage, 0, std::size(SceneLoadStages) - 1));
+    SceneLoadProgress().Visibility(
+        sceneLoading ? Visibility::Visible : Visibility::Collapsed);
+    SceneLoadStatusText().Visibility(
+        sceneLoading ? Visibility::Visible : Visibility::Collapsed);
+    CancelSceneLoadButton().Visibility(
+        sceneLoading ? Visibility::Visible : Visibility::Collapsed);
+    SceneLoadProgress().IsIndeterminate(sceneLoading && sceneLoadTotal == 0);
+    SceneLoadProgress().Value(std::clamp(sceneLoadFraction, 0.0, 1.0));
+    SceneLoadStatusText().Text(
+        std::wstring(SceneLoadStages[stageIndex]) +
+        (sceneLoadTotal > 0
+            ? L" · " + std::to_wstring(sceneLoadCompleted) + L" / " +
+                std::to_wstring(sceneLoadTotal)
+            : L"") +
+        (sceneLoadAsset.empty() ? L"" : L"\n" + sceneLoadAsset));
     DiagnosticsText().Text(snapshot->diagnostics);
     StatsText().Text(snapshot->stats);
     RendererInfoBar().Message(snapshot->status);
@@ -858,15 +909,18 @@ void MainWindow::RefreshSnapshot()
             ? L"Listening for requests"
             : L"Server stopped");
     std::int64_t mcpSessions = 0;
+    std::int64_t mcpSubscriptions = 0;
     std::int64_t mcpActiveRequests = 0;
     std::int64_t mcpPendingCommands = 0;
     TryInteger(*snapshot, L"mcp.sessions", mcpSessions);
+    TryInteger(*snapshot, L"mcp.subscriptions", mcpSubscriptions);
     TryInteger(
         *snapshot, L"mcp.activeRequests", mcpActiveRequests);
     TryInteger(
         *snapshot, L"mcp.pendingCommands", mcpPendingCommands);
     McpCountsText().Text(
-        L"Sessions: " + std::to_wstring(mcpSessions) +
+        L"Legacy sessions: " + std::to_wstring(mcpSessions) +
+        L" · Subscriptions: " + std::to_wstring(mcpSubscriptions) +
         L" · Active requests: " +
         std::to_wstring(mcpActiveRequests) +
         L" · Pending commands: " +
@@ -880,7 +934,15 @@ void MainWindow::RefreshSnapshot()
             ? Visibility::Visible
             : Visibility::Collapsed);
     McpEndpointText().Text(snapshot->mcpEndpoint);
-    McpTokenBox().Text(snapshot->mcpToken);
+    std::int64_t mcpAuthentication = 0;
+    TryInteger(*snapshot, L"mcp.auth", mcpAuthentication);
+    const bool mcpUsesBearerToken = mcpAuthentication == 0;
+    if (snapshot->mcpRunning && !mcpUsesBearerToken)
+    {
+        McpStatusText().Text(L"Listening without authentication");
+    }
+    McpTokenBox().Text(
+        mcpUsesBearerToken ? snapshot->mcpToken : L"");
     McpErrorText().Text(snapshot->mcpLastError);
     SaveProjectMenu().IsEnabled(!snapshot->projectName.empty());
     SaveStartupMenu().IsEnabled(
@@ -895,6 +957,16 @@ void MainWindow::RefreshSnapshot()
     McpStartButton().IsEnabled(!snapshot->mcpRunning);
     McpStopButton().IsEnabled(snapshot->mcpRunning);
     McpPortNumber().IsEnabled(!snapshot->mcpRunning);
+    McpAuthenticationCombo().IsEnabled(!snapshot->mcpRunning);
+    McpTokenBox().IsEnabled(mcpUsesBearerToken);
+    McpCopyTokenButton().IsEnabled(mcpUsesBearerToken);
+    McpRegenerateTokenButton().IsEnabled(mcpUsesBearerToken);
+    McpIncludeTokenOnExportCheckBox().IsEnabled(
+        mcpUsesBearerToken);
+    if (!mcpUsesBearerToken)
+    {
+        McpIncludeTokenOnExportCheckBox().IsChecked(false);
+    }
 
     auto updateNumber =
         [&](NumberBox const& control, wchar_t const* property)
@@ -913,6 +985,8 @@ void MainWindow::RefreshSnapshot()
              std::pair{ CameraZNumber(), L"camera.position.z" },
              std::pair{ CameraYawNumber(), L"camera.yawDegrees" },
              std::pair{ CameraPitchNumber(), L"camera.pitchDegrees" },
+             std::pair{ CameraRollNumber(), L"camera.rollDegrees" },
+             std::pair{ CameraFovNumber(), L"camera.fovDegrees" },
              std::pair{ GamepadLookSpeedNumber(), L"gamepad.lookSpeed" },
              std::pair{ RoughnessNumber(), L"material.roughness" },
              std::pair{ MetallicNumber(), L"material.metallic" },
@@ -933,6 +1007,18 @@ void MainWindow::RefreshSnapshot()
              std::pair{ AreaIntensityNumber(), L"lighting.areaIntensity" },
              std::pair{ ExposureNumber(), L"viewport.exposure" },
              std::pair{ GammaNumber(), L"viewport.gamma" },
+             std::pair{ FixedRenderScaleNumber(), L"quality.fixedRenderScale" },
+             std::pair{ MinRenderScaleNumber(), L"quality.minRenderScale" },
+             std::pair{ MaxRenderScaleNumber(), L"quality.maxRenderScale" },
+             std::pair{ SharpenNumber(), L"quality.sharpen" },
+             std::pair{ MovingSppNumber(), L"quality.movingSpp" },
+             std::pair{ MovingBouncesNumber(), L"quality.movingBounces" },
+             std::pair{ StaticBaseSppNumber(), L"quality.staticBaseSpp" },
+             std::pair{ StaticMaxSppNumber(), L"quality.staticMaxSpp" },
+             std::pair{ StaticBouncesNumber(), L"quality.staticBounces" },
+             std::pair{ SettleFramesNumber(), L"quality.settleFrames" },
+             std::pair{ TargetGpuMsNumber(), L"quality.targetGpuMs" },
+             std::pair{ ReferenceSppNumber(), L"quality.referenceSpp" },
              std::pair{ SamplesNumber(), L"path.samples" },
              std::pair{ MaxBouncesNumber(), L"path.maxBounces" },
              std::pair{ MinBouncesNumber(), L"path.minBounces" },
@@ -1002,11 +1088,16 @@ void MainWindow::RefreshSnapshot()
              std::pair{ ResolutionCombo(), L"viewport.resolution" },
              std::pair{ DebugViewCombo(), L"viewport.debugView" },
              std::pair{ ToneMapperCombo(), L"viewport.toneMapper" },
+             std::pair{ QualityProfileCombo(), L"quality.profile" },
+             std::pair{ RestirBackendCombo(), L"quality.restirBackend" },
+             std::pair{ SecondaryRateCombo(), L"quality.secondaryRate" },
+             std::pair{ ResolutionModeCombo(), L"quality.resolutionMode" },
              std::pair{ DenoiseBackendCombo(), L"denoise.backend" },
              std::pair{ DlssModeCombo(), L"denoise.dlssMode" },
              std::pair{ NoisePresetCombo(), L"denoise.preset" },
              std::pair{ JitterModeCombo(), L"denoise.jitterMode" },
-             std::pair{ McpAccessCombo(), L"mcp.access" } })
+             std::pair{ McpAccessCombo(), L"mcp.access" },
+             std::pair{ McpAuthenticationCombo(), L"mcp.auth" } })
     {
         updateCombo(item.first, item.second);
     }
@@ -1029,6 +1120,7 @@ void MainWindow::RefreshSnapshot()
              std::pair{ EmissiveEnabledToggle(), L"lighting.emissiveEnabled" },
              std::pair{ AreaEnabledToggle(), L"lighting.areaEnabled" },
              std::pair{ VsyncToggle(), L"viewport.vsync" },
+             std::pair{ FinalTaaToggle(), L"quality.finalTaa" },
              std::pair{ FreezeToggle(), L"path.freeze" },
              std::pair{ AdaptiveToggle(), L"path.adaptive" },
              std::pair{ DenoiseEnabledToggle(), L"denoise.enabled" },
@@ -1110,9 +1202,10 @@ void MainWindow::RefreshSnapshot()
     updateColor(SkyZenithColorPicker(), L"lighting.skyZenithColor");
     updateColor(SkyGroundColorPicker(), L"lighting.skyGroundColor");
 
-    std::array<TextBlock, 6> textureText = {
+    std::array<TextBlock, 7> textureText = {
         Texture0Text(), Texture1Text(), Texture2Text(),
-        Texture3Text(), Texture4Text(), Texture5Text() };
+        Texture3Text(), Texture4Text(), Texture5Text(),
+        Texture6Text() };
     for (size_t index = 0; index < textureText.size(); ++index)
     {
         if (index < snapshot->textureSlots.size())
@@ -1141,28 +1234,130 @@ void MainWindow::RefreshSnapshot()
             ? L"Controller connected"
             : L"Waiting for controller…");
 
+    std::int64_t resolutionMode = 0;
+    std::int64_t renderWidth = 0;
+    std::int64_t renderHeight = 0;
+    std::int64_t outputWidth = 0;
+    std::int64_t outputHeight = 0;
+    double activeScale = 1.0;
+    bool taau = false;
+    TryInteger(*snapshot, L"quality.resolutionMode", resolutionMode);
+    TryInteger(*snapshot, L"quality.renderWidth", renderWidth);
+    TryInteger(*snapshot, L"quality.renderHeight", renderHeight);
+    TryInteger(*snapshot, L"quality.outputWidth", outputWidth);
+    TryInteger(*snapshot, L"quality.outputHeight", outputHeight);
+    TryDouble(*snapshot, L"quality.activeScale", activeScale);
+    TryBool(*snapshot, L"quality.taau", taau);
+    std::wostringstream resolutionStatus;
+    resolutionStatus << renderWidth << L" × " << renderHeight << L" → "
+                     << outputWidth << L" × " << outputHeight << L" ("
+                     << std::fixed << std::setprecision(4) << activeScale
+                     << L"×" << (taau ? L", TAAU" : L"") << L")";
+    InternalResolutionStatusText().Text(resolutionStatus.str());
+    FixedRenderScaleNumber().IsEnabled(resolutionMode == 1);
+    MinRenderScaleNumber().IsEnabled(resolutionMode == 2);
+    MaxRenderScaleNumber().IsEnabled(resolutionMode == 2);
+
     bool nrdCompiled = false;
     bool nrdReady = false;
     bool dlssCompiled = false;
     bool dlssRuntime = false;
+    bool dlssIdentity = false;
+    bool dlssSupported = false;
+    bool dlssReady = false;
+    bool dlssLastSucceeded = false;
+    std::int64_t dlssSuccesses = 0;
+    std::int64_t dlssFailures = 0;
+    std::int64_t dlssResultCode = 0;
     TryBool(*snapshot, L"denoise.nrdCompiled", nrdCompiled);
     TryBool(*snapshot, L"denoise.nrdReady", nrdReady);
     TryBool(*snapshot, L"denoise.dlssCompiled", dlssCompiled);
     TryBool(*snapshot, L"denoise.dlssRuntime", dlssRuntime);
-    DenoiseStatusText().Text(
+    TryBool(*snapshot, L"denoise.dlssIdentity", dlssIdentity);
+    TryBool(*snapshot, L"denoise.dlssSupported", dlssSupported);
+    TryBool(*snapshot, L"denoise.dlssReady", dlssReady);
+    TryBool(
+        *snapshot, L"denoise.dlssLastSucceeded", dlssLastSucceeded);
+    TryInteger(*snapshot, L"denoise.dlssSuccesses", dlssSuccesses);
+    TryInteger(*snapshot, L"denoise.dlssFailures", dlssFailures);
+    TryInteger(*snapshot, L"denoise.dlssResultCode", dlssResultCode);
+    auto snapshotText = [&](wchar_t const* property)
+    {
+        auto found = snapshot->values.find(property);
+        if (found == snapshot->values.end())
+        {
+            return std::wstring{};
+        }
+        if (auto value = std::get_if<std::wstring>(&found->second))
+        {
+            return *value;
+        }
+        return std::wstring{};
+    };
+    const std::wstring dlssFailureStage =
+        snapshotText(L"denoise.dlssFailureStage");
+    const std::wstring dlssFallbackReason =
+        snapshotText(L"denoise.dlssFallbackReason");
+    const std::wstring dlssError = snapshotText(L"denoise.dlssError");
+    std::wstring denoiseStatus =
         L"NRD: " +
         std::wstring(nrdCompiled ? L"compiled" : L"not compiled") +
         L", " + (nrdReady ? L"ready" : L"fallback") +
-        L"\nDLSS: " +
+        L"\nDLSS RR: " +
         std::wstring(dlssCompiled ? L"compiled" : L"not compiled") +
-        L", " + (dlssRuntime ? L"runtime found" : L"runtime missing"));
+        L", " + (dlssRuntime ? L"runtime found" : L"runtime missing") +
+        L", identity " + (dlssIdentity ? L"configured" : L"missing") +
+        L", feature " + (dlssSupported ? L"supported" : L"unavailable") +
+        L", " + (dlssReady ? L"ready" : L"fallback") +
+        L"\nEvaluations: " + std::to_wstring(dlssSuccesses) +
+        L" succeeded / " + std::to_wstring(dlssFailures) + L" failed";
+    if (dlssSuccesses + dlssFailures > 0)
+    {
+        denoiseStatus += L" · last " +
+            std::wstring(dlssLastSucceeded ? L"succeeded" : L"failed") +
+            L" (" + std::to_wstring(dlssResultCode) + L")";
+    }
+    if (!dlssFailureStage.empty())
+    {
+        denoiseStatus += L"\nStage: " + dlssFailureStage;
+    }
+    if (!dlssFallbackReason.empty())
+    {
+        denoiseStatus += L"\nFallback: " + dlssFallbackReason;
+    }
+    if (!dlssError.empty())
+    {
+        denoiseStatus += L"\nError: " + dlssError;
+    }
+    DenoiseStatusText().Text(denoiseStatus);
 
     bool restirActive = false;
+    bool rtxdiCompiled = false;
+    bool rtxdiReady = false;
+    bool rtxdiGiReady = false;
+    bool rtxdiPtReady = false;
+    bool rtxdiDiReady = false;
     TryBool(*snapshot, L"restir.active", restirActive);
-    RestirStatusText().Text(
-        restirActive
-            ? L"ReSTIR controls are active for the selected rendering mode."
-            : L"Inactive for Baseline PT.");
+    TryBool(*snapshot, L"restir.rtxdiCompiled", rtxdiCompiled);
+    TryBool(*snapshot, L"restir.rtxdiReady", rtxdiReady);
+    TryBool(*snapshot, L"restir.giReady", rtxdiGiReady);
+    TryBool(*snapshot, L"restir.ptReady", rtxdiPtReady);
+    TryBool(*snapshot, L"restir.diReady", rtxdiDiReady);
+    std::wstring restirStatus = restirActive
+        ? L"RTXDI: " + std::wstring(
+            rtxdiCompiled ? L"compiled" : L"not compiled") +
+            L", " + (rtxdiReady ? L"ready" : L"fallback") +
+            L"\nDI / GI / PT: " + (rtxdiDiReady ? L"ready" : L"off") +
+            L" / " + (rtxdiGiReady ? L"ready" : L"off") + L" / " +
+            (rtxdiPtReady ? L"ready" : L"off")
+        : L"Inactive for Baseline PT.";
+    const std::wstring restirFallback =
+        snapshotText(L"restir.fallbackReason");
+    if (restirActive && !restirFallback.empty())
+    {
+        restirStatus += L"\nFallback: " + restirFallback;
+    }
+    RestirStatusText().Text(restirStatus);
     RestirTemporalToggle().IsEnabled(restirActive);
     RestirSpatialPassesNumber().IsEnabled(restirActive);
     RestirRadiusNumber().IsEnabled(restirActive);
@@ -1501,7 +1696,7 @@ IAsyncAction MainWindow::PickFile(std::wstring action)
     if (action == L"openScene")
     {
         for (hstring const extension :
-             { L".gltf", L".glb", L".fbx", L".obj" })
+             { L".gltf", L".glb", L".fbx", L".obj", L".pbrt" })
         {
             picker.FileTypeFilter().Append(extension);
         }
@@ -1509,7 +1704,7 @@ IAsyncAction MainWindow::PickFile(std::wstring action)
     else if (action == L"openEnvironment")
     {
         for (hstring const extension :
-             { L".hdr", L".dds", L".png", L".jpg",
+             { L".hdr", L".exr", L".dds", L".png", L".jpg",
                L".jpeg", L".tga" })
         {
             picker.FileTypeFilter().Append(extension);
@@ -1545,7 +1740,7 @@ IAsyncAction MainWindow::PickTexture(std::int32_t slot)
             WindowHandle()));
     for (hstring const extension :
          { L".png", L".jpg", L".jpeg", L".tga",
-           L".dds", L".hdr", L".bmp" })
+           L".dds", L".hdr", L".exr", L".bmp" })
     {
         picker.FileTypeFilter().Append(extension);
     }
@@ -1586,6 +1781,103 @@ IAsyncAction MainWindow::SaveProjectAs()
     }
 }
 
+IAsyncAction MainWindow::ExportMcpSettings()
+{
+    auto lifetime = get_strong();
+    try
+    {
+        FileSavePicker picker;
+        check_hresult(
+            picker.as<::IInitializeWithWindow>()->Initialize(
+                WindowHandle()));
+        picker.SuggestedStartLocation(
+            PickerLocationId::DocumentsLibrary);
+        picker.FileTypeChoices().Insert(
+            L"JSON",
+            single_threaded_vector<hstring>({ L".json" }));
+        picker.DefaultFileExtension(L".json");
+        picker.SuggestedFileName(L"mcp");
+
+        StorageFile file = co_await picker.PickSaveFileAsync();
+        if (!file || m_closing)
+        {
+            co_return;
+        }
+
+        const double portValue = McpPortNumber().Value();
+        const auto port = static_cast<std::uint32_t>(
+            std::clamp(
+                std::llround(
+                    std::isfinite(portValue) ? portValue : 8777.0),
+                1LL,
+                65535LL));
+        const auto includeTokenReference =
+            McpIncludeTokenOnExportCheckBox().IsChecked();
+        const bool useBearerToken =
+            McpAuthenticationCombo().SelectedIndex() == 0;
+        const bool includeToken = useBearerToken &&
+            includeTokenReference && includeTokenReference.Value();
+
+        std::ostringstream json;
+        json << "{\n";
+        if (useBearerToken && !includeToken)
+        {
+            json << "  \"inputs\": [\n"
+                 << "    {\n"
+                 << "      \"type\": \"promptString\",\n"
+                 << "      \"id\": \"lookdevpt-token\",\n"
+                 << "      \"description\": "
+                    "\"D3D12LookDevPTWinUI MCP bearer token\",\n"
+                 << "      \"password\": true\n"
+                 << "    }\n"
+                 << "  ],\n";
+        }
+        json << "  \"servers\": {\n"
+             << "    \"d3d12LookDevPT\": {\n"
+             << "      \"type\": \"http\",\n"
+             << "      \"url\": \"http://127.0.0.1:"
+             << port << "/mcp\",\n"
+             << "      \"headers\": {\n";
+        if (useBearerToken)
+        {
+            json << "        \"Authorization\": \"Bearer ";
+            if (includeToken)
+            {
+                json << cld::EscapeJson(
+                    to_string(McpTokenBox().Text()));
+            }
+            else
+            {
+                json << "${input:lookdevpt-token}";
+            }
+            json << "\",\n";
+        }
+        json << "        \"MCP-Protocol-Version\": "
+                "\"2025-11-25\"\n"
+             << "      }\n"
+             << "    }\n"
+             << "  }\n"
+             << "}\n";
+
+        co_await FileIO::WriteTextAsync(
+            file,
+            to_hstring(json.str()));
+        if (!m_closing)
+        {
+            McpExportStatusText().Text(
+                L"Exported to " + file.Path());
+        }
+    }
+    catch (hresult_error const& error)
+    {
+        if (!m_closing)
+        {
+            McpExportStatusText().Text(
+                L"Export failed: " + error.message());
+        }
+    }
+}
+
 HWND MainWindow::WindowHandle()
 {
     HWND handle = nullptr;
@@ -1604,6 +1896,66 @@ LRESULT CALLBACK MainWindow::WindowSubclassProc(
     DWORD_PTR referenceData)
 {
     auto self = reinterpret_cast<MainWindow*>(referenceData);
+    if (self && message == WM_DROPFILES)
+    {
+        HDROP drop = reinterpret_cast<HDROP>(wparam);
+        std::array<wchar_t, 32768> pathBuffer{};
+        if (DragQueryFileW(
+                drop,
+                0,
+                pathBuffer.data(),
+                static_cast<UINT>(pathBuffer.size())) > 0)
+        {
+            const std::filesystem::path path(pathBuffer.data());
+            std::wstring extension = path.extension().wstring();
+            std::transform(
+                extension.begin(),
+                extension.end(),
+                extension.begin(),
+                [](wchar_t value)
+                {
+                    return static_cast<wchar_t>(std::towlower(value));
+                });
+            lookdevpt::winui::EditorCommand command;
+            command.path = path.wstring();
+            if (rb::IsSupportedScenePath(path))
+            {
+                command.type =
+                    lookdevpt::winui::EditorCommandType::LoadScene;
+                self->Submit(std::move(command));
+            }
+            else if (
+                extension == L".exr" || extension == L".hdr" ||
+                extension == L".dds" || extension == L".png" ||
+                extension == L".jpg" || extension == L".jpeg" ||
+                extension == L".tga")
+            {
+                command.type =
+                    lookdevpt::winui::EditorCommandType::LoadEnvironment;
+                self->Submit(std::move(command));
+            }
+            else
+            {
+                std::wstring filename = path.filename().wstring();
+                std::transform(
+                    filename.begin(),
+                    filename.end(),
+                    filename.begin(),
+                    [](wchar_t value)
+                    {
+                        return static_cast<wchar_t>(std::towlower(value));
+                    });
+                if (filename.ends_with(L".lookdevpt.json"))
+                {
+                    command.type =
+                        lookdevpt::winui::EditorCommandType::LoadProject;
+                    self->Submit(std::move(command));
+                }
+            }
+        }
+        DragFinish(drop);
+        return 0;
+    }
     if (self && wparam == VK_F10 &&
         (message == WM_KEYDOWN || message == WM_SYSKEYDOWN))
     {

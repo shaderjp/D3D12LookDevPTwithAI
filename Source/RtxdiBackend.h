@@ -28,6 +28,7 @@ struct RtxdiStatus
     bool evaluationReady = false;
     bool diEvaluationReady = false;
     bool giEvaluationReady = false;
+    bool ptEvaluationReady = false;
     bool active = false;
     std::string sdkVersion = D3D12LookDevPtRtxdiVersion;
     std::string sdkCommit = D3D12LookDevPtRtxdiCommit;
@@ -54,7 +55,12 @@ public:
     const RtxdiStatus& Status() const { return m_status; }
     bool IsEvaluationReady() const { return m_status.evaluationReady; }
     bool IsDiEvaluationReady() const { return m_status.diEvaluationReady; }
+    bool IsGiEvaluationReady() const { return m_status.giEvaluationReady; }
+    bool IsPtEvaluationReady() const { return m_status.ptEvaluationReady; }
+    void SetRendererEvaluationReady(bool giReady, bool ptReady);
     RtxdiReservoirLayout CalculateReservoirLayout(std::uint32_t width, std::uint32_t height) const;
+    RtxdiReservoirLayout CalculateGiReservoirLayout(std::uint32_t width, std::uint32_t height) const;
+    RtxdiReservoirLayout CalculatePtReservoirLayout(std::uint32_t width, std::uint32_t height) const;
 
 private:
     RtxdiStatus m_status;

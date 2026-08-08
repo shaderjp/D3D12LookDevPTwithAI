@@ -65,5 +65,7 @@ namespace Bistro
         const std::wstring& path,
         const uint8_t fallback[4],
         uint32_t maxDimension = EnvironmentImportanceMaxDimension);
-    std::vector<EnvironmentAliasEntry> BuildEnvironmentAliasTable(const TextureData& texture);
+    std::vector<EnvironmentAliasEntry> BuildEnvironmentAliasTable(
+        const TextureData& texture,
+        bool equalAreaMapping = false);
 }

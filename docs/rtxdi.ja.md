@@ -1,8 +1,8 @@
-# NVIDIA RTXDI optional ReSTIR DI
+# NVIDIA RTXDI optional ReSTIR DI / GI / PT
 
-English documentation: [Optional NVIDIA RTXDI ReSTIR DI](rtxdi.md)
+English documentation: [Optional NVIDIA RTXDI ReSTIR DI / GI / PT](rtxdi.md)
 
-D3D12LookDevPTWinUI には NVIDIA 公式 RTXDI SDK の optional integration boundary があります。現時点では renderer の local mesh emitter / analytic area light list に対する ReSTIR DI を実装しています。ReSTIR PT / GI は未統合で、Sun / Environment sampling も RTXDI candidate set へまだ統合していません。
+D3D12LookDevPTWinUI には NVIDIA 公式 RTXDI SDK の optional integration があります。ReSTIR DI、ReSTIR GI、checkerboard ReSTIR PT を実装し、Sun / Environment / emissive triangle / analytic area light は共通 identity・sample・evaluate・PDF 契約を使います。
 
 固定 revision:
 
@@ -34,13 +34,13 @@ RTXDI は compile 時に default で無効です。
 msbuild .\D3D12LookDevPTWinUI.sln /m /p:Configuration=Release /p:Platform=x64 /p:EnableRTXDI=false
 ```
 
-現在の ReSTIR DI backend を有効にする場合:
+ReSTIR DI/GI/PT backend を有効にする場合:
 
 ```powershell
 msbuild .\D3D12LookDevPTWinUI.sln /m /p:Configuration=Release /p:Platform=x64 /p:EnableRTXDI=true
 ```
 
-有効かつ SDK が存在する場合、`BuildThirdParty.ps1` は `ThirdParty/RTXDI/Libraries/Rtxdi` だけを `Rtxdi.lib` として build します。app は公式 runtime ABI（`RTXDI_RuntimeParameters` と 24-byte の `RTXDI_PackedDIReservoir`）を検証し、RTXDI の block-linear reservoir layout を使用します。
+有効かつ SDK が存在する場合、`BuildThirdParty.ps1` は `ThirdParty/RTXDI/Libraries/Rtxdi` だけを `Rtxdi.lib` として build します。上流のCMake fileは`add_subdirectory`用fragmentなので、固定submoduleを変更せず`CMake/RtxdiRuntime/CMakeLists.txt`からstandalone `project()` contextを与えます。app は `RTXDI_RuntimeParameters` と公式 24-byte DI、32-byte GI、64-byte PT packed reservoir ABI を検証し、RTXDI の block-linear reservoir layout を使用します。
 
 固定 header / source がない状態で `EnableRTXDI=true` を要求すると、MSBuild は warning を出して `D3D12LOOKDEVPT_WITH_RTXDI=0` で compile します。SDK include / library link は追加せず、全 ReSTIR mode が Baseline PT fallback になります。
 
@@ -68,12 +68,14 @@ reservoir は公式 packed ABI を使い、sample / light identity、reservoir w
 
 ## Candidate の範囲と estimator 境界
 
-現在の RTXDI candidate list は renderer の `RtLight` table です。
+統一 candidate space は次を含みます。
 
 - light alias-table probability で sample する emissive mesh triangle
 - procedural analytic area light
+- Sun
+- lat-long または procedural Environment
 
-target は評価済み Diffuse + Specular contribution の正の luminance です。現在は各 candidate について material / emissive texture と BSDF を評価します。計画中の cheap average-radiance target は未実装です。Sun と lat-long Environment lighting は引き続き Baseline path-tracing technique を使い、secondary one-light mixture も RTXDI へまだ統合していません。
+candidate 選択は average-radiance による cheap target を使い、選択後に texture、BSDF、source PDF、final visibility を正確に再評価します。Baseline vertex も power-weighted one-light mixture を 1 回 sample し、BSDF technique と MIS します。
 
 temporal reprojection は non-jitter 2.5D surface motion を使い、history lookup 時に current / previous jitter 差を加えます。bilinear tap ごとに depth、normal、albedo、roughness、packed surface identity を検証します。spatial reuse も同等の current-surface guide 検証を行います。通常 camera motion では reuse を維持し、camera cut、projection / resize、geometry 変更、Lighting domain invalidation では対象 history を拒否します。
 
@@ -84,30 +86,34 @@ temporal reprojection は non-jitter 2.5D surface motion を使い、history loo
 | Render mode | 現在の実効実装 |
 |---|---|
 | Baseline PT | Baseline MIS path tracer |
-| ReSTIR DI | local direct light に RTXDI DI + Baseline indirect / Sun / Environment |
-| ReSTIR GI | Baseline MIS path tracer。RTXDI GI / PT は未統合 |
-| ReSTIR GI + DI | local direct light に RTXDI DI + Baseline indirect / Sun / Environment |
+| ReSTIR DI | RTXDI DI + Baseline indirect |
+| ReSTIR GI | Baseline one-light direct + RTXDI GI |
+| ReSTIR GI + DI | RTXDI DI + RTXDI GI |
+| ReSTIR PT | Baseline one-light direct + checkerboard RTXDI PT |
+| ReSTIR PT + DI | RTXDI DI + checkerboard RTXDI PT |
 
 RTXDI を実行する条件は次のすべてです。
 
 - SDK が compile され runtime ABI check に成功
 - project quality が `restirBackend: "rtxdi"`
-- mode が DI を使用
+- 選択 mode の DI/GI/PT pipeline が evaluation-ready
 - quality profile が `reference_still` ではない
 
 それ以外は project mode 名の受理互換を維持したまま Baseline PT へ fallback します。`restirBackend: "off"` は RTXDI を明示的に無効化します。`reference_still` は RTXDI history を利用しません。profile 選択時には unclamped Baseline MIS accumulation も設定されますが、その後の path-tracing 編集で accumulator control を上書きできます。
 
-UI / MCP は requested / effective state、SDK / runtime revision、`diEvaluationReady`、`giEvaluationReady`、mode ごとの active 状態、fallback 理由を公開します。`lookdevpt.get_state` の `restir.rtxdiStatus` で確認してください。低コストな `lookdevpt.get_stats` snapshot には、この status object を重複して含めません。
+UI / MCP は requested / effective state、SDK / runtime revision、`diEvaluationReady`、`giEvaluationReady`、`ptEvaluationReady`、active indirect algorithm、mode ごとの active 状態、DI/GI/PT logical reservoir byte、fallback 理由を公開します。`lookdevpt.get_state` の `restir.rtxdiStatus` で確認してください。低コストな `lookdevpt.get_stats` snapshot には、この status object を重複して含めません。
 
 ## Resource と history の挙動
 
-- full-size reservoir は interactive DI mode が RTXDI を利用できる場合だけ割り当て、それ以外は descriptor-valid な placeholder を使います。
+- full-size reservoir は選択した interactive algorithm だけに割り当て、GI と PT は同時に resident にしません。
+- DI scratch と current parity の GI/PT output は同じ heap の offset 0 に placed resource として配置し、明示的な aliasing barrier を入れます。
+- Final TAA HDR output は次の A/B history resource です。通常の fused NRD/TAA path は `postDenoiseHdr` を 1x1 placeholder にします。
 - 固定 A-history / B-scratch descriptor は output resource と同時に作り、GPU 実行中に書き換えません。
 - Surface guide と identity は別の immutable A/B descriptor table を frame parity で選択し、以前の full-resolution guide publish copy を除去しています。
 - ReSTIR shade は split Diffuse / Specular signal へ直接書きます。denoiser が signal を消費する場合、冗長な accumulation、intermediate post-denoise HDR、LDR write を省略します。
 
 ## 検証と既知の制限
 
-fixed seed / camera path、alpha foliage、微小 emissive、高 dynamic range、camera cut、camera motion で ReSTIR DI を検証してください。performance benchmark は full-screen quality counter を省略し、quality / combined run は実行します。1 枚の still だけではなく high-SPP Baseline reference に対する mean energy と temporal error を比較します。
+fixed seed / camera path、alpha foliage、微小 emissive、高 dynamic range、camera cut、camera motion で ReSTIR DI/GI/PT を検証してください。performance benchmark は full-screen quality counter を省略し、quality / combined run は実行します。1 枚の still だけではなく high-SPP Baseline reference に対する mean energy と temporal error を比較します。
 
-2-pass DI は動作しますが、次の計画項目は未完了です。RTXDI ReSTIR PT / GI、Sun / Environment の candidate table 統合、cheap candidate target、統一 secondary one-light estimator、全必須 scene に対する最終 1080p60 品質 gate。
+独立 Primary Visibility / compact secondary task graph は、条件を満たす DXR 1.1 Interactive Baseline/DI frame で利用できます。GI/PT と正式 GI+DI gate では使わず、現在の secondary task は保存した primary intersection から継続せず camera sample を再 trace します。未完了の大項目は、現在の reconnection target shift を超える完全な SDK 相当 hybrid-shift path replay、NVIDIA 発行 NGX application ID を使う feature-active DLSS-RR 認証、全必須 scene の temporal/reference 品質 gate です。

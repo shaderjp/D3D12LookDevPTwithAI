@@ -148,7 +148,12 @@ uint16_t FindAvailablePort()
 
 std::string AuthorizationHeaders(const std::string& token)
 {
-    return "Authorization: Bearer " + token + "\r\n"
+    std::string headers;
+    if (!token.empty())
+    {
+        headers = "Authorization: Bearer " + token + "\r\n";
+    }
+    return headers +
         "Accept: application/json, text/event-stream\r\n"
         "Content-Type: application/json\r\n";
 }
@@ -253,6 +258,17 @@ public:
 
 int main()
 {
+    Require(
+        mcp::AuthenticationModeName(
+            mcp::AuthenticationMode::BearerToken) == "bearer_token",
+        "Bearer authentication mode name changed unexpectedly");
+    Require(
+        mcp::AuthenticationModeFromName(
+            "none",
+            mcp::AuthenticationMode::BearerToken) ==
+            mcp::AuthenticationMode::None,
+        "None authentication mode was not parsed");
+
     const uint16_t port = FindAvailablePort();
     const std::string token = mcp::GenerateToken();
     TestHost host;
@@ -334,7 +350,7 @@ int main()
     HttpResponse deleteResponse = Exchange(port, ContentLengthRequest(
         "DELETE", token, {}, sessionHeaders));
     Require(deleteResponse.status == 202, "chunked-client session DELETE did not return 202");
-    Require(server.GetStatus().activeSessions == 0, "MCP session remained after DELETE");
+    Require(server.GetStatus().activeLegacySessions == 0, "MCP session remained after DELETE");
 
     WSADATA stopData{};
     Require(WSAStartup(MAKEWORD(2, 2), &stopData) == 0, "WSAStartup failed for stop test");
@@ -361,5 +377,34 @@ int main()
     server.Stop();
     const auto idleStopElapsed = std::chrono::steady_clock::now() - idleStopStarted;
     Require(idleStopElapsed < std::chrono::seconds(2), "server stop blocked on an idle listening socket");
+
+    settings.authenticationMode = mcp::AuthenticationMode::None;
+    settings.token.clear();
+    Require(server.Start(settings, &host),
+        "MCP server rejected None authentication with an empty token");
+    HttpResponse noAuthInitialize = Exchange(
+        port,
+        ContentLengthRequest("POST", {}, initialize));
+    Require(noAuthInitialize.status == 200,
+        "None authentication initialize did not return 200");
+    const std::string noAuthSession =
+        Header(noAuthInitialize, "MCP-Session-Id");
+    Require(!noAuthSession.empty(),
+        "None authentication initialize did not return a session id");
+    const std::string noAuthSessionHeaders =
+        protocolHeader + "MCP-Session-Id: " + noAuthSession + "\r\n";
+    HttpResponse noAuthTools = Exchange(
+        port,
+        ContentLengthRequest(
+            "POST", {}, toolsList, noAuthSessionHeaders));
+    Require(noAuthTools.status == 200,
+        "None authentication tools/list did not return 200");
+    HttpResponse noAuthDelete = Exchange(
+        port,
+        ContentLengthRequest(
+            "DELETE", {}, {}, noAuthSessionHeaders));
+    Require(noAuthDelete.status == 202,
+        "None authentication session DELETE did not return 202");
+    server.Stop();
     return 0;
 }

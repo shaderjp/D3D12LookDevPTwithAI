@@ -80,7 +80,13 @@
                             <StackPanel Orientation="Horizontal" Spacing="6">
                                 <Button Content="Open Scene…" Tag="openScene" Click="OnProjectMenuClick" />
                                 <Button Content="Open HDRI…" Tag="openEnvironment" Click="OnProjectMenuClick" />
+                                <Button x:Name="CancelSceneLoadButton" Content="Cancel Load" Tag="scene.cancelLoad"
+                                        Click="OnActionClick" Visibility="Collapsed" />
                             </StackPanel>
+                            <ProgressBar x:Name="SceneLoadProgress" Minimum="0" Maximum="1"
+                                         Visibility="Collapsed" />
+                            <TextBlock x:Name="SceneLoadStatusText" TextWrapping="Wrap"
+                                       Opacity="0.7" Visibility="Collapsed" />
 
                             <TextBlock Text="Camera" Style="{StaticResource SectionHeaderStyle}" />
                             <TextBlock Text="Position (X / Y / Z)" />
@@ -95,15 +101,22 @@
                                            Width="92" Style="{StaticResource EditorNumberStyle}" ValueChanged="OnNumberChanged"
                                            GotFocus="OnEditGotFocus" LostFocus="OnEditLostFocus" />
                             </StackPanel>
-                            <TextBlock Text="Yaw / Pitch (degrees)" />
+                            <TextBlock Text="Yaw / Pitch / Roll (degrees)" />
                             <StackPanel Orientation="Horizontal" Spacing="4">
                                 <NumberBox x:Name="CameraYawNumber" Tag="camera.yawDegrees" Minimum="-360" Maximum="360" SmallChange="0.25"
-                                           Width="140" Style="{StaticResource EditorNumberStyle}" ValueChanged="OnNumberChanged"
+                                           Width="92" Style="{StaticResource EditorNumberStyle}" ValueChanged="OnNumberChanged"
                                            GotFocus="OnEditGotFocus" LostFocus="OnEditLostFocus" />
                                 <NumberBox x:Name="CameraPitchNumber" Tag="camera.pitchDegrees" Minimum="-83" Maximum="83" SmallChange="0.25"
-                                           Width="140" Style="{StaticResource EditorNumberStyle}" ValueChanged="OnNumberChanged"
+                                           Width="92" Style="{StaticResource EditorNumberStyle}" ValueChanged="OnNumberChanged"
+                                           GotFocus="OnEditGotFocus" LostFocus="OnEditLostFocus" />
+                                <NumberBox x:Name="CameraRollNumber" Tag="camera.rollDegrees" Minimum="-180" Maximum="180" SmallChange="0.25"
+                                           Width="92" Style="{StaticResource EditorNumberStyle}" ValueChanged="OnNumberChanged"
                                            GotFocus="OnEditGotFocus" LostFocus="OnEditLostFocus" />
                             </StackPanel>
+                            <TextBlock Text="Vertical Field of View (degrees)" />
+                            <NumberBox x:Name="CameraFovNumber" Tag="camera.fovDegrees" Minimum="1" Maximum="179" SmallChange="0.25"
+                                       Style="{StaticResource EditorNumberStyle}" ValueChanged="OnNumberChanged"
+                                       GotFocus="OnEditGotFocus" LostFocus="OnEditLostFocus" />
                             <TextBlock Text="Move Speed" />
                             <NumberBox x:Name="MoveSpeedNumber" Tag="camera.moveSpeed" Minimum="0.1" Maximum="50" SmallChange="0.1"
                                        Style="{StaticResource EditorNumberStyle}" ValueChanged="OnNumberChanged"
@@ -230,6 +243,12 @@
                                             <Button Content="Load" Tag="load:5" Click="OnTextureClick" />
                                             <Button Content="Clear" Tag="clear:5" Click="OnTextureClick" />
                                             <Button Content="Reset" Tag="reset:5" Click="OnTextureClick" />
+                                        </StackPanel>
+                                        <TextBlock x:Name="Texture6Text" Text="Alpha" TextWrapping="Wrap" />
+                                        <StackPanel Orientation="Horizontal" Spacing="5">
+                                            <Button Content="Load" Tag="load:6" Click="OnTextureClick" />
+                                            <Button Content="Clear" Tag="clear:6" Click="OnTextureClick" />
+                                            <Button Content="Reset" Tag="reset:6" Click="OnTextureClick" />
                                         </StackPanel>
                                     </StackPanel>
                                 </ScrollViewer>
@@ -404,9 +423,11 @@
                                 <ComboBoxItem Content="Baseline PT" />
                                 <ComboBoxItem Content="ReSTIR GI" />
                                 <ComboBoxItem Content="ReSTIR DI" />
-                                <ComboBoxItem Content="ReSTIR Combined" />
+                                <ComboBoxItem Content="ReSTIR GI + DI" />
+                                <ComboBoxItem Content="ReSTIR PT" />
+                                <ComboBoxItem Content="ReSTIR PT + DI" />
                             </ComboBox>
-                            <ComboBox x:Name="ResolutionCombo" Header="Internal Resolution" Tag="viewport.resolution"
+                            <ComboBox x:Name="ResolutionCombo" Header="Display Resolution" Tag="viewport.resolution"
                                       Style="{StaticResource EditorComboStyle}" SelectionChanged="OnComboChanged">
                                 <ComboBoxItem Content="1280 × 720" />
                                 <ComboBoxItem Content="1920 × 1080" />
@@ -463,6 +484,11 @@
                                 <ComboBoxItem Content="NRD Input Validation" />
                                 <ComboBoxItem Content="TAA History Length" />
                                 <ComboBoxItem Content="TAA History Acceptance" />
+                                <ComboBoxItem Content="GI Weight" />
+                                <ComboBoxItem Content="GI Age" />
+                                <ComboBoxItem Content="GI Validity" />
+                                <ComboBoxItem Content="GI Temporal Acceptance" />
+                                <ComboBoxItem Content="GI Initial vs Resampled" />
                             </ComboBox>
                             <CheckBox x:Name="NormalYFlipToggle" Content="Normal Map Y Flip" Tag="viewport.normalYFlip"
                                       Checked="OnToggleChanged" Unchecked="OnToggleChanged" />
@@ -488,6 +514,75 @@
                 <TabViewItem x:Name="PathTracingTab" Header="Path Tracing" IsClosable="False">
                     <ScrollViewer VerticalScrollBarVisibility="Auto">
                         <StackPanel Padding="12" Spacing="4">
+                            <TextBlock Text="Quality" Style="{StaticResource SectionHeaderStyle}" />
+                            <ComboBox x:Name="QualityProfileCombo" Header="Profile" Tag="quality.profile"
+                                      Style="{StaticResource EditorComboStyle}" SelectionChanged="OnComboChanged">
+                                <ComboBoxItem Content="Interactive Game" />
+                                <ComboBoxItem Content="Sharp Preview" />
+                                <ComboBoxItem Content="Reference Still" />
+                            </ComboBox>
+                            <ComboBox x:Name="RestirBackendCombo" Header="ReSTIR Backend" Tag="quality.restirBackend"
+                                      Style="{StaticResource EditorComboStyle}" SelectionChanged="OnComboChanged">
+                                <ComboBoxItem Content="RTXDI" />
+                                <ComboBoxItem Content="Off" />
+                            </ComboBox>
+                            <ComboBox x:Name="SecondaryRateCombo" Header="Secondary Shading Rate" Tag="quality.secondaryRate"
+                                      Style="{StaticResource EditorComboStyle}" SelectionChanged="OnComboChanged">
+                                <ComboBoxItem Content="Auto" />
+                                <ComboBoxItem Content="Full" />
+                                <ComboBoxItem Content="Adaptive Half" />
+                            </ComboBox>
+                            <ComboBox x:Name="ResolutionModeCombo" Header="Render Resolution Mode" Tag="quality.resolutionMode"
+                                      Style="{StaticResource EditorComboStyle}" SelectionChanged="OnComboChanged">
+                                <ComboBoxItem Content="Native" />
+                                <ComboBoxItem Content="Fixed Scale" />
+                                <ComboBoxItem Content="Dynamic" />
+                            </ComboBox>
+                            <TextBlock x:Name="InternalResolutionStatusText" TextWrapping="Wrap" Opacity="0.7" />
+                            <TextBlock Text="Fixed / Minimum / Maximum Scale" />
+                            <StackPanel Orientation="Horizontal" Spacing="4">
+                                <NumberBox x:Name="FixedRenderScaleNumber" Tag="quality.fixedRenderScale" Minimum="0.25" Maximum="1" SmallChange="0.0625"
+                                           Width="92" Style="{StaticResource EditorNumberStyle}" ValueChanged="OnNumberChanged" />
+                                <NumberBox x:Name="MinRenderScaleNumber" Tag="quality.minRenderScale" Minimum="0.25" Maximum="1" SmallChange="0.0625"
+                                           Width="92" Style="{StaticResource EditorNumberStyle}" ValueChanged="OnNumberChanged" />
+                                <NumberBox x:Name="MaxRenderScaleNumber" Tag="quality.maxRenderScale" Minimum="0.25" Maximum="1" SmallChange="0.0625"
+                                           Width="92" Style="{StaticResource EditorNumberStyle}" ValueChanged="OnNumberChanged" />
+                            </StackPanel>
+                            <ToggleSwitch x:Name="FinalTaaToggle" Header="Final HDR TAA / TAAU" Tag="quality.finalTaa" Toggled="OnToggleChanged" />
+                            <TextBlock Text="Sharpen Strength" />
+                            <NumberBox x:Name="SharpenNumber" Tag="quality.sharpen" Minimum="0" Maximum="1" SmallChange="0.01"
+                                       Style="{StaticResource EditorNumberStyle}" ValueChanged="OnNumberChanged" />
+
+                            <TextBlock Text="Adaptive Ray Budget" Style="{StaticResource SectionHeaderStyle}" />
+                            <TextBlock Text="Moving SPP / Bounces" />
+                            <StackPanel Orientation="Horizontal" Spacing="4">
+                                <NumberBox x:Name="MovingSppNumber" Tag="quality.movingSpp" Minimum="1" Maximum="8"
+                                           Width="140" Style="{StaticResource EditorNumberStyle}" ValueChanged="OnNumberChanged" />
+                                <NumberBox x:Name="MovingBouncesNumber" Tag="quality.movingBounces" Minimum="1" Maximum="16"
+                                           Width="140" Style="{StaticResource EditorNumberStyle}" ValueChanged="OnNumberChanged" />
+                            </StackPanel>
+                            <TextBlock Text="Static Base / Maximum SPP" />
+                            <StackPanel Orientation="Horizontal" Spacing="4">
+                                <NumberBox x:Name="StaticBaseSppNumber" Tag="quality.staticBaseSpp" Minimum="1" Maximum="8"
+                                           Width="140" Style="{StaticResource EditorNumberStyle}" ValueChanged="OnNumberChanged" />
+                                <NumberBox x:Name="StaticMaxSppNumber" Tag="quality.staticMaxSpp" Minimum="1" Maximum="16"
+                                           Width="140" Style="{StaticResource EditorNumberStyle}" ValueChanged="OnNumberChanged" />
+                            </StackPanel>
+                            <TextBlock Text="Static Bounces / Settle Frames" />
+                            <StackPanel Orientation="Horizontal" Spacing="4">
+                                <NumberBox x:Name="StaticBouncesNumber" Tag="quality.staticBounces" Minimum="1" Maximum="16"
+                                           Width="140" Style="{StaticResource EditorNumberStyle}" ValueChanged="OnNumberChanged" />
+                                <NumberBox x:Name="SettleFramesNumber" Tag="quality.settleFrames" Minimum="0" Maximum="120"
+                                           Width="140" Style="{StaticResource EditorNumberStyle}" ValueChanged="OnNumberChanged" />
+                            </StackPanel>
+                            <TextBlock Text="Target GPU Time (ms)" />
+                            <NumberBox x:Name="TargetGpuMsNumber" Tag="quality.targetGpuMs" Minimum="1" Maximum="100" SmallChange="0.1"
+                                       Style="{StaticResource EditorNumberStyle}" ValueChanged="OnNumberChanged" />
+                            <TextBlock Text="Reference SPP" />
+                            <NumberBox x:Name="ReferenceSppNumber" Tag="quality.referenceSpp" Minimum="1" Maximum="1048576"
+                                       Style="{StaticResource EditorNumberStyle}" ValueChanged="OnNumberChanged" />
+
+                            <TextBlock Text="Path Tracer" Style="{StaticResource SectionHeaderStyle}" />
                             <TextBlock Text="Samples / Frame" />
                             <NumberBox x:Name="SamplesNumber" Tag="path.samples" Minimum="1" Maximum="8"
                                        Style="{StaticResource EditorNumberStyle}" ValueChanged="OnNumberChanged" />
@@ -725,11 +820,21 @@
                                     <ComboBoxItem Content="Confirm Mutations" />
                                     <ComboBoxItem Content="Allow Mutations" />
                                 </ComboBox>
-                                <TextBox x:Name="McpTokenBox" Header="Bearer Token" IsReadOnly="True" />
+                                <ComboBox x:Name="McpAuthenticationCombo" Header="Authentication" Tag="mcp.auth"
+                                          Style="{StaticResource EditorComboStyle}" SelectionChanged="OnComboChanged">
+                                    <ComboBoxItem Content="Bearer Token" />
+                                    <ComboBoxItem Content="None" />
+                                </ComboBox>
+                                <TextBox x:Name="McpTokenBox" Header="Bearer Token" IsReadOnly="True"
+                                         PlaceholderText="Not required when Authentication is None" />
                                 <StackPanel Orientation="Horizontal" Spacing="6">
-                                    <Button Content="Copy Token" Click="OnCopyToken" />
-                                    <Button Content="Regenerate" Tag="mcp.token.regenerate" Click="OnActionClick" />
+                                    <Button x:Name="McpCopyTokenButton" Content="Copy Token" Click="OnCopyToken" />
+                                    <Button x:Name="McpRegenerateTokenButton" Content="Regenerate" Tag="mcp.token.regenerate" Click="OnActionClick" />
+                                    <Button Content="Export mcp.json…" Click="OnExportMcpSettings" />
                                 </StackPanel>
+                                <CheckBox x:Name="McpIncludeTokenOnExportCheckBox"
+                                          Content="Embed bearer token in exported mcp.json" />
+                                <TextBlock x:Name="McpExportStatusText" TextWrapping="Wrap" Opacity="0.75" />
                                 <TextBlock x:Name="McpErrorText" TextWrapping="Wrap" />
                             </StackPanel>
                         </ScrollViewer>

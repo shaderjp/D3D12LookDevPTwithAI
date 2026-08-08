@@ -1,12 +1,12 @@
-# Optional DLSS Ray Reconstruction Probe
+# Optional DLSS Ray Reconstruction
 
-Japanese documentation: [DLSS Ray Reconstruction probe](dlss.ja.md)
+Japanese documentation: [DLSS Ray Reconstruction](dlss.ja.md)
 
-D3D12LookDevPTWinUI contains an optional, safe-first Streamline/DLSS Ray Reconstruction integration boundary. The current code can load Streamline dynamically, register the D3D12 device, query adapter/driver support, and request recommended render sizes. It does **not** tag rendering resources or call DLSS-RR evaluation yet. Consequently, `evaluationReady` remains false and selecting `dlss_rr` currently renders through the internal denoiser.
+D3D12LookDevPTWinUI contains an optional Streamline/DLSS Ray Reconstruction backend. It dynamically loads Streamline, validates the adapter and driver, separates render and output resolutions, prepares the required guide resources, tags them for the current frame, and calls `slEvaluateFeature` on the renderer's D3D12 command list.
 
-This distinction is deliberate: compile/runtime detection is implemented, but DLSS-RR is not a production denoising backend in this version and is not part of the RTX 4070/1080p60 completion gate.
+DLSS-RR remains independent of the RTX 4070 / 1080p60 ReSTIR GI+DI gate. Missing binaries, an unsupported adapter/driver, an absent application identity, or a runtime evaluation failure select native reconstruction without making Streamline a process-load dependency.
 
-## Dependencies
+## Dependencies And Application Identity
 
 Pinned submodules:
 
@@ -19,7 +19,7 @@ Initialize them with:
 git submodule update --init --recursive ThirdParty/Streamline ThirdParty/DLSS
 ```
 
-The DLSS SDK supplies `nvngx_dlss.dll` and `nvngx_dlssd.dll`. A source-only Streamline checkout may not include the prebuilt runtime and feature DLLs. When present, the build copies these files to `Bin/x64/<Config>/Streamline/`:
+The DLSS SDK supplies `nvngx_dlss.dll` and `nvngx_dlssd.dll`. A source-only Streamline checkout may not include all prebuilt runtime and feature DLLs. When present, the build copies these files to `Bin/x64/<Config>/Streamline/`:
 
 ```text
 sl.interposer.dll
@@ -30,7 +30,15 @@ nvngx_dlss.dll
 nvngx_dlssd.dll
 ```
 
-The runtime probe also checks `ThirdParty/Streamline/bin/x64/`. Missing runtime DLLs are warnings in the normal setup check and failures only in strict DLSS validation:
+Production NGX components also require an application identity issued by NVIDIA. Keep the decimal ID outside source control and set it before launching:
+
+```powershell
+$env:D3D12LOOKDEVPT_NGX_APPLICATION_ID = "<NVIDIA-issued decimal ID>"
+```
+
+The renderer does not substitute a temporary or invented application ID. Without this variable it reports `applicationIdentityConfigured=false`, identifies `applicationIdentity` as the failure stage, and uses native reconstruction.
+
+The setup checker validates files; strict DLSS validation treats missing runtime DLLs as a failure:
 
 ```powershell
 .\Scripts\CheckSetup.ps1 -CheckDLSS
@@ -38,48 +46,66 @@ The runtime probe also checks `ThirdParty/Streamline/bin/x64/`. Missing runtime 
 
 ## Build Switch And Matrix
 
-DLSS header support is compile-enabled by default:
+DLSS header support is enabled by default:
 
 ```powershell
 msbuild .\D3D12LookDevPTWinUI.sln /m /p:Configuration=Release /p:Platform=x64
 ```
 
-Disable it when the Streamline/DLSS submodules are absent or when validating the dependency-free path:
+Disable it when validating the dependency-free path:
 
 ```powershell
 msbuild .\D3D12LookDevPTWinUI.sln /m /p:Configuration=Release /p:Platform=x64 /p:EnableDLSS=false
 ```
 
-With `EnableDLSS=false`, no Streamline/DLSS include path or optional runtime copy is used, status reports `compiled=false`, and `dlss_rr` selections fall back to `internal`.
+With `EnableDLSS=false`, no Streamline/DLSS include path or optional runtime copy is used, status reports `compiled=false`, and `dlss_rr` falls back to native internal reconstruction.
 
-The full backend build matrix includes all-enabled, no-NRD, no-RTXDI, no-DLSS, all-disabled, and the current target (`NRD=true`, `RTXDI=true`, `DLSS=false`):
+The backend matrix covers all-enabled, no-NRD, no-RTXDI, no-DLSS, all-disabled, and the repository target:
 
 ```powershell
 .\Scripts\BuildBackendMatrix.ps1 -Configuration Release
 ```
 
-## What The Current Probe Does
+## Frame Evaluation
 
-At startup, `DlssBackend`:
+Initialization performs the following:
 
-1. searches for and dynamically loads `sl.interposer.dll`;
-2. resolves the required Streamline core entry points;
-3. initializes Streamline for D3D12 with frame-based resource tagging requested;
-4. registers the D3D12 device;
-5. checks `kFeatureDLSS_RR` for the selected adapter/driver;
-6. resolves the DLSS-RR option/optimal-settings functions and queries the recommended input size for the selected Quality/Balanced/Performance/Ultra Performance mode.
+1. load `sl.interposer.dll` and resolve the required core functions;
+2. initialize Streamline for D3D12 with frame-based resource tagging;
+3. register the D3D12 device;
+4. validate the NVIDIA-issued application identity;
+5. query `kFeatureDLSS_RR` support for the selected adapter/driver;
+6. query the recommended render size and configure the selected DLSS mode.
 
-Even if all six steps succeed, the backend intentionally reports:
+For each eligible frame, `PathTracingDlss.hlsl` prepares:
 
-```text
-DLSS-RR support was detected, but resource-tag evaluation is not enabled in this build.
+- HDR scaling-input color;
+- positive linear depth;
+- 2D motion vectors;
+- packed world normal and roughness;
+- diffuse albedo and specular albedo;
+- a 1x1 exposure resource.
+
+The backend submits camera matrices, jitter, reset state, render/output extents, and the eight resource tags, then evaluates `kFeatureDLSS_RR` inside the active command list. A successful evaluation produces display-resolution HDR and bypasses NRD, the internal denoiser, and Final TAA before tone mapping.
+
+If evaluation fails, its partial output is never displayed. The renderer performs native reconstruction for that frame, disables further evaluation, and requests native resource reconstruction for the following frame. Resize, camera cut, and explicit reset propagate a DLSS history reset.
+
+## Resolution And Runtime Status
+
+The quality schema separates render and output resolution:
+
+```json
+{
+  "resolutionMode": "dynamic",
+  "fixedRenderScale": 0.75,
+  "minRenderScale": 0.5,
+  "maxRenderScale": 1.0
+}
 ```
 
-The missing implementation is the per-frame Streamline constants/resource tagging and `slEvaluateFeature` path, including the exact color, depth, motion, normal, roughness, albedo, specular, exposure, and reset contract. Until that work is completed and quality-gated, the internal denoiser remains the effective backend.
+`resolutionMode` accepts `native`, `fixed`, or `dynamic`; older projects default to `native`. Dynamic mode uses the existing GPU budget and settle hysteresis and adjusts in 1/16 increments. Native non-DLSS paths use TAAU when render and output sizes differ, while NRD runs at render resolution.
 
-## Runtime Selection And Status
-
-Select the probe through the Denoise panel or MCP:
+Select DLSS-RR through the Denoise panel or MCP:
 
 ```json
 {
@@ -92,18 +118,6 @@ Select the probe through the Denoise panel or MCP:
 }
 ```
 
-The requested backend remains visible as `dlss_rr` so setup failures are diagnosable, while `activeBackend` remains `internal`. `reference_still` disables all real-time denoisers regardless of this selection.
+Read `denoise.dlss` / `denoiser.dlss` from `lookdevpt.get_state` or `lookdevpt.get_stats`. Status includes compile/load/init/device/application-identity/support/evaluation state, recommended and active dimensions, successful/failed evaluation counts, last result code and failure stage, runtime path, error, and fallback reason. Benchmark output exposes the same activation and failure evidence.
 
-Read `denoise.dlss` / `denoiser.dlss` from `lookdevpt.get_state` or `lookdevpt.get_stats`. The status includes:
-
-- compiled, runtime-loaded, initialized, and device-registered state;
-- adapter/driver feature support and `evaluationReady`;
-- selected mode and recommended render/output resolutions;
-- runtime DLL path, last error, and fallback reason;
-- requested history reset state.
-
-## Resource Behavior And Current Limit
-
-Because evaluation never becomes ready, this version does not allocate a DLSS-RR-specific full-resolution input/output graph. The renderer allocates the internal fallback resources instead. This preserves operation on non-NVIDIA GPUs, unsupported drivers, missing-DLL installations, and `EnableDLSS=false` builds without making Streamline a process-load dependency.
-
-The previously documented DLSS fallback screenshot showed an older Denoise panel and has been removed from this page. A replacement should be captured only after the current quality-profile/status UI is built and the displayed requested/effective backend fields can be verified.
+Active DLSS-RR evaluation has not been certified in this checkout because the local environment does not contain an NVIDIA-issued NGX application ID. The missing-identity fallback has been exercised; feature-active validation still requires the issued ID, compatible GPU/driver, and production runtime DLLs.

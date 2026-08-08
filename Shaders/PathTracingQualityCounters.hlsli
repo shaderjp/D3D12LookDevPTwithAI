@@ -26,6 +26,16 @@ struct QualityCounterTileV1
     float contributionOutputEnergy;
     float contributionClampedEnergy;
     uint nonFinitePixels;
+
+    uint primaryRays;
+    uint secondaryRays;
+    uint shadowRays;
+    uint diVisibilityRays;
+
+    uint giVisibilityRays;
+    uint ptVisibilityRays;
+    uint anyHitInvocations;
+    uint reserved;
 };
 
 VK_BINDING(49, 0) RWStructuredBuffer<QualityCounterTileV1> g_qualityCounters : register(u41, space0);
@@ -33,6 +43,43 @@ VK_BINDING(50, 0) RWTexture2D<uint> g_qualityContribution : register(u42, space0
 
 static const uint QualityTaaTestedBit = 0x00008000u;
 static const uint QualityTaaAcceptedBit = 0x80000000u;
+static const uint QualityRayPrimary = 0u;
+static const uint QualityRaySecondary = 1u;
+static const uint QualityRayShadow = 2u;
+static const uint QualityRayDiVisibility = 3u;
+static const uint QualityRayGiVisibility = 4u;
+static const uint QualityRayPtVisibility = 5u;
+static const uint QualityRayAnyHit = 6u;
+
+void RecordQualityRay(
+    uint2 pixel,
+    uint2 renderDimensions,
+    uint rayKind)
+{
+    if (g_scene.performanceOptions.z < 0.5f ||
+        any(pixel >= renderDimensions))
+    {
+        return;
+    }
+    uint tileCountX = (renderDimensions.x + 15u) / 16u;
+    uint tileIndex =
+        (pixel.y >> 4u) * tileCountX + (pixel.x >> 4u);
+    uint ignored;
+    if (rayKind == QualityRayPrimary)
+        InterlockedAdd(g_qualityCounters[tileIndex].primaryRays, 1u, ignored);
+    else if (rayKind == QualityRaySecondary)
+        InterlockedAdd(g_qualityCounters[tileIndex].secondaryRays, 1u, ignored);
+    else if (rayKind == QualityRayShadow)
+        InterlockedAdd(g_qualityCounters[tileIndex].shadowRays, 1u, ignored);
+    else if (rayKind == QualityRayDiVisibility)
+        InterlockedAdd(g_qualityCounters[tileIndex].diVisibilityRays, 1u, ignored);
+    else if (rayKind == QualityRayGiVisibility)
+        InterlockedAdd(g_qualityCounters[tileIndex].giVisibilityRays, 1u, ignored);
+    else if (rayKind == QualityRayPtVisibility)
+        InterlockedAdd(g_qualityCounters[tileIndex].ptVisibilityRays, 1u, ignored);
+    else if (rayKind == QualityRayAnyHit)
+        InterlockedAdd(g_qualityCounters[tileIndex].anyHitInvocations, 1u, ignored);
+}
 
 // The diagnostic texture is full resolution only during a benchmark. Normal
 // rendering binds a descriptor-valid 1x1 placeholder, and therefore pays no

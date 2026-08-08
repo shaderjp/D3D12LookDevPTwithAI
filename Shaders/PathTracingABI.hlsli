@@ -13,6 +13,9 @@
 #ifndef PT_RESTIR_GI
 #define PT_RESTIR_GI PT_RESTIR
 #endif
+#ifndef PT_RESTIR_PT
+#define PT_RESTIR_PT 0
+#endif
 
 static const float PI = 3.14159265359f;
 static const uint TextureSlotBaseColor = 0;
@@ -21,6 +24,7 @@ static const uint TextureSlotRoughness = 2;
 static const uint TextureSlotMetallic = 3;
 static const uint TextureSlotOcclusion = 4;
 static const uint TextureSlotEmissive = 5;
+static const uint TextureSlotAlpha = 6;
 static const uint MaterialFeaturePackedOcclusionRoughnessMetallic = 1u << 0;
 static const uint MaterialFeatureBaseColorTexture = 1u << 1;
 static const uint MaterialFeatureNormalTexture = 1u << 2;
@@ -28,6 +32,7 @@ static const uint MaterialFeatureRoughnessTexture = 1u << 3;
 static const uint MaterialFeatureMetallicTexture = 1u << 4;
 static const uint MaterialFeatureOcclusionTexture = 1u << 5;
 static const uint MaterialFeatureEmissiveTexture = 1u << 6;
+static const uint MaterialFeatureAlphaTexture = 1u << 7;
 
 #include "PathTracingSceneConstants.hlsli"
 
@@ -51,6 +56,11 @@ struct RtMaterial
     float metallicFactor;
     float occlusionStrength;
     uint materialFeatures;
+    float transmissionFactor;
+    float indexOfRefraction;
+    uint thinDielectric;
+    uint materialPadding;
+    float4 uvScaleOffset;
 };
 
 bool HasMaterialFeature(RtMaterial material, uint feature)
@@ -90,6 +100,7 @@ struct ShadowPayload
 struct SurfaceData
 {
     float3 position;
+    float3 geometricNormal;
     float3 normal;
     float4 tangent;
     float2 texcoord;
@@ -111,6 +122,7 @@ struct SurfaceData
 struct PathHitData
 {
     SurfaceData surface;
+    float3 viewDirection;
     float hitT;
     uint hit;
     uint instanceIndex;
@@ -127,6 +139,30 @@ struct RtLight
     uint4 meshIdentity;
 };
 
+struct RtInstance
+{
+    float4 objectToWorldColumn0;
+    float4 objectToWorldColumn1;
+    float4 objectToWorldColumn2;
+    float4 objectToWorldColumn3;
+    float4 normalToWorldColumn0;
+    float4 normalToWorldColumn1;
+    float4 normalToWorldColumn2;
+    float4 normalToWorldColumn3;
+};
+
+struct SecondaryTask
+{
+    uint pixelIndex;
+    uint sampleIndex;
+};
+
+struct SecondaryResult
+{
+    float4 radiance;
+    uint4 packedSignals;
+};
+
 VK_BINDING(0, 0) RaytracingAccelerationStructure g_sceneAs : register(t0, space0);
 VK_BINDING(1, 0) RWTexture2D<float4> g_output : register(u0, space0);
 VK_BINDING(2, 0) RWTexture2D<float4> g_accumulation : register(u1, space0);
@@ -137,6 +173,7 @@ VK_BINDING(6, 0) StructuredBuffer<RtGeometryRecord> g_geometries : register(t3, 
 VK_BINDING(7, 0) StructuredBuffer<RtMaterial> g_materials : register(t4, space0);
 VK_BINDING(8, 0) SamplerState g_linearSampler : register(s0, space0);
 VK_BINDING(12, 0) StructuredBuffer<RtLight> g_lights : register(t5, space0);
+VK_BINDING(65, 0) StructuredBuffer<RtInstance> g_instances : register(t6, space0);
 VK_BINDING(13, 0) RWTexture2D<float4> g_denoiseAov0 : register(u5, space0);
 VK_BINDING(14, 0) RWTexture2D<float4> g_denoiseAov1 : register(u6, space0);
 VK_BINDING(15, 0) RWTexture2D<float4> g_denoiseAov2 : register(u7, space0);
@@ -163,6 +200,14 @@ VK_BINDING(45, 0) RWTexture2D<float> g_specularHistoryConfidence : register(u37,
 VK_BINDING(46, 0) RWTexture2D<uint> g_surfaceIdentity : register(u38, space0);
 VK_BINDING(47, 0) RWTexture2D<uint> g_previousSurfaceIdentity : register(u39, space0);
 #include "PathTracingQualityCounters.hlsli"
+VK_BINDING(57, 0) RWTexture2D<float4> g_primaryPositionCone : register(u53, space0);
+VK_BINDING(58, 0) RWTexture2D<float4> g_primaryGeometricNormal : register(u54, space0);
+VK_BINDING(59, 0) RWTexture2D<uint4> g_primaryIdentity : register(u55, space0);
+VK_BINDING(60, 0) RWStructuredBuffer<uint> g_secondaryTaskOffsets : register(u56, space0);
+VK_BINDING(61, 0) RWStructuredBuffer<uint> g_secondaryGroupOffsets : register(u57, space0);
+VK_BINDING(62, 0) RWStructuredBuffer<SecondaryTask> g_secondaryTasks : register(u58, space0);
+VK_BINDING(63, 0) RWStructuredBuffer<SecondaryResult> g_secondaryResults : register(u59, space0);
+VK_BINDING(64, 0) RWByteAddressBuffer g_secondaryIndirectArgs : register(u60, space0);
 VK_BINDING(0, 1) Texture2D g_textures[] : register(t0, space1);
 
 bool PreviousHistoryIsA()
@@ -273,16 +318,92 @@ uint PixelIndex(uint2 pixel, uint2 dimensions)
     return pixel.y * dimensions.x + pixel.x;
 }
 
+float3 RotateEnvironmentYaw(float3 direction, float angle)
+{
+    float sine;
+    float cosine;
+    sincos(angle, sine, cosine);
+    return float3(
+        cosine * direction.x + sine * direction.z,
+        direction.y,
+        cosine * direction.z - sine * direction.x);
+}
+
+float3 WorldToEnvironmentDirection(float3 direction)
+{
+    float3 lightDirection = normalize(mul(float4(direction, 0.0f), g_scene.environmentWorldToLight).xyz);
+    return RotateEnvironmentYaw(lightDirection, g_scene.environmentOptions.z);
+}
+
+float3 EnvironmentToWorldDirection(float3 direction)
+{
+    float3 lightDirection = RotateEnvironmentYaw(direction, -g_scene.environmentOptions.z);
+    return normalize(mul(float4(lightDirection, 0.0f), g_scene.environmentLightToWorld).xyz);
+}
+
+float CopySign(float magnitude, float signSource)
+{
+    return signSource < 0.0f ? -abs(magnitude) : abs(magnitude);
+}
+
+float3 EqualAreaSquareToSphere(float2 p)
+{
+    float u = 2.0f * p.x - 1.0f;
+    float v = 2.0f * p.y - 1.0f;
+    float up = abs(u);
+    float vp = abs(v);
+    float signedDistance = 1.0f - (up + vp);
+    float r = 1.0f - abs(signedDistance);
+    float phi = (r == 0.0f ? 1.0f : (vp - up) / r + 1.0f) * PI * 0.25f;
+    float z = CopySign(1.0f - r * r, signedDistance);
+    float cosPhi = CopySign(cos(phi), u);
+    float sinPhi = CopySign(sin(phi), v);
+    float diskScale = r * sqrt(max(2.0f - r * r, 0.0f));
+    return float3(cosPhi * diskScale, sinPhi * diskScale, z);
+}
+
+float2 EqualAreaSphereToSquare(float3 direction)
+{
+    float3 d = normalize(direction);
+    float x = abs(d.x);
+    float y = abs(d.y);
+    float r = sqrt(max(1.0f - abs(d.z), 0.0f));
+    float a = max(x, y);
+    float b = a == 0.0f ? 0.0f : min(x, y) / a;
+    float phi = atan(b) * (2.0f / PI);
+    if (x < y) phi = 1.0f - phi;
+    float v = phi * r;
+    float u = r - v;
+    if (d.z < 0.0f)
+    {
+        float oldU = u;
+        u = 1.0f - v;
+        v = 1.0f - oldU;
+    }
+    u = CopySign(u, d.x);
+    v = CopySign(v, d.y);
+    return 0.5f * (float2(u, v) + 1.0f);
+}
+
 float2 EnvironmentUv(float3 rayDirection)
 {
-    float phi = atan2(rayDirection.x, rayDirection.z) + g_scene.environmentOptions.z;
+    float3 direction = WorldToEnvironmentDirection(rayDirection);
+    if (g_scene.environmentOptions.x > 1.5f)
+    {
+        return EqualAreaSphereToSquare(direction);
+    }
+    float phi = atan2(direction.x, direction.z);
     float u = frac(phi / (2.0f * PI) + 0.5f);
-    float v = acos(clamp(rayDirection.y, -1.0f, 1.0f)) / PI;
+    float v = acos(clamp(direction.y, -1.0f, 1.0f)) / PI;
     return float2(u, v);
 }
 
 float EnvironmentTexelSolidAngle(uint row, uint width, uint height)
 {
+    if (g_scene.environmentOptions.x > 1.5f)
+    {
+        return (4.0f * PI) / max((float)(width * height), 1.0f);
+    }
     float theta0 = PI * (float)row / (float)height;
     float theta1 = PI * (float)(row + 1u) / (float)height;
     return (2.0f * PI / (float)width) * max(cos(theta0) - cos(theta1), 1.0e-10f);
@@ -317,6 +438,14 @@ void SampleEnvironmentDirection(float4 sample, out float3 direction, out float d
         : min((uint)round(aliasEntry.y), entryCount - 1u);
     uint2 selectedTexel = uint2(selected % width, selected / width);
     float u = ((float)selectedTexel.x + sample.z) / (float)width;
+    float v = ((float)selectedTexel.y + sample.w) / (float)height;
+    if (g_scene.environmentOptions.x > 1.5f)
+    {
+        direction = EnvironmentToWorldDirection(EqualAreaSquareToSphere(float2(u, v)));
+        float texelProbability = g_textures[aliasTextureIndex].Load(int3(selectedTexel, 0)).z;
+        directionPdf = texelProbability / EnvironmentTexelSolidAngle(selectedTexel.y, width, height);
+        return;
+    }
     float theta0 = PI * (float)selectedTexel.y / (float)height;
     float theta1 = PI * (float)(selectedTexel.y + 1u) / (float)height;
     // Sample uniformly in solid angle inside the selected lat-long texel.
@@ -324,8 +453,8 @@ void SampleEnvironmentDirection(float4 sample, out float3 direction, out float d
     // in the polar rows, and would bias light/BSDF MIS.
     float cosTheta = lerp(cos(theta0), cos(theta1), sample.w);
     float sinTheta = sqrt(saturate(1.0f - cosTheta * cosTheta));
-    float phi = 2.0f * PI * (u - 0.5f) - g_scene.environmentOptions.z;
-    direction = float3(sinTheta * sin(phi), cosTheta, sinTheta * cos(phi));
+    float phi = 2.0f * PI * (u - 0.5f);
+    direction = EnvironmentToWorldDirection(float3(sinTheta * sin(phi), cosTheta, sinTheta * cos(phi)));
     float texelProbability = g_textures[aliasTextureIndex].Load(int3(selectedTexel, 0)).z;
     directionPdf = texelProbability / EnvironmentTexelSolidAngle(selectedTexel.y, width, height);
 }
@@ -335,6 +464,54 @@ float SkyNeePdf(float3 surfaceNormal, float3 direction)
     return g_scene.environmentOptions.x > 0.5f
         ? EnvironmentDirectionPdf(direction)
         : saturate(dot(surfaceNormal, direction)) / PI;
+}
+
+// All explicit light families share one categorical estimator. The area-light
+// weight is produced on the CPU from the same records used by the Walker alias
+// table; sun and environment weights stay live as their editor controls move.
+void UnifiedLightProbabilities(
+    out float areaProbability,
+    out float sunProbability,
+    out float environmentProbability)
+{
+    float areaWeight = max(g_scene.unifiedLightOptions.x, 0.0f);
+    float sunWeight = g_scene.debugOptions.z > 0.5f
+        ? max(Luminance(max(g_scene.lightColor.rgb * g_scene.lightColor.a, 0.0f.xxx)), 0.0f)
+        : 0.0f;
+    float environmentWeight = 0.0f;
+    if (g_scene.debugOptions.w > 0.5f)
+    {
+        environmentWeight = g_scene.environmentOptions.x > 0.5f
+            ? max(Luminance(max(g_scene.environmentTint.rgb * g_scene.environmentOptions.y, 0.0f.xxx)), 0.0f) * (4.0f * PI)
+            : max(Luminance(max(g_scene.skyColor.rgb * g_scene.skyColor.a, 0.0f.xxx)), 0.0f) * (4.0f * PI);
+    }
+    float totalWeight = areaWeight + sunWeight + environmentWeight;
+    if (totalWeight <= 1.0e-8f)
+    {
+        areaProbability = 0.0f;
+        sunProbability = 0.0f;
+        environmentProbability = 0.0f;
+        return;
+    }
+    float activeFamilyCount =
+        (areaWeight > 0.0f ? 1.0f : 0.0f) +
+        (sunWeight > 0.0f ? 1.0f : 0.0f) +
+        (environmentWeight > 0.0f ? 1.0f : 0.0f);
+    float uniformActiveProbability = rcp(max(activeFamilyCount, 1.0f));
+    float defensiveFraction = saturate(g_scene.unifiedLightOptions.y);
+    float powerFraction = 1.0f - defensiveFraction;
+    // A small uniform component keeps globally powerful but locally sparse
+    // emissive families from starving Sun/HDRI samples. The exact mixed PMF is
+    // used by every NEE/MIS path below, so this changes variance, not energy.
+    areaProbability =
+        powerFraction * areaWeight / totalWeight +
+        defensiveFraction * (areaWeight > 0.0f ? uniformActiveProbability : 0.0f);
+    sunProbability =
+        powerFraction * sunWeight / totalWeight +
+        defensiveFraction * (sunWeight > 0.0f ? uniformActiveProbability : 0.0f);
+    environmentProbability =
+        powerFraction * environmentWeight / totalWeight +
+        defensiveFraction * (environmentWeight > 0.0f ? uniformActiveProbability : 0.0f);
 }
 
 float TextureMipLevel(uint textureIndex, float uvFootprint)
@@ -364,7 +541,13 @@ float EnvironmentMipLevel(uint textureIndex, float3 rayDirection, float coneSpre
     g_textures[resourceIndex].GetDimensions(0u, width, height, mipLevels);
 
     float angularRadius = max(coneSpread, 0.0f);
-    float sinTheta = max(sqrt(saturate(1.0f - rayDirection.y * rayDirection.y)), 0.1f);
+    if (g_scene.environmentOptions.x > 1.5f)
+    {
+        float texelFootprint = max(angularRadius * sqrt((float)(width * height) / (4.0f * PI)), 1.0f);
+        return clamp(log2(texelFootprint), 0.0f, (float)max(mipLevels, 1u) - 1.0f);
+    }
+    float3 lightDirection = WorldToEnvironmentDirection(rayDirection);
+    float sinTheta = max(sqrt(saturate(1.0f - lightDirection.y * lightDirection.y)), 0.1f);
     float footprintU = angularRadius * (float)width / (2.0f * PI * sinTheta);
     float footprintV = angularRadius * (float)height / PI;
     float texelFootprint = max(max(footprintU, footprintV), 1.0f);
@@ -376,7 +559,8 @@ float3 EvaluateEnvironmentMap(float3 rayDirection, float coneSpread)
     uint environmentTextureIndex = (uint)round(g_scene.lightOptions.w);
     uint resourceIndex = NonUniformResourceIndex(environmentTextureIndex);
     float mipLevel = EnvironmentMipLevel(environmentTextureIndex, rayDirection, coneSpread);
-    return g_textures[resourceIndex].SampleLevel(g_linearSampler, EnvironmentUv(rayDirection), mipLevel).rgb * g_scene.environmentOptions.y;
+    return g_textures[resourceIndex].SampleLevel(g_linearSampler, EnvironmentUv(rayDirection), mipLevel).rgb *
+        g_scene.environmentTint.rgb * g_scene.environmentOptions.y;
 }
 
 float3 EvaluateEnvironmentMap(float3 rayDirection)
@@ -512,13 +696,6 @@ float3 EvaluateMeshEmitterRadiance(
     }
 
     RtMaterial material = g_materials[light.meshIdentity.z];
-    if (!HasMaterialFeature(material, MaterialFeatureEmissiveTexture))
-    {
-        // Match the existing black fallback texture without issuing a texture
-        // read or a mip-footprint query.
-        return 0.0f.xxx;
-    }
-
     uint geometryIndex = light.meshIdentity.x;
     uint primitiveIndex = light.meshIdentity.y;
     RtGeometryRecord geometry = g_geometries[geometryIndex];
@@ -528,20 +705,25 @@ float3 EvaluateMeshEmitterRadiance(
         g_vertices[tri.y].texcoord,
         g_vertices[tri.z].texcoord,
         barycentrics);
-    float uvFootprint = TriangleUvFootprint(
-        geometryIndex,
-        primitiveIndex,
-        coneWidthAtHit,
-        rayDirection);
-    float3 emissiveTexture = SampleTextureWithFootprint(
-        material.textureBaseIndex + TextureSlotEmissive,
-        texcoord,
-        uvFootprint).rgb;
+    float3 emissiveTexture = 1.0f.xxx;
+    if (HasMaterialFeature(material, MaterialFeatureEmissiveTexture))
+    {
+        float uvFootprint = TriangleUvFootprint(
+            geometryIndex,
+            primitiveIndex,
+            coneWidthAtHit,
+            rayDirection);
+        emissiveTexture = SampleTextureWithFootprint(
+            material.textureBaseIndex + TextureSlotEmissive,
+            texcoord,
+            uvFootprint).rgb;
+    }
     return emissiveTexture * material.emissiveFactor.rgb *
         material.emissiveFactor.a * g_scene.lightOptions.y;
 }
 
 SurfaceData LoadSurface(
+    uint instanceIndex,
     uint geometryIndex,
     uint primitiveIndex,
     float2 barycentrics,
@@ -558,10 +740,28 @@ SurfaceData LoadSurface(
 
     SurfaceData surface;
     surface.position = Interpolate3(v0.position, v1.position, v2.position, bary);
-    surface.normal = normalize(Interpolate3(v0.normal, v1.normal, v2.normal, bary));
-    surface.tangent = Interpolate4(v0.tangent, v1.tangent, v2.tangent, bary);
-    surface.texcoord = Interpolate2(v0.texcoord, v1.texcoord, v2.texcoord, bary);
+    float3 localGeometricNormal = normalize(cross(
+        v1.position - v0.position,
+        v2.position - v0.position));
+    float3 localNormal = normalize(Interpolate3(v0.normal, v1.normal, v2.normal, bary));
+    float4 localTangent = Interpolate4(v0.tangent, v1.tangent, v2.tangent, bary);
+    RtInstance instance = g_instances[instanceIndex];
+    surface.geometricNormal = normalize(float3(
+        dot(float4(localGeometricNormal, 0.0f), instance.normalToWorldColumn0),
+        dot(float4(localGeometricNormal, 0.0f), instance.normalToWorldColumn1),
+        dot(float4(localGeometricNormal, 0.0f), instance.normalToWorldColumn2)));
+    surface.normal = normalize(float3(
+        dot(float4(localNormal, 0.0f), instance.normalToWorldColumn0),
+        dot(float4(localNormal, 0.0f), instance.normalToWorldColumn1),
+        dot(float4(localNormal, 0.0f), instance.normalToWorldColumn2)));
+    surface.tangent = float4(normalize(float3(
+        dot(float4(localTangent.xyz, 0.0f), instance.objectToWorldColumn0),
+        dot(float4(localTangent.xyz, 0.0f), instance.objectToWorldColumn1),
+        dot(float4(localTangent.xyz, 0.0f), instance.objectToWorldColumn2))), localTangent.w);
     surface.material = g_materials[geometry.materialIndex];
+    surface.texcoord = Interpolate2(v0.texcoord, v1.texcoord, v2.texcoord, bary) *
+        surface.material.uvScaleOffset.xy + surface.material.uvScaleOffset.zw;
+    uvFootprint *= max(max(abs(surface.material.uvScaleOffset.x), abs(surface.material.uvScaleOffset.y)), 1.0e-6f);
     surface.materialIndex = geometry.materialIndex;
     surface.rayConeWidth = coneWidthAtHit;
     surface.rayConeSpread = coneSpread;
@@ -587,8 +787,16 @@ SurfaceData LoadSurface(
             uvFootprint).xyz;
     }
     surface.baseColor = baseSample.rgb * surface.material.baseColorFactor.rgb;
+    float alphaSample = baseSample.a;
+    if (HasMaterialFeature(surface.material, MaterialFeatureAlphaTexture))
+    {
+        alphaSample = SampleTextureWithFootprint(
+            surface.material.textureBaseIndex + TextureSlotAlpha,
+            surface.texcoord,
+            uvFootprint).r;
+    }
     surface.coverage = surface.material.alphaMasked != 0u
-        ? saturate(baseSample.a * surface.material.baseColorFactor.a)
+        ? saturate(alphaSample * surface.material.baseColorFactor.a)
         : 1.0f;
     if (HasMaterialFeature(surface.material, MaterialFeaturePackedOcclusionRoughnessMetallic))
     {
@@ -634,7 +842,9 @@ SurfaceData LoadSurface(
         surface.roughness = clamp(roughnessTexel * surface.material.roughnessFactor, 0.04f, 1.0f);
         surface.metallic = saturate(metallicTexel * surface.material.metallicFactor);
     }
-    float3 emissiveTexture = 0.0f.xxx;
+    // A constant emissive factor is a complete emitter even when no texture
+    // is authored. Texture-backed materials modulate that constant.
+    float3 emissiveTexture = 1.0f.xxx;
     if (HasMaterialFeature(surface.material, MaterialFeatureEmissiveTexture))
     {
         emissiveTexture = SampleTextureWithFootprint(
@@ -682,7 +892,8 @@ bool IsAlphaTransparent(
     {
         return false;
     }
-    if (!HasMaterialFeature(material, MaterialFeatureBaseColorTexture))
+    bool hasSeparateAlpha = HasMaterialFeature(material, MaterialFeatureAlphaTexture);
+    if (!hasSeparateAlpha && !HasMaterialFeature(material, MaterialFeatureBaseColorTexture))
     {
         return material.baseColorFactor.a < AlphaCoverageCutoff(material.alphaCutoff, 0.0f);
     }
@@ -692,15 +903,113 @@ bool IsAlphaTransparent(
     MeshVertex v1 = g_vertices[tri.y];
     MeshVertex v2 = g_vertices[tri.z];
     float3 bary = Barycentric3(barycentrics);
-    float2 texcoord = Interpolate2(v0.texcoord, v1.texcoord, v2.texcoord, bary);
+    float2 texcoord = Interpolate2(v0.texcoord, v1.texcoord, v2.texcoord, bary) *
+        material.uvScaleOffset.xy + material.uvScaleOffset.zw;
     float coneWidthAtHit = RayConeWidthAtDistance(coneWidth, coneSpread, hitDistance);
-    float uvFootprint = TriangleUvFootprint(geometryIndex, primitiveIndex, coneWidthAtHit, rayDirection);
-    uint textureIndex = material.textureBaseIndex + TextureSlotBaseColor;
+    float uvFootprint = TriangleUvFootprint(geometryIndex, primitiveIndex, coneWidthAtHit, rayDirection) *
+        max(max(abs(material.uvScaleOffset.x), abs(material.uvScaleOffset.y)), 1.0e-6f);
+    uint textureIndex = material.textureBaseIndex + (hasSeparateAlpha ? TextureSlotAlpha : TextureSlotBaseColor);
     uint resourceIndex = NonUniformResourceIndex(textureIndex);
     float mipLevel = TextureMipLevel(textureIndex, uvFootprint);
-    float alpha = material.baseColorFactor.a *
-        g_textures[resourceIndex].SampleLevel(g_linearSampler, texcoord, mipLevel).a;
+    float4 alphaSample = g_textures[resourceIndex].SampleLevel(g_linearSampler, texcoord, mipLevel);
+    float alpha = material.baseColorFactor.a * (hasSeparateAlpha ? alphaSample.r : alphaSample.a);
     return alpha < AlphaCoverageCutoff(material.alphaCutoff, mipLevel);
+}
+
+bool IsTransmissiveGeometry(uint geometryIndex)
+{
+    RtGeometryRecord geometry = g_geometries[geometryIndex];
+    return g_materials[geometry.materialIndex].transmissionFactor > 0.0f;
+}
+
+float FresnelDielectric(float cosineIncident, float etaIncident, float etaTransmitted)
+{
+    cosineIncident = saturate(cosineIncident);
+    float eta = etaIncident / etaTransmitted;
+    float sineTransmittedSquared = eta * eta * max(1.0f - cosineIncident * cosineIncident, 0.0f);
+    if (sineTransmittedSquared >= 1.0f)
+    {
+        return 1.0f;
+    }
+
+    float cosineTransmitted = sqrt(max(1.0f - sineTransmittedSquared, 0.0f));
+    float parallelNumerator = etaTransmitted * cosineIncident - etaIncident * cosineTransmitted;
+    float parallelDenominator = etaTransmitted * cosineIncident + etaIncident * cosineTransmitted;
+    float perpendicularNumerator = etaIncident * cosineIncident - etaTransmitted * cosineTransmitted;
+    float perpendicularDenominator = etaIncident * cosineIncident + etaTransmitted * cosineTransmitted;
+    float parallel = parallelNumerator / max(abs(parallelDenominator), 1.0e-7f);
+    float perpendicular = perpendicularNumerator / max(abs(perpendicularDenominator), 1.0e-7f);
+    return saturate(0.5f * (parallel * parallel + perpendicular * perpendicular));
+}
+
+bool SampleDielectricContinuation(
+    SurfaceData surface,
+    bool frontFace,
+    float3 incidentDirection,
+    float selector,
+    out float3 nextDirection,
+    out float3 originOffsetNormal,
+    out float throughputScale,
+    out bool reflected)
+{
+    nextDirection = 0.0f.xxx;
+    originOffsetNormal = surface.geometricNormal;
+    throughputScale = 0.0f;
+    reflected = false;
+
+    float materialEta = clamp(surface.material.indexOfRefraction, 1.0001f, 3.0f);
+    float etaIncident = frontFace ? 1.0f : materialEta;
+    float etaTransmitted = frontFace ? materialEta : 1.0f;
+    float cosineIncident = saturate(dot(-incidentDirection, surface.geometricNormal));
+    float reflectance = FresnelDielectric(cosineIncident, etaIncident, etaTransmitted);
+    if (surface.material.thinDielectric != 0u)
+    {
+        // Account for the second interface of an infinitesimally thin sheet.
+        reflectance = 2.0f * reflectance / max(1.0f + reflectance, 1.0e-6f);
+    }
+
+    float reflectionProbability = reflectance;
+    float transmissionProbability =
+        (1.0f - reflectance) * saturate(surface.material.transmissionFactor);
+    if (selector < reflectionProbability)
+    {
+        nextDirection = normalize(reflect(incidentDirection, surface.geometricNormal));
+        originOffsetNormal = surface.geometricNormal;
+        throughputScale = 1.0f;
+        reflected = true;
+        return true;
+    }
+    if (selector >= reflectionProbability + transmissionProbability)
+    {
+        // The remainder represents scalar absorption when transmittance < 1.
+        return false;
+    }
+
+    if (surface.material.thinDielectric != 0u)
+    {
+        nextDirection = normalize(incidentDirection);
+        throughputScale = 1.0f;
+    }
+    else
+    {
+        float eta = etaIncident / etaTransmitted;
+        nextDirection = refract(incidentDirection, surface.geometricNormal, eta);
+        if (dot(nextDirection, nextDirection) <= 1.0e-12f)
+        {
+            // Numerical total internal reflection at the critical angle.
+            nextDirection = normalize(reflect(incidentDirection, surface.geometricNormal));
+            originOffsetNormal = surface.geometricNormal;
+            throughputScale = 1.0f;
+            reflected = true;
+            return true;
+        }
+        nextDirection = normalize(nextDirection);
+        // Radiance transport across a specular dielectric interface carries
+        // the squared relative-IOR Jacobian. Enter/exit pairs cancel it.
+        throughputScale = eta * eta;
+    }
+    originOffsetNormal = -surface.geometricNormal;
+    return true;
 }
 
 void BuildBasis(float3 normal, out float3 tangent, out float3 bitangent)
@@ -911,6 +1220,10 @@ float TraceVisibilityRay(
     ray.Direction = direction;
     ray.TMin = g_scene.rayOptions.x;
     ray.TMax = tMax;
+    RecordQualityRay(
+        DispatchRaysIndex().xy,
+        DispatchRaysDimensions().xy,
+        QualityRayShadow);
     TraceRay(g_sceneAs, RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_SKIP_CLOSEST_HIT_SHADER, 0xff, 1, 0, 1, ray, payload);
     return payload.occluded == 0 ? 1.0f : 0.0f;
 }
@@ -961,6 +1274,7 @@ float3 EvaluateSkyNEE(
     SurfaceData surface,
     float3 viewDirection,
     float4 directionSample,
+    float techniqueProbability,
     out float3 diffuseContribution,
     out float3 specularContribution)
 {
@@ -982,6 +1296,7 @@ float3 EvaluateSkyNEE(
         direction = SampleCosineHemisphere(directionSample.xy, surface.normal);
         lightPdf = CosineHemispherePdf(surface.normal, direction);
     }
+    lightPdf *= techniqueProbability;
     if (lightPdf <= 0.0f || dot(surface.normal, direction) <= 0.0f)
     {
         return 0.0f.xxx;
@@ -1027,6 +1342,7 @@ float3 EvaluateAreaLightNEE(
     float3 viewDirection,
     float lightSample,
     float2 uv,
+    float techniqueProbability,
     out float3 diffuseContribution,
     out float3 specularContribution)
 {
@@ -1043,6 +1359,51 @@ float3 EvaluateAreaLightNEE(
     float3 edge0 = light.edge0Type.xyz;
     float3 edge1 = light.edge1.xyz;
     float type = light.edge0Type.w;
+    float selectionPdf = light.radianceCdf.w;
+    if (selectionPdf <= 0.0f)
+    {
+        return 0.0f.xxx;
+    }
+    if (type >= 2.0f)
+    {
+        float3 lightDirection;
+        float distanceToLight = g_scene.rayOptions.y;
+        float3 radiance = light.radianceCdf.rgb * g_scene.lightOptions.z;
+        if (type < 4.0f)
+        {
+            float3 toLight = light.positionArea.xyz - surface.position;
+            float distanceSquared = max(dot(toLight, toLight), 1.0e-6f);
+            distanceToLight = sqrt(distanceSquared);
+            lightDirection = toLight / distanceToLight;
+            radiance /= distanceSquared;
+            if (type < 3.5f)
+            {
+                float spotCosine = dot(normalize(edge0), -lightDirection);
+                radiance *= smoothstep(light.edge1.y, light.edge1.x, spotCosine);
+            }
+        }
+        else
+        {
+            lightDirection = normalize(-edge0);
+        }
+        if (dot(surface.normal, lightDirection) <= 0.0f || MaxComponent(radiance) <= 0.0f)
+        {
+            return 0.0f.xxx;
+        }
+        float visibility = TraceVisibilityRay(
+            surface.position,
+            surface.normal,
+            lightDirection,
+            type >= 4.0f ? g_scene.rayOptions.y : distanceToLight - g_scene.rayOptions.x * 2.0f,
+            surface.rayConeWidth,
+            surface.rayConeSpread);
+        if (visibility <= 0.0f) return 0.0f.xxx;
+        EvaluateBsdfLobes(surface, viewDirection, lightDirection, diffuseContribution, specularContribution);
+        float3 scale = radiance * visibility / max(techniqueProbability * selectionPdf, 1.0e-10f);
+        diffuseContribution *= scale;
+        specularContribution *= scale;
+        return diffuseContribution + specularContribution;
+    }
     float3 lightPosition;
     float3 lightBarycentrics = 0.0f.xxx;
     if (type < 0.5f)
@@ -1071,18 +1432,18 @@ float3 EvaluateAreaLightNEE(
     }
 
     float3 lightNormal = normalize(cross(edge0, edge1));
-    float lightCos = abs(dot(lightNormal, -lightDirection));
+    float emittedCosine = dot(lightNormal, -lightDirection);
+    float lightCos = type < -0.5f ? abs(emittedCosine) : saturate(emittedCosine);
     if (lightCos <= 0.0001f)
     {
         return 0.0f.xxx;
     }
 
-    float selectionPdf = light.radianceCdf.w;
     if (selectionPdf <= 0.0f || light.positionArea.w <= 0.0f)
     {
         return 0.0f.xxx;
     }
-    float areaPdf = selectionPdf / light.positionArea.w;
+    float areaPdf = techniqueProbability * selectionPdf / light.positionArea.w;
     float solidAnglePdf = areaPdf * distanceSquared / lightCos;
     float visibility = TraceVisibilityRay(
         surface.position,
@@ -1115,6 +1476,7 @@ float3 EvaluateAreaLightNEE(
 }
 
 float MatchedEmissiveLightPdf(
+    uint instanceIndex,
     uint geometryIndex,
     uint primitiveIndex,
     float3 rayOrigin,
@@ -1132,9 +1494,10 @@ float MatchedEmissiveLightPdf(
     while (lower < upper)
     {
         uint middle = lower + (upper - lower) / 2u;
-        uint2 identity = g_lights[middle].meshIdentity.xy;
+        uint4 identity = g_lights[middle].meshIdentity;
         bool precedesTarget = identity.x < geometryIndex ||
-            (identity.x == geometryIndex && identity.y < primitiveIndex);
+            (identity.x == geometryIndex && (identity.y < primitiveIndex ||
+            (identity.y == primitiveIndex && identity.w < instanceIndex)));
         if (precedesTarget) lower = middle + 1u;
         else upper = middle;
     }
@@ -1146,7 +1509,8 @@ float MatchedEmissiveLightPdf(
     RtLight light = g_lights[lower];
     if (light.edge0Type.w >= 0.5f ||
         light.meshIdentity.x != geometryIndex ||
-        light.meshIdentity.y != primitiveIndex)
+        light.meshIdentity.y != primitiveIndex ||
+        light.meshIdentity.w != instanceIndex)
     {
         return 0.0f;
     }
@@ -1157,7 +1521,8 @@ float MatchedEmissiveLightPdf(
         return 0.0f;
     }
     float3 lightNormal = normalize(cross(light.edge0Type.xyz, light.edge1.xyz));
-    float lightCos = abs(dot(lightNormal, -rayDirection));
+    float emittedCosine = dot(lightNormal, -rayDirection);
+    float lightCos = light.edge0Type.w < -0.5f ? abs(emittedCosine) : saturate(emittedCosine);
     float3 toLight = hitPosition - rayOrigin;
     float distanceSquared = max(dot(toLight, toLight), 1.0e-8f);
     return lightCos > 1.0e-6f
@@ -1186,6 +1551,7 @@ bool PayloadHit(RayPayload payload)
 SurfaceData EmptySurfaceData()
 {
     SurfaceData surface = (SurfaceData)0;
+    surface.geometricNormal = 0.0f.xxx;
     surface.normalTexture = 0.5f.xxx;
     surface.ao = 1.0f;
     surface.roughness = 1.0f;
@@ -1226,6 +1592,7 @@ SurfaceData LoadPayloadSurface(
         payload.rayConeWidth,
         rayDirection);
     SurfaceData surface = LoadSurface(
+        payload.instanceIndex,
         payload.geometryIndex,
         payload.primitiveIndex,
         payload.barycentrics,
@@ -1256,7 +1623,7 @@ uint BounceSampleDimension(uint bounce, uint dimensionOffset)
 
 float3 GenerateCameraDirection(uint2 pixel, float2 sampleJitter)
 {
-    uint2 dimensions = DispatchRaysDimensions().xy;
+    uint2 dimensions = (uint2)round(g_scene.rayOptions.zw);
     float2 uv = (float2(pixel) + 0.5f.xx + sampleJitter) / float2(dimensions);
     float2 ndc = float2(uv.x * 2.0f - 1.0f, 1.0f - uv.y * 2.0f);
     float4 nearPoint = mul(float4(ndc, 0.0f, 1.0f), g_scene.inverseViewProjection);
@@ -1346,7 +1713,7 @@ bool ShouldTraceAdaptiveSecondary(
         float reprojectedLuminance;
         if (!GatherAdaptiveReprojectedLuminance(
                 pixel,
-                DispatchRaysDimensions().xy,
+                (uint2)round(g_scene.rayOptions.zw),
                 MakePathHitData(primaryPayload, surface),
                 reprojectedLuminance))
         {
@@ -1381,6 +1748,7 @@ float3 TracePathSample(
     uint2 pixel,
     uint sampleIndex,
     float2 cameraJitter,
+    uint maxBouncesOverride,
     out PathHitData firstHit,
     out float3 diffuseSignal,
     out float3 specularSignal,
@@ -1409,11 +1777,28 @@ float3 TracePathSample(
     float3 previousSurfaceNormal = 0.0f.xxx;
 
     uint maxBounces = clamp((uint)round(g_scene.pathOptions.x), 1u, 8u);
+    if (maxBouncesOverride > 0u)
+    {
+        maxBounces = min(maxBounces, maxBouncesOverride);
+    }
+#if PT_RESTIR_GI || PT_RESTIR_PT
+    // ReSTIR GI/PT owns every non-delta continuation in its initial/fused
+    // compute passes. The primary DXR pass publishes visibility, guides and
+    // direct signals only, preventing Baseline indirect double counting.
+    maxBounces = 1u;
+#endif
     uint minBounces = min((uint)round(g_scene.pathOptions.y), maxBounces);
+    uint scatteringBounces = 0u;
+    bool firstContinuationClassified = false;
+    bool previousContinuationWasDelta = false;
 
+    // Delta dielectric boundaries do not consume the user-facing diffuse/
+    // glossy bounce budget. The hard interaction cap still prevents malformed
+    // overlapping glass from looping forever, while primary-visibility passes
+    // can reach the first opaque surface behind a window.
     for (uint bounce = 0u; bounce < 8u; ++bounce)
     {
-        if (bounce >= maxBounces)
+        if (scatteringBounces >= maxBounces)
         {
             break;
         }
@@ -1426,6 +1811,10 @@ float3 TracePathSample(
         ray.Direction = rayDirection;
         ray.TMin = g_scene.rayOptions.x;
         ray.TMax = g_scene.rayOptions.y;
+        RecordQualityRay(
+            pixel,
+            (uint2)round(g_scene.rayOptions.zw),
+            bounce == 0u ? QualityRayPrimary : QualityRaySecondary);
         TraceRay(g_sceneAs, RAY_FLAG_NONE, 0xff, 0, 0, 0, ray, payload);
 
         if (bounce == 1u)
@@ -1445,9 +1834,13 @@ float3 TracePathSample(
         {
             float3 sky = EvaluateSky(rayDirection, rayConeSpread);
             float skyMisWeight = 1.0f;
-            if (bounce > 0u && g_scene.debugOptions.w > 0.5f)
+            if (bounce > 0u && !previousContinuationWasDelta && g_scene.debugOptions.w > 0.5f)
             {
-                float skyLightPdf = SkyNeePdf(previousSurfaceNormal, rayDirection);
+                float areaProbability;
+                float sunProbability;
+                float environmentProbability;
+                UnifiedLightProbabilities(areaProbability, sunProbability, environmentProbability);
+                float skyLightPdf = environmentProbability * SkyNeePdf(previousSurfaceNormal, rayDirection);
                 skyMisWeight = PowerHeuristic(previousBsdfPdf, skyLightPdf);
             }
             float3 skyContribution = throughput * sky * skyMisWeight;
@@ -1467,22 +1860,90 @@ float3 TracePathSample(
         }
 
         SurfaceData surface = LoadPayloadSurface(payload, rayOrigin, rayDirection);
+        bool frontFace = dot(surface.geometricNormal, rayDirection) < 0.0f;
         surface.normal = dot(surface.normal, -rayDirection) > 0.0f ? surface.normal : -surface.normal;
-        if (bounce == 0u)
+        surface.geometricNormal =
+            dot(surface.geometricNormal, -rayDirection) > 0.0f
+            ? surface.geometricNormal
+            : -surface.geometricNormal;
+        bool dielectric = surface.material.transmissionFactor > 0.0f;
+
+        if (dielectric)
+        {
+            bounceCount = bounce + 1u;
+            float selector = OwenScrambledSobol1D(
+                pixel,
+                sampleIndex,
+                BounceSampleDimension(bounce, SampleDimensionBsdfLobe));
+            float3 nextDirection;
+            float3 originOffsetNormal;
+            float throughputScale;
+            bool reflected;
+            bool continued = SampleDielectricContinuation(
+                surface,
+                frontFace,
+                rayDirection,
+                selector,
+                nextDirection,
+                originOffsetNormal,
+                throughputScale,
+                reflected);
+            if (!continued)
+            {
+                if (firstHit.hit == 0u)
+                {
+                    firstHit = MakePathHitData(payload, surface);
+                    firstHit.viewDirection = normalize(-rayDirection);
+                }
+                break;
+            }
+            if (!firstContinuationClassified)
+            {
+                firstContinuationWasSpecular = true;
+                firstContinuationClassified = true;
+            }
+            if (reflected && firstHit.hit == 0u)
+            {
+                firstHit = MakePathHitData(payload, surface);
+                firstHit.viewDirection = normalize(-rayDirection);
+            }
+            throughput *= throughputScale;
+            previousBsdfPdf = 0.0f;
+            previousSurfaceNormal = surface.geometricNormal;
+            previousContinuationWasDelta = true;
+            rayOrigin = surface.position + originOffsetNormal * g_scene.rayOptions.x;
+            rayDirection = nextDirection;
+            rayConeWidth = payload.rayConeWidth;
+            rayConeSpread = min(payload.rayConeSpread, 0.5f);
+            continue;
+        }
+
+        if (firstHit.hit == 0u)
         {
             firstHit = MakePathHitData(payload, surface);
+            firstHit.viewDirection = normalize(-rayDirection);
         }
+        scatteringBounces++;
 
         float emissiveLightPdf = MaxComponent(surface.emissive) > 0.0f
             ? MatchedEmissiveLightPdf(
+                payload.instanceIndex,
                 payload.geometryIndex,
                 payload.primitiveIndex,
                 rayOrigin,
                 surface.position,
                 rayDirection)
             : 0.0f;
+        if (emissiveLightPdf > 0.0f)
+        {
+            float areaProbability;
+            float sunProbability;
+            float environmentProbability;
+            UnifiedLightProbabilities(areaProbability, sunProbability, environmentProbability);
+            emissiveLightPdf *= areaProbability;
+        }
         float emissiveMisWeight = 1.0f;
-        if (bounce > 0u && emissiveLightPdf > 0.0f)
+        if (bounce > 0u && !previousContinuationWasDelta && emissiveLightPdf > 0.0f)
         {
             emissiveMisWeight = PowerHeuristic(previousBsdfPdf, emissiveLightPdf);
         }
@@ -1500,38 +1961,66 @@ float3 TracePathSample(
             }
         }
         float3 viewDirection = normalize(-rayDirection);
-        float3 sunDiffuse;
-        float3 sunSpecular;
+        float3 sunDiffuse = 0.0f.xxx;
+        float3 sunSpecular = 0.0f.xxx;
         float3 skyDiffuse = 0.0f.xxx;
         float3 skySpecular = 0.0f.xxx;
         float3 areaDiffuse = 0.0f.xxx;
         float3 areaSpecular = 0.0f.xxx;
-        EvaluateSunNEE(surface, viewDirection, sunDiffuse, sunSpecular);
-        if (g_scene.debugOptions.w > 0.5f)
+        float areaProbability;
+        float sunProbability;
+        float environmentProbability;
+        UnifiedLightProbabilities(areaProbability, sunProbability, environmentProbability);
+        float techniqueSample = OwenScrambledSobol1D(
+            pixel,
+            sampleIndex,
+            BounceSampleDimension(bounce, SampleDimensionLightSelector));
+#if PT_RESTIR_DI
+        // RTXDI owns every primary direct-light family. Secondary vertices
+        // continue to use the same one-light estimator until GI/PT owns them.
+        // A refractive boundary does not turn the first opaque surface behind
+        // glass into a secondary surface.
+        const bool runUnifiedNee = scatteringBounces > 1u;
+#else
+        const bool runUnifiedNee = true;
+#endif
+        if (runUnifiedNee && techniqueSample < areaProbability && areaProbability > 0.0f)
+        {
+            float remappedSelector = techniqueSample / areaProbability;
+            float2 lightSurfaceSample = OwenScrambledSobol2D(
+                pixel,
+                sampleIndex,
+                BounceSampleDimension(bounce, SampleDimensionLightSurface));
+            EvaluateAreaLightNEE(
+                surface,
+                viewDirection,
+                remappedSelector,
+                lightSurfaceSample,
+                areaProbability,
+                areaDiffuse,
+                areaSpecular);
+        }
+        else if (runUnifiedNee &&
+            techniqueSample < areaProbability + sunProbability &&
+            sunProbability > 0.0f)
+        {
+            EvaluateSunNEE(surface, viewDirection, sunDiffuse, sunSpecular);
+            sunDiffuse /= sunProbability;
+            sunSpecular /= sunProbability;
+        }
+        else if (runUnifiedNee && environmentProbability > 0.0f)
         {
             float4 skyDirectionSample = float4(
                 OwenScrambledSobol2D(pixel, sampleIndex, BounceSampleDimension(bounce, SampleDimensionSkyDirection)),
                 OwenScrambledSobol2D(pixel, sampleIndex, BounceSampleDimension(bounce, SampleDimensionSkyAlias)));
-            EvaluateSkyNEE(surface, viewDirection, skyDirectionSample, skyDiffuse, skySpecular);
+            EvaluateSkyNEE(
+                surface,
+                viewDirection,
+                skyDirectionSample,
+                environmentProbability,
+                skyDiffuse,
+                skySpecular);
         }
-#if PT_RESTIR_DI
-        // RTXDI owns primary local-light direct illumination. Keep Baseline
-        // NEE for secondary vertices so indirect transport remains available
-        // while ReSTIR GI/PT is still an explicit fallback.
-        if (bounce > 0u && g_scene.lightOptions.x >= 0.5f)
-        {
-            float lightSelectorSample = OwenScrambledSobol1D(pixel, sampleIndex, BounceSampleDimension(bounce, SampleDimensionLightSelector));
-            float2 lightSurfaceSample = OwenScrambledSobol2D(pixel, sampleIndex, BounceSampleDimension(bounce, SampleDimensionLightSurface));
-            EvaluateAreaLightNEE(surface, viewDirection, lightSelectorSample, lightSurfaceSample, areaDiffuse, areaSpecular);
-        }
-#else
-        if (g_scene.lightOptions.x >= 0.5f)
-        {
-            float lightSelectorSample = OwenScrambledSobol1D(pixel, sampleIndex, BounceSampleDimension(bounce, SampleDimensionLightSelector));
-            float2 lightSurfaceSample = OwenScrambledSobol2D(pixel, sampleIndex, BounceSampleDimension(bounce, SampleDimensionLightSurface));
-            EvaluateAreaLightNEE(surface, viewDirection, lightSelectorSample, lightSurfaceSample, areaDiffuse, areaSpecular);
-        }
-#endif
         float3 diffuseNee = sunDiffuse + skyDiffuse + areaDiffuse;
         float3 specularNee = sunSpecular + skySpecular + areaSpecular;
         // Light sampling already evaluates both BSDF lobes at the sampled
@@ -1541,7 +2030,7 @@ float3 TracePathSample(
         float3 specularNeeContribution = throughput * specularNee;
         float3 neeContribution = diffuseNeeContribution + specularNeeContribution;
         radiance += neeContribution;
-        if (bounce == 0u)
+        if (scatteringBounces == 1u)
         {
             diffuseSignal += diffuseNeeContribution;
             specularSignal += specularNeeContribution;
@@ -1559,11 +2048,11 @@ float3 TracePathSample(
         // vertex. Do not generate a direction, evaluate PDFs/BSDF throughput,
         // or run roulette for a ray that the loop can never trace.
         bounceCount = bounce + 1u;
-        if (bounce + 1u >= maxBounces)
+        if (scatteringBounces >= maxBounces)
         {
             break;
         }
-        if (bounce == 0u && !ShouldTraceAdaptiveSecondary(pixel, payload, surface, viewDirection))
+        if (scatteringBounces == 1u && !ShouldTraceAdaptiveSecondary(pixel, payload, surface, viewDirection))
         {
             // diffuse/specular hit distances stay at their zero initialization.
             // NRD interprets that sentinel as a missing checkerboard sample and
@@ -1580,18 +2069,20 @@ float3 TracePathSample(
 
         if (sampledSpecular)
         {
-            if (bounce == 0u)
+            if (!firstContinuationClassified)
             {
                 firstContinuationWasSpecular = true;
+                firstContinuationClassified = true;
             }
             nextDirection = SampleGGXDirection(bsdfDirectionSample, surface.roughness, surface.normal, viewDirection);
             scatterConeSpread = surface.roughness * surface.roughness * 0.25f;
         }
         else
         {
-            if (bounce == 0u)
+            if (!firstContinuationClassified)
             {
                 firstContinuationWasSpecular = false;
+                firstContinuationClassified = true;
             }
             nextDirection = SampleCosineHemisphere(bsdfDirectionSample, surface.normal);
             scatterConeSpread = 0.25f;
@@ -1620,11 +2111,12 @@ float3 TracePathSample(
         }
         previousBsdfPdf = mixturePdf;
         previousSurfaceNormal = surface.normal;
+        previousContinuationWasDelta = false;
         rayOrigin = surface.position + surface.normal * g_scene.rayOptions.x;
         rayDirection = normalize(nextDirection);
         rayConeWidth = payload.rayConeWidth;
         rayConeSpread = min(max(payload.rayConeSpread, scatterConeSpread), 0.5f);
-        if (bounce + 1u >= minBounces)
+        if (scatteringBounces >= minBounces)
         {
             float continueProbability = clamp(MaxComponent(throughput), 0.05f, 0.95f);
             float rouletteSample = OwenScrambledSobol1D(pixel, sampleIndex, BounceSampleDimension(bounce, SampleDimensionRussianRoulette));
@@ -1783,11 +2275,15 @@ bool GatherAdaptiveReprojectedLuminance(
     return true;
 }
 
-[shader("raygeneration")]
-void RayGen()
+void RunPathPixel(
+    uint2 pixel,
+    uint2 dimensions,
+    uint executionMode,
+    uint taskIndex,
+    uint taskSampleIndex)
 {
-    uint2 pixel = DispatchRaysIndex().xy;
-    uint2 dimensions = DispatchRaysDimensions().xy;
+    const bool primaryVisibilityOnly = executionMode == 1u;
+    const bool compactTask = executionMode == 2u;
     uint accumulatedFrames = g_scene.frameOptions.x;
     uint maxAccumulatedFrames = max(g_scene.frameOptions.y, 1u);
     uint frameCounter = g_scene.frameOptions.w;
@@ -1801,7 +2297,8 @@ void RayGen()
     // The internal fallback owns explicit luminance moments. Its first-stage
     // classification can run before tracing; external backends use the first
     // primary/path sample plus immutable TAA history below.
-    if (adaptiveEnabled && g_scene.denoiseOptions.x > 0.5f)
+    if (!primaryVisibilityOnly && !compactTask &&
+        adaptiveEnabled && g_scene.denoiseOptions.x > 0.5f)
     {
         uint historyDomains = (uint)round(g_scene.environmentOptions.w);
         bool historyValid = (historyDomains & (HISTORY_DOMAIN_SURFACE | HISTORY_DOMAIN_DENOISER)) ==
@@ -1820,9 +2317,15 @@ void RayGen()
             totalSamples = max(totalSamples, adaptiveMax);
         }
     }
+    if (primaryVisibilityOnly || compactTask)
+    {
+        totalSamples = 1u;
+    }
     // Reserve a fixed 32-sample block per frame. Adaptive sample-count changes
     // can then neither repeat nor rewind a pixel's temporal sample sequence.
-    uint firstSampleIndex = frameCounter * 32u;
+    uint firstSampleIndex = compactTask
+        ? taskSampleIndex
+        : frameCounter * 32u;
 
     PathHitData firstHit = EmptyPathHitData();
     float3 color = 0.0f.xxx;
@@ -1856,7 +2359,10 @@ void RayGen()
         // SPP use distinct Sobol camera samples, with that jitter as a global
         // Cranley-Patterson rotation inside the pixel.
         float2 cameraJitter = g_scene.jitterOptions.xy;
-        if (i > 0u)
+        uint sampleOrdinal = compactTask
+            ? taskSampleIndex - frameCounter * 32u
+            : i;
+        if (sampleOrdinal > 0u)
         {
             float2 cameraSample = OwenScrambledSobol2D(pixel, pathSampleIndex, SampleDimensionCamera);
             cameraJitter = frac(cameraSample + g_scene.jitterOptions.xy) - 0.5f.xx;
@@ -1865,6 +2371,7 @@ void RayGen()
             pixel,
             pathSampleIndex,
             cameraJitter,
+            primaryVisibilityOnly ? 1u : 0u,
             sampleFirstHit,
             sampleDiffuse,
             sampleSpecular,
@@ -1946,6 +2453,19 @@ void RayGen()
     debugColor = ApplyMaterialFocus(debugColor, firstHit.surface.materialIndex, firstHit.hit);
     float3 currentFrameColor = color;
     float3 residualSignal = max(currentFrameColor - diffuseSignal - specularSignal, 0.0f.xxx);
+    if (compactTask)
+    {
+        SecondaryResult result;
+        result.radiance = float4(max(color, 0.0f.xxx), 1.0f);
+        result.packedSignals = uint4(
+            (f32tof16(diffuseSignal.y) << 16u) | f32tof16(diffuseSignal.x),
+            (f32tof16(specularSignal.x) << 16u) | f32tof16(diffuseSignal.z),
+            (f32tof16(specularSignal.z) << 16u) | f32tof16(specularSignal.y),
+            (f32tof16(min(specularHitDistance, 65504.0f)) << 16u) |
+                f32tof16(min(diffuseHitDistance, 65504.0f)));
+        g_secondaryResults[taskIndex] = result;
+        return;
+    }
     const bool writeRealtimeSignals = g_scene.viewOptions.w > 0.5f;
     if (writeRealtimeSignals)
     {
@@ -1961,6 +2481,15 @@ void RayGen()
 
     if (debugMode == 0u)
     {
+        if (primaryVisibilityOnly)
+        {
+            // The compact resolve owns the final accumulation update. Publish
+            // frame-local primary direct/visibility now so pixels with no
+            // secondary task (misses or checkerboard skips) remain complete.
+            debugColor = color;
+        }
+        else
+        {
 #if PT_RESTIR_DI
         // Progressive RGB accumulation and reservoir temporal reuse are
         // distinct estimators. Keep the RTXDI realtime path frame-local here;
@@ -1982,6 +2511,7 @@ void RayGen()
             g_accumulation[pixel] = float4(debugColor, 1.0f);
         }
 #endif
+        }
     }
 
     if (debugMode == 11u)
@@ -2035,6 +2565,28 @@ void RayGen()
                 firstHit.surface.materialIndex,
                 firstHit.surface.coverage)
             : 0u;
+        // These exact guides are consumed by RTXDI after the DXR pass. A
+        // refracted receiver cannot be reconstructed from camera ray * hitT.
+        g_primaryPositionCone[pixel] = firstHit.hit != 0u
+            ? float4(
+                firstHit.surface.position,
+                firstHit.surface.rayConeWidth)
+            : 0.0f.xxxx;
+        g_primaryGeometricNormal[pixel] = firstHit.hit != 0u
+            ? float4(
+                firstHit.viewDirection,
+                firstHit.surface.rayConeSpread)
+            : 0.0f.xxxx;
+        if (primaryVisibilityOnly)
+        {
+            g_primaryIdentity[pixel] = firstHit.hit != 0u
+                ? uint4(
+                    firstHit.instanceIndex,
+                    firstHit.geometryIndex,
+                    firstHit.primitiveIndex,
+                    firstHit.surface.materialIndex)
+                : 0xffffffffu.xxxx;
+        }
         // This is also the input for final TAA when every denoiser backend is
         // off. Fused NRD + TAA reconstructs directly from the split signals and
         // NRD outputs, so publishing this full-resolution fallback is redundant.
@@ -2054,6 +2606,52 @@ void RayGen()
     g_output[pixel] = float4(Tonemap(debugColor), 1.0f);
 }
 
+[shader("raygeneration")]
+void RayGen()
+{
+    RunPathPixel(
+        DispatchRaysIndex().xy,
+        DispatchRaysDimensions().xy,
+        0u,
+        0u,
+        0u);
+}
+
+[shader("raygeneration")]
+void PrimaryRayGen()
+{
+    RunPathPixel(
+        DispatchRaysIndex().xy,
+        DispatchRaysDimensions().xy,
+        1u,
+        0u,
+        0u);
+}
+
+[shader("raygeneration")]
+void SecondaryRayGen()
+{
+    uint taskIndex = DispatchRaysIndex().x;
+    SecondaryTask task = g_secondaryTasks[taskIndex];
+    uint2 dimensions = (uint2)round(g_scene.rayOptions.zw);
+    if (task.pixelIndex == 0xffffffffu ||
+        task.pixelIndex >= dimensions.x * dimensions.y)
+    {
+        SecondaryResult emptyResult = (SecondaryResult)0;
+        g_secondaryResults[taskIndex] = emptyResult;
+        return;
+    }
+    uint2 pixel = uint2(
+        task.pixelIndex % dimensions.x,
+        task.pixelIndex / dimensions.x);
+    RunPathPixel(
+        pixel,
+        dimensions,
+        2u,
+        taskIndex,
+        task.sampleIndex);
+}
+
 [shader("miss")]
 void Miss(inout RayPayload payload)
 {
@@ -2069,8 +2667,13 @@ void ShadowMiss(inout ShadowPayload payload)
 [shader("anyhit")]
 void AnyHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttributes attributes)
 {
+    RecordQualityRay(
+        DispatchRaysIndex().xy,
+        DispatchRaysDimensions().xy,
+        QualityRayAnyHit);
+    const uint geometryIndex = InstanceID() + GeometryIndex();
     if (IsAlphaTransparent(
-        GeometryIndex(),
+        geometryIndex,
         PrimitiveIndex(),
         attributes.barycentrics,
         payload.rayConeWidth,
@@ -2085,8 +2688,13 @@ void AnyHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttributes a
 [shader("anyhit")]
 void ShadowAnyHit(inout ShadowPayload payload, in BuiltInTriangleIntersectionAttributes attributes)
 {
-    if (IsAlphaTransparent(
-        GeometryIndex(),
+    RecordQualityRay(
+        DispatchRaysIndex().xy,
+        DispatchRaysDimensions().xy,
+        QualityRayAnyHit);
+    const uint geometryIndex = InstanceID() + GeometryIndex();
+    if (IsTransmissiveGeometry(geometryIndex) || IsAlphaTransparent(
+        geometryIndex,
         PrimitiveIndex(),
         attributes.barycentrics,
         payload.rayConeWidth,
@@ -2109,7 +2717,7 @@ void ClosestHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttribut
         payload.rayConeWidth,
         payload.rayConeSpread,
         payload.hitT);
-    payload.instanceIndex = InstanceID();
-    payload.geometryIndex = GeometryIndex();
+    payload.instanceIndex = InstanceIndex();
+    payload.geometryIndex = InstanceID() + GeometryIndex();
     payload.primitiveIndex = PrimitiveIndex();
 }

@@ -29,16 +29,29 @@ if (-not $testRoot.StartsWith($tempRoot, [System.StringComparison]::OrdinalIgnor
 
 New-Item -ItemType Directory -Force -Path $testRoot | Out-Null
 try {
+    $tinyRoot = Join-Path $repo 'ThirdParty\tinyexr'
+    $coreSources = Get-ChildItem -LiteralPath (Join-Path $tinyRoot 'src') -Filter '*.c' |
+        Where-Object { $_.Name -notin @('exr_freestanding.c', 'exr_spectral.c', 'exr_gpu_cuda.c', 'exr_vk_vulkan.c') } |
+        ForEach-Object { '"{0}"' -f $_.FullName }
+    $coreSources += ('"{0}"' -f (Join-Path $tinyRoot 'deps\zstd\tinyexr_zstd.c'))
+    $compileC = @(
+        ('cd /d "{0}" && cl.exe /nologo /c /TC /W3 /MD /utf-8 /D_Atomic= /D_CRT_SECURE_NO_WARNINGS' -f $testRoot),
+        ('/I"{0}\include" /I"{0}\src" /I"{0}\deps\zstd"' -f $tinyRoot),
+        ($coreSources -join ' '),
+        ('/Fo"{0}\\"' -f $testRoot)
+    ) -join ' '
     $exe = Join-Path $testRoot 'TextureLoaderTests.exe'
-    $cl = @(
-        ('cd /d "{0}" && cl.exe /nologo /std:c++20 /EHsc /W4 /WX /MD /DNOMINMAX' -f $testRoot),
+    $compileCpp = @(
+        ('cd /d "{0}" && cl.exe /nologo /c /std:c++20 /EHsc /W4 /WX /MD /utf-8 /DNOMINMAX /D_CRT_SECURE_NO_WARNINGS' -f $testRoot),
         '/Fd:"TextureLoaderTests.pdb"',
-        ('/I"{0}\Source" /I"{1}" /I"{2}"' -f $repo, $directXTexRoot, (Join-Path (Split-Path $directXTexRoot -Parent) 'Common')),
+        ('/I"{0}\Source" /I"{1}" /I"{2}" /I"{3}\include"' -f $repo, $directXTexRoot, (Join-Path (Split-Path $directXTexRoot -Parent) 'Common'), $tinyRoot),
         ('"{0}\Tests\TextureLoaderTests.cpp"' -f $repo),
         ('"{0}\Source\TextureLoader.cpp"' -f $repo),
-        ('/link /LIBPATH:"{0}" DirectXTex.lib windowscodecs.lib ole32.lib /OUT:"{1}"' -f $directXTexLib.DirectoryName, $exe)
+        ('"{0}\Source\TinyExrLoader.cpp"' -f $repo),
+        ('/Fo"{0}\\"' -f $testRoot)
     ) -join ' '
-    $compile = ('"{0}" -arch=x64 -host_arch=x64 >nul && {1}' -f $vcvars, $cl)
+    $link = ('cd /d "{0}" && link.exe /nologo *.obj /LIBPATH:"{1}" DirectXTex.lib windowscodecs.lib ole32.lib /OUT:"{2}"' -f $testRoot, $directXTexLib.DirectoryName, $exe)
+    $compile = ('"{0}" -arch=x64 -host_arch=x64 >nul && {1} && {2} && {3}' -f $vcvars, $compileC, $compileCpp, $link)
     & cmd.exe /d /c $compile
     if ($LASTEXITCODE -ne 0) {
         throw "TextureLoaderTests compilation failed with exit code $LASTEXITCODE."

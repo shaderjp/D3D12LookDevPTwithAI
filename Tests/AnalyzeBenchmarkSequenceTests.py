@@ -46,6 +46,45 @@ def write_rgba16_dds(
     path.write_bytes(b"DDS " + header + extension + b"".join(rows))
 
 
+def write_mixed_radiance_hdr(path: Path, rows: np.ndarray) -> None:
+    rows = np.asarray(rows, dtype=np.uint8)
+    height, width, channels = rows.shape
+    if channels != 4 or width < 8:
+        raise ValueError("Test HDR must contain RGBE rows at least eight pixels wide")
+    payload = bytearray(
+        b"#?RADIANCE\nFORMAT=32-bit_rle_rgbe\n\n"
+        + f"-Y {height} +X {width}\n".encode("ascii"))
+    for y, row in enumerate(rows):
+        if y % 2 == 0:
+            payload.extend((2, 2, (width >> 8) & 0xFF, width & 0xFF))
+            for channel in range(4):
+                payload.append(width)
+                payload.extend(row[:, channel].tobytes())
+        else:
+            payload.extend(row.tobytes())
+    path.write_bytes(payload)
+
+
+class RadianceHdrReaderTests(unittest.TestCase):
+    def test_loads_mixed_adaptive_rle_and_raw_scanlines(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "mixed.hdr"
+            rgbe = np.zeros((2, 8, 4), dtype=np.uint8)
+            rgbe[..., 3] = 136
+            rgbe[0, :, 0] = np.arange(1, 9, dtype=np.uint8)
+            rgbe[0, :, 1] = 2
+            rgbe[0, :, 2] = 3
+            rgbe[1, :, 0] = 4
+            rgbe[1, :, 1] = np.arange(9, 17, dtype=np.uint8)
+            rgbe[1, :, 2] = 5
+            write_mixed_radiance_hdr(path, rgbe)
+
+            expected = rgbe[..., :3].astype(np.float32)
+            np.testing.assert_array_equal(
+                ANALYZER.load_radiance_hdr(path),
+                expected)
+
+
 class DdsReaderTests(unittest.TestCase):
     def test_loads_legacy_directxtex_header(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

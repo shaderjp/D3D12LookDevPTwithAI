@@ -9,14 +9,21 @@ application shell を C++/WinRT / WinUI 3 に置き換えています。
 
 移植元は
 [shaderjp/D3D12LookDevPT](https://github.com/shaderjp/D3D12LookDevPT) commit
-`605fe99dc7bc42863c3d374d532ccc134b9f651d` です。renderer と HLSL はこの
-revision との互換性を維持します。
+`605fe99dc7bc42863c3d374d532ccc134b9f651d` です。現在の renderer / HLSL には、
+その後 ImGui 版へ入った PBRT v4 / TinyEXR import、RTXDI ReSTIR GI / checkerboard
+PT、DLSS Ray Reconstruction evaluation、dynamic internal resolution / TAAU、compact
+secondary work dispatch、BLAS compaction / instancing、shader ray counter、非同期
+scene load、MCP `2026-07-28` transport も合流しています。
 
 ## スクリーンショット
 
 | Bistro Interior | Bistro Exterior |
 |:---:|:---:|
 | ![ダークテーマのWinUI editorで描画したBistro Interior](docs/images/screenshot001.jpg) | ![ダークテーマのWinUI editorで描画したBistro Exterior](docs/images/screenshot002.jpg) |
+
+WinUI から6種類すべての render mode、quality profile / ray budget、固定・動的
+render scale、camera roll / FOV、scene load progress / cancel、7番目の alpha texture
+slot、RTXDI / DLSS の詳細 status を操作・確認できます。
 
 ## 対応環境
 
@@ -96,7 +103,8 @@ preview cube で editor を起動します。
 .\Bin\x64\Debug\D3D12LookDevPTWinUI.exe
 ```
 
-Project menu から scene、environment、schema v2 project を開けます。移植元と
+Project menu から PBRT / glTF / GLB / FBX / OBJ scene、environment、schema v2
+project を開けます。移植元と
 同じ CLI path option も使用できます。
 
 ```powershell
@@ -127,9 +135,11 @@ theme を操作できます。幅、選択 tab、表示状態、選択した the
 %APPDATA%\D3D12LookDevPTWinUI\ui.json
 ```
 
-内部描画解像度は window size と独立しています。720p / 1080p / 4K の変更時は
-DXR と swap-chain resource を resize し、WinUI は16:9の composition surface
-を aspect-fit、letterbox 表示します。
+display resolution は window size と独立しています。720p / 1080p / 4K の変更時は
+output / swap-chain resource を resize し、Path Tracing panel では別に native、
+fixed-scale、budget-driven dynamic internal resolution を選択できます。DLSS 以外の
+scaled rendering は TAAU を使います。WinUI は16:9の composition surface を
+aspect-fit、letterbox 表示します。
 
 viewport の操作は移植元と同じです。
 
@@ -182,9 +192,10 @@ project path は absolute または `baseDirectory` 基準の relative path を
 
 MCP panel から `http://127.0.0.1:<port>/mcp` の local endpoint を開始できます。
 bearer token は WinUI 専用 `settings.json` に保存します。read-only、
-confirm-mutations、allow-mutations に対応しています。confirm mode の mutation
-は MCP panel で Approve / Reject し、editor command と同じ renderer-thread
-safe point で実行されます。
+confirm-mutations、allow-mutations に対応しています。同じ endpoint で stateless
+MCP `2026-07-28`、legacy session client、resource subscription を提供します。
+confirm mode の mutation は MCP panel で Approve / Reject し、editor command と
+同じ renderer-thread safe point で実行されます。
 
 CLI から開始する例です。
 
@@ -228,6 +239,11 @@ capture、AOV、sequence 解析は [Benchmark guide](benchmarks/README.md) を�
 .\Scripts\TestBenchmarkHarness.ps1
 .\Scripts\TestBenchmarkSequenceAnalyzer.ps1
 .\Scripts\TestRendererCommandQueue.ps1
+.\Scripts\TestPbrtSceneImporter.ps1
+.\Scripts\TestTinyExrLoader.ps1
+.\Scripts\TestTransientResourceAllocator.ps1
+.\Scripts\TestMcpServer.ps1
+.\Scripts\TestPbrtDxrContracts.ps1
 ```
 
 最後の test は command coalescing、FIFO barrier、index 付き target、immutable
@@ -245,16 +261,17 @@ ImGui は含みません。その他は移植元と同じ revision へ固定し�
 | RTXDI | `274141af082050c9d0ad6e01a2e591d0d66b7955` |
 | Streamline | `e8aaa6eaac968711fb62473d4ae8256dde20919b` |
 | Assimp | `e04b60f61522e1d5594ef25addcfae7cb156f085` |
+| TinyEXR | `1b106618644dbf8a0935c2348ba51a2d863dd7c2` |
 
 RTXDI の nested dependency `Libraries/Rtxdi` は
 `a14e079c727ed8c4fd3173bd2aea8244c9d9f6d6` です。
 
 ## Shader
 
-HLSL / HLSLI は記録した移植元 commit から変更していません。
-`CompileShaders` は DXC target profile、defines、incremental inputs / outputs、
-`.cso` filename、executable 横への出力を継承します。WinUI 用 shader は追加せず、
-composition scaling は DXGI が処理します。
+ReSTIR GI / PT、DLSS preparation、compact secondary-work generation、TAAU、quality
+counter を含む現行の共有 HLSL / HLSLI pipeline を使用します。`CompileShaders` は
+全 source/output pair を追跡し、生成した `.cso` を executable 横へコピーします。
+WinUI composition は DXGI 側で行い、UI 専用 shader pass は追加しません。
 
 ## 関連文書
 

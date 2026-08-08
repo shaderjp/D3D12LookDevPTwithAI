@@ -41,6 +41,16 @@ struct SceneConstants
     float4 materialFocusOptions;
     float4 performanceOptions;
     float4 postProcessOptions;
+    float4 unifiedLightOptions;
+    float4 renderOutputOptions;
+    // Previous-frame camera data is appended to preserve the offsets of the
+    // established ABI above. GI spatial reuse reads previous-frame guides and
+    // must reconstruct the donor receiver in that same frame.
+    row_major float4x4 previousInverseViewProjection;
+    float4 previousCameraPosition;
+    row_major float4x4 environmentLightToWorld;
+    row_major float4x4 environmentWorldToLight;
+    float4 environmentTint;
 };
 
 static const uint HISTORY_DOMAIN_SURFACE = 1u << 0u;

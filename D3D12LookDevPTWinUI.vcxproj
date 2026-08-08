@@ -118,8 +118,8 @@
       <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
       <PrecompiledHeaderOutputFile>$(IntDir)pch.pch</PrecompiledHeaderOutputFile>
       <SDLCheck>true</SDLCheck>
-      <PreprocessorDefinitions>WIN32;_DEBUG;_WINDOWS;UNICODE;_UNICODE;NOMINMAX;WIN32_LEAN_AND_MEAN;D3D12LOOKDEVPT_WINUI=1;DISABLE_XAML_GENERATED_MAIN;D3D12LOOKDEVPT_WITH_DLSS=$(D3D12LookDevPtWithDlss);D3D12LOOKDEVPT_WITH_NRD=$(D3D12LookDevPtWithNrd);D3D12LOOKDEVPT_RTXDI_REQUESTED=$(D3D12LookDevPtRtxdiRequested);D3D12LOOKDEVPT_RTXDI_SDK_AVAILABLE=$(RtxdiSdkAvailable);D3D12LOOKDEVPT_WITH_RTXDI=$(D3D12LookDevPtWithRtxdi);%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>$(ProjectDir)Source\WinUI;$(GeneratedFilesDir);$(GeneratedFilesDir)Source\WinUI;$(ProjectDir)Source;$(ProjectDir)Shaders;$(ProjectDir)ThirdParty\DirectXTex\DirectXTex;$(ProjectDir)ThirdParty\DirectXTex\Common;$(ProjectDir)ThirdParty\assimp\include;$(AssimpBuildRoot)\include;$(DlssIncludeDirs)$(NrdIncludeDirs)$(RtxdiIncludeDirs)%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>WIN32;_DEBUG;_WINDOWS;UNICODE;_UNICODE;NOMINMAX;WIN32_LEAN_AND_MEAN;_CRT_SECURE_NO_WARNINGS;_Atomic=;D3D12LOOKDEVPT_WINUI=1;DISABLE_XAML_GENERATED_MAIN;D3D12LOOKDEVPT_WITH_DLSS=$(D3D12LookDevPtWithDlss);D3D12LOOKDEVPT_WITH_NRD=$(D3D12LookDevPtWithNrd);D3D12LOOKDEVPT_RTXDI_REQUESTED=$(D3D12LookDevPtRtxdiRequested);D3D12LOOKDEVPT_RTXDI_SDK_AVAILABLE=$(RtxdiSdkAvailable);D3D12LOOKDEVPT_WITH_RTXDI=$(D3D12LookDevPtWithRtxdi);%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>$(ProjectDir)Source\WinUI;$(GeneratedFilesDir);$(GeneratedFilesDir)Source\WinUI;$(ProjectDir)Source;$(ProjectDir)Shaders;$(ProjectDir)ThirdParty\DirectXTex\DirectXTex;$(ProjectDir)ThirdParty\DirectXTex\Common;$(ProjectDir)ThirdParty\assimp\include;$(AssimpBuildRoot)\include;$(ProjectDir)ThirdParty\tinyexr\include;$(ProjectDir)ThirdParty\tinyexr\src;$(ProjectDir)ThirdParty\tinyexr\deps\zstd;$(DlssIncludeDirs)$(NrdIncludeDirs)$(RtxdiIncludeDirs)%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <LanguageStandard>stdcpp20</LanguageStandard>
       <ConformanceMode>true</ConformanceMode>
       <MultiProcessorCompilation>true</MultiProcessorCompilation>
@@ -142,8 +142,8 @@
       <FunctionLevelLinking>true</FunctionLevelLinking>
       <IntrinsicFunctions>true</IntrinsicFunctions>
       <SDLCheck>true</SDLCheck>
-      <PreprocessorDefinitions>WIN32;NDEBUG;_WINDOWS;UNICODE;_UNICODE;NOMINMAX;WIN32_LEAN_AND_MEAN;D3D12LOOKDEVPT_WINUI=1;DISABLE_XAML_GENERATED_MAIN;D3D12LOOKDEVPT_WITH_DLSS=$(D3D12LookDevPtWithDlss);D3D12LOOKDEVPT_WITH_NRD=$(D3D12LookDevPtWithNrd);D3D12LOOKDEVPT_RTXDI_REQUESTED=$(D3D12LookDevPtRtxdiRequested);D3D12LOOKDEVPT_RTXDI_SDK_AVAILABLE=$(RtxdiSdkAvailable);D3D12LOOKDEVPT_WITH_RTXDI=$(D3D12LookDevPtWithRtxdi);%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>$(ProjectDir)Source\WinUI;$(GeneratedFilesDir);$(GeneratedFilesDir)Source\WinUI;$(ProjectDir)Source;$(ProjectDir)Shaders;$(ProjectDir)ThirdParty\DirectXTex\DirectXTex;$(ProjectDir)ThirdParty\DirectXTex\Common;$(ProjectDir)ThirdParty\assimp\include;$(AssimpBuildRoot)\include;$(DlssIncludeDirs)$(NrdIncludeDirs)$(RtxdiIncludeDirs)%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>WIN32;NDEBUG;_WINDOWS;UNICODE;_UNICODE;NOMINMAX;WIN32_LEAN_AND_MEAN;_CRT_SECURE_NO_WARNINGS;_Atomic=;D3D12LOOKDEVPT_WINUI=1;DISABLE_XAML_GENERATED_MAIN;D3D12LOOKDEVPT_WITH_DLSS=$(D3D12LookDevPtWithDlss);D3D12LOOKDEVPT_WITH_NRD=$(D3D12LookDevPtWithNrd);D3D12LOOKDEVPT_RTXDI_REQUESTED=$(D3D12LookDevPtRtxdiRequested);D3D12LOOKDEVPT_RTXDI_SDK_AVAILABLE=$(RtxdiSdkAvailable);D3D12LOOKDEVPT_WITH_RTXDI=$(D3D12LookDevPtWithRtxdi);%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>$(ProjectDir)Source\WinUI;$(GeneratedFilesDir);$(GeneratedFilesDir)Source\WinUI;$(ProjectDir)Source;$(ProjectDir)Shaders;$(ProjectDir)ThirdParty\DirectXTex\DirectXTex;$(ProjectDir)ThirdParty\DirectXTex\Common;$(ProjectDir)ThirdParty\assimp\include;$(AssimpBuildRoot)\include;$(ProjectDir)ThirdParty\tinyexr\include;$(ProjectDir)ThirdParty\tinyexr\src;$(ProjectDir)ThirdParty\tinyexr\deps\zstd;$(DlssIncludeDirs)$(NrdIncludeDirs)$(RtxdiIncludeDirs)%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <LanguageStandard>stdcpp20</LanguageStandard>
       <ConformanceMode>true</ConformanceMode>
       <MultiProcessorCompilation>true</MultiProcessorCompilation>
@@ -170,12 +170,45 @@
     <ClCompile Include="Source\McpServer.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="Source\NrdBackend.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="Source\PathTracingScene.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="Source\PbrtSceneImporter.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="Source\QualitySettingsJson.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="Source\RtxdiBackend.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="Source\SceneImporter.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="Source\SimpleJson.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="Source\stdafx.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="Source\TextureLoader.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="Source\TinyExrLoader.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="ThirdParty\tinyexr\deps\zstd\tinyexr_zstd.c"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="ThirdParty\tinyexr\src\exr_attr.c"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="ThirdParty\tinyexr\src\exr_b44.c"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="ThirdParty\tinyexr\src\exr_codec.c"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="ThirdParty\tinyexr\src\exr_color.c"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="ThirdParty\tinyexr\src\exr_convert.c"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="ThirdParty\tinyexr\src\exr_core.c"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="ThirdParty\tinyexr\src\exr_cpu.c"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="ThirdParty\tinyexr\src\exr_deep.c"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="ThirdParty\tinyexr\src\exr_deflate.c"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="ThirdParty\tinyexr\src\exr_fpnge.c"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="ThirdParty\tinyexr\src\exr_half.c"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="ThirdParty\tinyexr\src\exr_jph.c"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="ThirdParty\tinyexr\src\exr_jph_simd.c"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="ThirdParty\tinyexr\src\exr_jph_simd_neon.c"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="ThirdParty\tinyexr\src\exr_libdeflate.c"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="ThirdParty\tinyexr\src\exr_mip.c"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="ThirdParty\tinyexr\src\exr_piz.c"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="ThirdParty\tinyexr\src\exr_pxr24.c"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="ThirdParty\tinyexr\src\exr_reader.c"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="ThirdParty\tinyexr\src\exr_resize.c"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="ThirdParty\tinyexr\src\exr_rle.c"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="ThirdParty\tinyexr\src\exr_simd_neon.c"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="ThirdParty\tinyexr\src\exr_simd_x86.c"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="ThirdParty\tinyexr\src\exr_thread.c"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="ThirdParty\tinyexr\src\exr_tonemap.c"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="ThirdParty\tinyexr\src\exr_util_simd_neon.c"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="ThirdParty\tinyexr\src\exr_util_simd_x86.c"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="ThirdParty\tinyexr\src\exr_writer.c"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="ThirdParty\tinyexr\src\exr_zip.c"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="ThirdParty\tinyexr\src\exr_zstd.c"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="Source\WinUI\pch.cpp">
       <PrecompiledHeader>Create</PrecompiledHeader>
       <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
@@ -207,6 +240,7 @@
     <ClInclude Include="Source\McpServer.h" />
     <ClInclude Include="Source\NrdBackend.h" />
     <ClInclude Include="Source\PathTracingScene.h" />
+    <ClInclude Include="Source\PbrtSceneImporter.h" />
     <ClInclude Include="Source\ProjectPath.h" />
     <ClInclude Include="Source\QualitySettings.h" />
     <ClInclude Include="Source\QualitySettingsJson.h" />
@@ -217,6 +251,8 @@
     <ClInclude Include="Source\SimpleJson.h" />
     <ClInclude Include="Source\stdafx.h" />
     <ClInclude Include="Source\TextureLoader.h" />
+    <ClInclude Include="Source\TinyExrLoader.h" />
+    <ClInclude Include="Source\TransientResourceAllocator.h" />
     <ClInclude Include="Source\WinUI\pch.h" />
     <ClInclude Include="Source\WinUI\App.xaml.h">
       <DependentUpon>App.xaml</DependentUpon>
@@ -232,6 +268,9 @@
   </ItemGroup>
   <ItemGroup>
     <None Include="BuildThirdParty.ps1" />
+    <None Include="CMake\RtxdiRuntime\CMakeLists.txt" />
+    <None Include="config\LocalMCPChatClient.mcp.json" />
+    <None Include="Scripts\TestLocalMcpChatClientIntegration.ps1" />
     <None Include="Scripts\TestMcpServerHttp.ps1" />
     <None Include="Shaders\PathTracingABI.hlsli" />
     <None Include="Shaders\PathTracingSampling.hlsli" />
@@ -240,12 +279,16 @@
     <None Include="Shaders\PathTracingReSTIR.hlsl" />
     <None Include="Shaders\PathTracingReSTIRDI.hlsl" />
     <None Include="Shaders\PathTracingReSTIRCombined.hlsl" />
+    <None Include="Shaders\PathTracingReSTIRPT.hlsl" />
+    <None Include="Shaders\PathTracingReSTIRPTCombined.hlsl" />
     <None Include="Shaders\ReSTIRResolve.hlsl" />
     <None Include="Shaders\PathTracingDenoise.hlsl" />
+    <None Include="Shaders\PathTracingDlss.hlsl" />
     <None Include="Shaders\PathTracingNrd.hlsl" />
     <None Include="Shaders\PathTracingQualityCounters.hlsli" />
     <None Include="Shaders\PathTracingQualityCounters.hlsl" />
     <None Include="Shaders\PathTracingTaa.hlsl" />
+    <None Include="Shaders\PathTracingSecondaryWork.hlsl" />
   </ItemGroup>
   <ItemGroup>
     <ApplicationDefinition Include="Source\WinUI\App.xaml" />
@@ -282,11 +325,12 @@
   <Target Name="EnsureThirdParty" BeforeTargets="PrepareForBuild">
     <Error Condition="!Exists('$(ProjectDir)ThirdParty\DirectXTex\DirectXTex\DirectXTex.h')" Text="ThirdParty\DirectXTex is missing." />
     <Error Condition="!Exists('$(ProjectDir)ThirdParty\assimp\include\assimp\Importer.hpp')" Text="ThirdParty\assimp is missing." />
+    <Error Condition="!Exists('$(ProjectDir)ThirdParty\tinyexr\include\exr.h')" Text="ThirdParty\tinyexr is missing. Run git submodule update --init --recursive." />
     <Error Condition="'$(D3D12LookDevPtWithDlss)'=='1' And !Exists('$(StreamlineRoot)\include\sl.h')" Text="ThirdParty\Streamline is missing. Run git submodule update --init --recursive or build with /p:EnableDLSS=false." />
     <Error Condition="'$(D3D12LookDevPtWithDlss)'=='1' And !Exists('$(DlssRoot)\include\nvsdk_ngx.h')" Text="ThirdParty\DLSS is missing. Run git submodule update --init --recursive or build with /p:EnableDLSS=false." />
     <Error Condition="'$(D3D12LookDevPtWithNrd)'=='1' And !Exists('$(NrdRoot)\Include\NRD.h')" Text="ThirdParty\NRD is missing. Run git submodule update --init --recursive or build with /p:EnableNRD=false." />
     <Warning Condition="'$(D3D12LookDevPtRtxdiRequested)'=='1' And '$(D3D12LookDevPtWithRtxdi)'!='1'" Text="EnableRTXDI was requested, but the pinned RTXDI v3.0.0 runtime was not found under $(RtxdiRuntimeRoot). Building the explicit Baseline PT fallback instead." />
-    <Message Condition="'$(D3D12LookDevPtWithRtxdi)'=='1'" Importance="high" Text="RTXDI v3.0.0 ReSTIR DI enabled. ReSTIR GI/PT remains on the Baseline PT fallback." />
+    <Message Condition="'$(D3D12LookDevPtWithRtxdi)'=='1'" Importance="high" Text="RTXDI v3.0.0 ReSTIR DI/GI/PT integration enabled; per-mode evaluation remains runtime-gated." />
   </Target>
   <Target Name="BuildThirdParty" BeforeTargets="ClCompile">
     <Exec Command="powershell -NoProfile -ExecutionPolicy Bypass -File &quot;$(ProjectDir)BuildThirdParty.ps1&quot; -AssimpRoot &quot;$(AssimpRoot)&quot; -AssimpBuildRoot &quot;$(AssimpBuildRoot)&quot; -AssimpLibDir &quot;$(AssimpLibDir)&quot; -AssimpZlibDir &quot;$(AssimpZlibDir)&quot; -AssimpLibName &quot;$(AssimpLibName)&quot; -AssimpZlibName &quot;$(AssimpZlibName)&quot; -DirectXTexProject &quot;$(DirectXTexProject)&quot; -DirectXTexLibDir &quot;$(DirectXTexLibDir)&quot; -NrdRoot &quot;$(NrdRoot)&quot; -NrdBuildRoot &quot;$(NrdBuildRoot)&quot; -NrdLibDir &quot;$(NrdLibDir)&quot; -NrdLibName &quot;$(NrdLibName)&quot; -EnableNRD &quot;$(D3D12LookDevPtWithNrd)&quot; -RtxdiRuntimeRoot &quot;$(RtxdiRuntimeRoot)&quot; -RtxdiBuildRoot &quot;$(RtxdiBuildRoot)&quot; -RtxdiLibDir &quot;$(RtxdiLibDir)&quot; -RtxdiLibName &quot;$(RtxdiLibName)&quot; -EnableRTXDI &quot;$(D3D12LookDevPtWithRtxdi)&quot; -MSBuildPath &quot;$(MSBuildToolsPath)\MSBuild.exe&quot; -Configuration &quot;$(Configuration)&quot; -VisualStudioVersion &quot;$(VisualStudioVersion)&quot;" />
@@ -294,7 +338,7 @@
   <Target Name="WriteShaderBuildConfiguration" BeforeTargets="CompileShaders">
     <WriteLinesToFile File="$(IntDir)ShaderBuildConfiguration.txt" Lines="NRD=$(D3D12LookDevPtWithNrd);RTXDI=$(D3D12LookDevPtWithRtxdi)" Overwrite="true" WriteOnlyWhenDifferent="true" />
   </Target>
-  <Target Name="CompileShaders" BeforeTargets="ClCompile" Inputs="$(IntDir)ShaderBuildConfiguration.txt;Shaders\PathTracingSceneConstants.hlsli;Shaders\PathTracingSampling.hlsli;Shaders\PathTracingQualityCounters.hlsli;Shaders\PathTracingABI.hlsli;Shaders\PathTracing.hlsl;Shaders\PathTracingReSTIR.hlsl;Shaders\PathTracingReSTIRDI.hlsl;Shaders\PathTracingReSTIRCombined.hlsl;Shaders\ReSTIRResolve.hlsl;Shaders\PathTracingDenoise.hlsl;Shaders\PathTracingNrd.hlsl;Shaders\PathTracingTaa.hlsl;Shaders\PathTracingQualityCounters.hlsl" Outputs="$(CompiledShaderDir)PathTracing.lib.cso;$(CompiledShaderDir)PathTracingReSTIR.lib.cso;$(CompiledShaderDir)PathTracingReSTIRDI.lib.cso;$(CompiledShaderDir)PathTracingReSTIRCombined.lib.cso;$(CompiledShaderDir)RtxdiDiCandidate.cso;$(CompiledShaderDir)RtxdiDiTemporal.cso;$(CompiledShaderDir)RtxdiDiSpatial.cso;$(CompiledShaderDir)RtxdiDiShade.cso;$(CompiledShaderDir)PathTracingDenoiseTemporal.cso;$(CompiledShaderDir)PathTracingDenoiseAtrous0.cso;$(CompiledShaderDir)PathTracingDenoiseAtrous1.cso;$(CompiledShaderDir)PathTracingDenoiseAtrous2.cso;$(CompiledShaderDir)PathTracingDenoiseAtrous3.cso;$(CompiledShaderDir)PathTracingDenoiseAtrous4.cso;$(CompiledShaderDir)PathTracingDenoiseComposite.cso;$(CompiledShaderDir)PathTracingNrdPrepare.cso;$(CompiledShaderDir)PathTracingNrdComposite.cso;$(CompiledShaderDir)PathTracingFinalTaa.cso;$(CompiledShaderDir)PathTracingQualityCounters.cso">
+  <Target Name="CompileShaders" BeforeTargets="ClCompile" Inputs="$(IntDir)ShaderBuildConfiguration.txt;Shaders\PathTracingSceneConstants.hlsli;Shaders\PathTracingSampling.hlsli;Shaders\PathTracingQualityCounters.hlsli;Shaders\PathTracingABI.hlsli;Shaders\PathTracing.hlsl;Shaders\PathTracingReSTIR.hlsl;Shaders\PathTracingReSTIRDI.hlsl;Shaders\PathTracingReSTIRCombined.hlsl;Shaders\PathTracingReSTIRPT.hlsl;Shaders\PathTracingReSTIRPTCombined.hlsl;Shaders\ReSTIRResolve.hlsl;Shaders\PathTracingDenoise.hlsl;Shaders\PathTracingDlss.hlsl;Shaders\PathTracingNrd.hlsl;Shaders\PathTracingTaa.hlsl;Shaders\PathTracingQualityCounters.hlsl;Shaders\PathTracingSecondaryWork.hlsl" Outputs="$(CompiledShaderDir)PathTracing.lib.cso;$(CompiledShaderDir)PathTracingReSTIR.lib.cso;$(CompiledShaderDir)PathTracingReSTIRDI.lib.cso;$(CompiledShaderDir)PathTracingReSTIRCombined.lib.cso;$(CompiledShaderDir)PathTracingReSTIRPT.lib.cso;$(CompiledShaderDir)PathTracingReSTIRPTCombined.lib.cso;$(CompiledShaderDir)RtxdiDiCandidate.cso;$(CompiledShaderDir)RtxdiDiTemporal.cso;$(CompiledShaderDir)RtxdiDiSpatial.cso;$(CompiledShaderDir)RtxdiDiShade.cso;$(CompiledShaderDir)RtxdiGiInitial.cso;$(CompiledShaderDir)RtxdiGiFused.cso;$(CompiledShaderDir)RtxdiPtInitial.cso;$(CompiledShaderDir)RtxdiPtFused.cso;$(CompiledShaderDir)PathTracingDenoiseTemporal.cso;$(CompiledShaderDir)PathTracingDenoiseAtrous0.cso;$(CompiledShaderDir)PathTracingDenoiseAtrous1.cso;$(CompiledShaderDir)PathTracingDenoiseAtrous2.cso;$(CompiledShaderDir)PathTracingDenoiseAtrous3.cso;$(CompiledShaderDir)PathTracingDenoiseAtrous4.cso;$(CompiledShaderDir)PathTracingDenoiseComposite.cso;$(CompiledShaderDir)PathTracingDlssPrepare.cso;$(CompiledShaderDir)PathTracingNrdPrepare.cso;$(CompiledShaderDir)PathTracingNrdComposite.cso;$(CompiledShaderDir)PathTracingFinalTaa.cso;$(CompiledShaderDir)PathTracingQualityCounters.cso;$(CompiledShaderDir)SecondaryTaskCount.cso;$(CompiledShaderDir)SecondaryGroupScan.cso;$(CompiledShaderDir)SecondaryTaskScatter.cso;$(CompiledShaderDir)SecondaryResolve.cso">
     <MakeDir Directories="$(CompiledShaderDir)" />
     <Error Condition="!Exists('$(DxcExe)')" Text="DXC was not found at $(DxcExe). Restore NuGet packages first." />
     <PropertyGroup>
@@ -306,10 +350,16 @@
     <Exec Command="&quot;$(DxcExe)&quot; $(DxcCommon) $(DxcDebug) -T lib_6_6 -Fo &quot;$(CompiledShaderDir)PathTracingReSTIR.lib.cso&quot; &quot;$(ProjectDir)Shaders\PathTracingReSTIR.hlsl&quot;" />
     <Exec Command="&quot;$(DxcExe)&quot; $(DxcCommon) $(DxcDebug) -T lib_6_6 -Fo &quot;$(CompiledShaderDir)PathTracingReSTIRDI.lib.cso&quot; &quot;$(ProjectDir)Shaders\PathTracingReSTIRDI.hlsl&quot;" />
     <Exec Command="&quot;$(DxcExe)&quot; $(DxcCommon) $(DxcDebug) -T lib_6_6 -Fo &quot;$(CompiledShaderDir)PathTracingReSTIRCombined.lib.cso&quot; &quot;$(ProjectDir)Shaders\PathTracingReSTIRCombined.hlsl&quot;" />
+    <Exec Command="&quot;$(DxcExe)&quot; $(DxcCommon) $(DxcDebug) -T lib_6_6 -Fo &quot;$(CompiledShaderDir)PathTracingReSTIRPT.lib.cso&quot; &quot;$(ProjectDir)Shaders\PathTracingReSTIRPT.hlsl&quot;" />
+    <Exec Command="&quot;$(DxcExe)&quot; $(DxcCommon) $(DxcDebug) -T lib_6_6 -Fo &quot;$(CompiledShaderDir)PathTracingReSTIRPTCombined.lib.cso&quot; &quot;$(ProjectDir)Shaders\PathTracingReSTIRPTCombined.hlsl&quot;" />
     <Exec Command="&quot;$(DxcExe)&quot; $(DxcCommon) $(DxcDebug) -E RtxdiDiCandidateCS -T cs_6_6 -Fo &quot;$(CompiledShaderDir)RtxdiDiCandidate.cso&quot; &quot;$(ProjectDir)Shaders\ReSTIRResolve.hlsl&quot;" />
     <Exec Command="&quot;$(DxcExe)&quot; $(DxcCommon) $(DxcDebug) -E RtxdiDiTemporalCS -T cs_6_6 -Fo &quot;$(CompiledShaderDir)RtxdiDiTemporal.cso&quot; &quot;$(ProjectDir)Shaders\ReSTIRResolve.hlsl&quot;" />
     <Exec Command="&quot;$(DxcExe)&quot; $(DxcCommon) $(DxcDebug) -E RtxdiDiSpatialCS -T cs_6_6 -Fo &quot;$(CompiledShaderDir)RtxdiDiSpatial.cso&quot; &quot;$(ProjectDir)Shaders\ReSTIRResolve.hlsl&quot;" />
     <Exec Command="&quot;$(DxcExe)&quot; $(DxcCommon) $(DxcDebug) -E RtxdiDiShadeCS -T cs_6_6 -Fo &quot;$(CompiledShaderDir)RtxdiDiShade.cso&quot; &quot;$(ProjectDir)Shaders\ReSTIRResolve.hlsl&quot;" />
+    <Exec Command="&quot;$(DxcExe)&quot; $(DxcCommon) $(DxcDebug) -E RtxdiGiInitialCS -T cs_6_6 -Fo &quot;$(CompiledShaderDir)RtxdiGiInitial.cso&quot; &quot;$(ProjectDir)Shaders\ReSTIRResolve.hlsl&quot;" />
+    <Exec Command="&quot;$(DxcExe)&quot; $(DxcCommon) $(DxcDebug) -E RtxdiGiFusedCS -T cs_6_6 -Fo &quot;$(CompiledShaderDir)RtxdiGiFused.cso&quot; &quot;$(ProjectDir)Shaders\ReSTIRResolve.hlsl&quot;" />
+    <Exec Command="&quot;$(DxcExe)&quot; $(DxcCommon) $(DxcDebug) -E RtxdiPtInitialCS -T cs_6_6 -Fo &quot;$(CompiledShaderDir)RtxdiPtInitial.cso&quot; &quot;$(ProjectDir)Shaders\ReSTIRResolve.hlsl&quot;" />
+    <Exec Command="&quot;$(DxcExe)&quot; $(DxcCommon) $(DxcDebug) -E RtxdiPtFusedCS -T cs_6_6 -Fo &quot;$(CompiledShaderDir)RtxdiPtFused.cso&quot; &quot;$(ProjectDir)Shaders\ReSTIRResolve.hlsl&quot;" />
     <Exec Command="&quot;$(DxcExe)&quot; $(DxcCommon) $(DxcDebug) -E DenoiseTemporalCS -T cs_6_6 -Fo &quot;$(CompiledShaderDir)PathTracingDenoiseTemporal.cso&quot; &quot;$(ProjectDir)Shaders\PathTracingDenoise.hlsl&quot;" />
     <Exec Command="&quot;$(DxcExe)&quot; $(DxcCommon) $(DxcDebug) -E DenoiseAtrous0CS -T cs_6_6 -Fo &quot;$(CompiledShaderDir)PathTracingDenoiseAtrous0.cso&quot; &quot;$(ProjectDir)Shaders\PathTracingDenoise.hlsl&quot;" />
     <Exec Command="&quot;$(DxcExe)&quot; $(DxcCommon) $(DxcDebug) -E DenoiseAtrous1CS -T cs_6_6 -Fo &quot;$(CompiledShaderDir)PathTracingDenoiseAtrous1.cso&quot; &quot;$(ProjectDir)Shaders\PathTracingDenoise.hlsl&quot;" />
@@ -317,10 +367,15 @@
     <Exec Command="&quot;$(DxcExe)&quot; $(DxcCommon) $(DxcDebug) -E DenoiseAtrous3CS -T cs_6_6 -Fo &quot;$(CompiledShaderDir)PathTracingDenoiseAtrous3.cso&quot; &quot;$(ProjectDir)Shaders\PathTracingDenoise.hlsl&quot;" />
     <Exec Command="&quot;$(DxcExe)&quot; $(DxcCommon) $(DxcDebug) -E DenoiseAtrous4CS -T cs_6_6 -Fo &quot;$(CompiledShaderDir)PathTracingDenoiseAtrous4.cso&quot; &quot;$(ProjectDir)Shaders\PathTracingDenoise.hlsl&quot;" />
     <Exec Command="&quot;$(DxcExe)&quot; $(DxcCommon) $(DxcDebug) -E DenoiseCompositeCS -T cs_6_6 -Fo &quot;$(CompiledShaderDir)PathTracingDenoiseComposite.cso&quot; &quot;$(ProjectDir)Shaders\PathTracingDenoise.hlsl&quot;" />
+    <Exec Command="&quot;$(DxcExe)&quot; $(DxcCommon) $(DxcDebug) -E DlssPrepareCS -T cs_6_6 -Fo &quot;$(CompiledShaderDir)PathTracingDlssPrepare.cso&quot; &quot;$(ProjectDir)Shaders\PathTracingDlss.hlsl&quot;" />
     <Exec Command="&quot;$(DxcExe)&quot; $(DxcCommon) $(DxcDebug) -E NrdPrepareCS -T cs_6_6 -Fo &quot;$(CompiledShaderDir)PathTracingNrdPrepare.cso&quot; &quot;$(ProjectDir)Shaders\PathTracingNrd.hlsl&quot;" />
     <Exec Command="&quot;$(DxcExe)&quot; $(DxcCommon) $(DxcDebug) -E NrdCompositeCS -T cs_6_6 -Fo &quot;$(CompiledShaderDir)PathTracingNrdComposite.cso&quot; &quot;$(ProjectDir)Shaders\PathTracingNrd.hlsl&quot;" />
     <Exec Command="&quot;$(DxcExe)&quot; $(DxcCommon) $(DxcDebug) -E FinalTaaCS -T cs_6_6 -Fo &quot;$(CompiledShaderDir)PathTracingFinalTaa.cso&quot; &quot;$(ProjectDir)Shaders\PathTracingTaa.hlsl&quot;" />
     <Exec Command="&quot;$(DxcExe)&quot; $(DxcCommon) $(DxcDebug) -E QualityCountersCS -T cs_6_6 -Fo &quot;$(CompiledShaderDir)PathTracingQualityCounters.cso&quot; &quot;$(ProjectDir)Shaders\PathTracingQualityCounters.hlsl&quot;" />
+    <Exec Command="&quot;$(DxcExe)&quot; $(DxcCommon) $(DxcDebug) -E SecondaryTaskCountCS -T cs_6_6 -Fo &quot;$(CompiledShaderDir)SecondaryTaskCount.cso&quot; &quot;$(ProjectDir)Shaders\PathTracingSecondaryWork.hlsl&quot;" />
+    <Exec Command="&quot;$(DxcExe)&quot; $(DxcCommon) $(DxcDebug) -E SecondaryGroupScanCS -T cs_6_6 -Fo &quot;$(CompiledShaderDir)SecondaryGroupScan.cso&quot; &quot;$(ProjectDir)Shaders\PathTracingSecondaryWork.hlsl&quot;" />
+    <Exec Command="&quot;$(DxcExe)&quot; $(DxcCommon) $(DxcDebug) -E SecondaryTaskScatterCS -T cs_6_6 -Fo &quot;$(CompiledShaderDir)SecondaryTaskScatter.cso&quot; &quot;$(ProjectDir)Shaders\PathTracingSecondaryWork.hlsl&quot;" />
+    <Exec Command="&quot;$(DxcExe)&quot; $(DxcCommon) $(DxcDebug) -E SecondaryResolveCS -T cs_6_6 -Fo &quot;$(CompiledShaderDir)SecondaryResolve.cso&quot; &quot;$(ProjectDir)Shaders\PathTracingSecondaryWork.hlsl&quot;" />
   </Target>
   <Target Name="CopyAgilitySdk" AfterTargets="Build">
     <MakeDir Directories="$(OutDir)D3D12" />

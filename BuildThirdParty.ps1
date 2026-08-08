@@ -24,10 +24,21 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+function Get-VisualStudioInstallRoot {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    $directory = [System.IO.DirectoryInfo]::new((Split-Path -Parent $Path))
+    while ($directory -and $directory.Name -ine 'MSBuild') {
+        $directory = $directory.Parent
+    }
+    if (!$directory -or !$directory.Parent) {
+        throw "Could not determine the Visual Studio installation root from MSBuild path: $Path"
+    }
+    return $directory.Parent.FullName
+}
+
 function Get-CMakeExecutable {
-    $msbuildDirectory = Split-Path -Parent $MSBuildPath
-    $visualStudioCMake = [System.IO.Path]::GetFullPath(
-        (Join-Path $msbuildDirectory '..\..\..\..\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe'))
+    $visualStudioCMake = Join-Path $VisualStudioInstallRoot 'Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe'
     if (Test-Path -LiteralPath $visualStudioCMake -PathType Leaf) {
         return $visualStudioCMake
     }
@@ -93,6 +104,22 @@ function Get-NormalizedPath {
     return [System.IO.Path]::GetFullPath($Path).TrimEnd([char[]]@('\', '/'))
 }
 
+function Get-CMakeCacheValue {
+    param(
+        [Parameter(Mandatory = $true)][string]$CachePath,
+        [Parameter(Mandatory = $true)][string]$Key
+    )
+
+    $prefix = "$Key="
+    $line = Get-Content -LiteralPath $CachePath |
+        Where-Object { $_.StartsWith($prefix, [System.StringComparison]::OrdinalIgnoreCase) } |
+        Select-Object -First 1
+    if (!$line) {
+        return ''
+    }
+    return $line.Substring($prefix.Length)
+}
+
 function Test-CMakeCacheMatchesSource {
     param(
         [Parameter(Mandatory = $true)][string]$CachePath,
@@ -103,39 +130,61 @@ function Test-CMakeCacheMatchesSource {
         return $true
     }
 
-    $prefix = 'CMAKE_HOME_DIRECTORY:INTERNAL='
-    $line = Get-Content -LiteralPath $CachePath | Where-Object { $_.StartsWith($prefix, [System.StringComparison]::OrdinalIgnoreCase) } | Select-Object -First 1
-    if (!$line) {
+    $cachedSource = Get-CMakeCacheValue -CachePath $CachePath -Key 'CMAKE_HOME_DIRECTORY:INTERNAL'
+    if (!$cachedSource) {
         return $false
     }
 
-    $cachedSource = $line.Substring($prefix.Length)
     return (Get-NormalizedPath $cachedSource) -ieq (Get-NormalizedPath $SourceRoot)
 }
 
-function Reset-AssimpBuildRootIfStale {
+function Test-CMakeCacheMatchesBuildEnvironment {
+    param([Parameter(Mandatory = $true)][string]$CachePath)
+
+    if (!(Test-Path -LiteralPath $CachePath)) {
+        return $true
+    }
+
+    $cachedGenerator = Get-CMakeCacheValue -CachePath $CachePath -Key 'CMAKE_GENERATOR:INTERNAL'
+    $cachedInstance = Get-CMakeCacheValue -CachePath $CachePath -Key 'CMAKE_GENERATOR_INSTANCE:INTERNAL'
+    if (!$cachedGenerator -or !$cachedInstance) {
+        return $false
+    }
+    if ($cachedGenerator -ine $CMakeGeneratorName) {
+        return $false
+    }
+    return (Get-NormalizedPath $cachedInstance) -ieq (Get-NormalizedPath $VisualStudioInstallRoot)
+}
+
+function Reset-CMakeBuildRootIfStale {
     param(
         [Parameter(Mandatory = $true)][string]$BuildRoot,
         [Parameter(Mandatory = $true)][string]$SourceRoot,
-        [Parameter(Mandatory = $true)][string]$CachePath
+        [Parameter(Mandatory = $true)][string]$CachePath,
+        [Parameter(Mandatory = $true)][string]$SafetyRoot
     )
 
-    if (Test-CMakeCacheMatchesSource -CachePath $CachePath -SourceRoot $SourceRoot) {
+    $sourceMatches = Test-CMakeCacheMatchesSource -CachePath $CachePath -SourceRoot $SourceRoot
+    $environmentMatches = Test-CMakeCacheMatchesBuildEnvironment -CachePath $CachePath
+    if ($sourceMatches -and $environmentMatches) {
         return
     }
 
     $normalizedBuildRoot = Get-NormalizedPath $BuildRoot
-    $normalizedSourceRoot = Get-NormalizedPath $SourceRoot
+    $normalizedSafetyRoot = Get-NormalizedPath $SafetyRoot
     $comparison = [System.StringComparison]::OrdinalIgnoreCase
-    if (!$normalizedBuildRoot.StartsWith($normalizedSourceRoot + [System.IO.Path]::DirectorySeparatorChar, $comparison)) {
-        throw "Refusing to delete stale Assimp build root outside the Assimp source tree: $normalizedBuildRoot"
+    if (!$normalizedBuildRoot.StartsWith($normalizedSafetyRoot + [System.IO.Path]::DirectorySeparatorChar, $comparison)) {
+        throw "Refusing to delete stale CMake build root outside its expected source tree: $normalizedBuildRoot"
     }
 
+    Write-Host "Resetting stale CMake build root: $normalizedBuildRoot"
     Remove-Item -LiteralPath $normalizedBuildRoot -Recurse -Force
 }
 
+$VisualStudioInstallRoot = Get-VisualStudioInstallRoot -Path $MSBuildPath
 $CMakeExe = Get-CMakeExecutable
 $cmakeGeneratorArgs = Get-CMakeGeneratorArgs
+$CMakeGeneratorName = $cmakeGeneratorArgs[1]
 
 Invoke-WithMutex -Name "Local\D3D12LookDevPTWinUI-DirectXTex-$Configuration" -Body {
     $directXTexLib = Join-Path $DirectXTexLibDir 'DirectXTex.lib'
@@ -153,7 +202,7 @@ Invoke-WithMutex -Name "Local\D3D12LookDevPTWinUI-Assimp-$Configuration" -Body {
     $assimpNormalized = Join-Path $AssimpLibDir $AssimpLibName
     $zlibNormalized = Join-Path $AssimpZlibDir $AssimpZlibName
 
-    Reset-AssimpBuildRootIfStale -BuildRoot $AssimpBuildRoot -SourceRoot $AssimpRoot -CachePath $cachePath
+    Reset-CMakeBuildRootIfStale -BuildRoot $AssimpBuildRoot -SourceRoot $AssimpRoot -CachePath $cachePath -SafetyRoot $AssimpRoot
 
     if (!(Test-Path $cachePath) -or !(Test-Path $solutionPath)) {
         & $CMakeExe -S $AssimpRoot -B $AssimpBuildRoot @cmakeGeneratorArgs `
@@ -197,6 +246,7 @@ if ($buildNrd) {
 
         $nrdLib = Join-Path $NrdLibDir $NrdLibName
         $cachePath = Join-Path $NrdBuildRoot 'CMakeCache.txt'
+        Reset-CMakeBuildRootIfStale -BuildRoot $NrdBuildRoot -SourceRoot $NrdRoot -CachePath $cachePath -SafetyRoot $NrdRoot
         if (!(Test-Path -LiteralPath $cachePath)) {
             New-Item -ItemType Directory -Force -Path $NrdBuildRoot | Out-Null
             New-Item -ItemType Directory -Force -Path $NrdLibDir | Out-Null
@@ -226,43 +276,34 @@ if ($buildNrd) {
 $buildRtxdi = $EnableRTXDI -eq "1" -or $EnableRTXDI -ieq "true"
 if ($buildRtxdi) {
     Invoke-WithMutex -Name "Local\D3D12LookDevPTWinUI-RTXDI-$Configuration" -Body {
+        $rtxdiCmakeRoot = Join-Path $PSScriptRoot 'CMake\RtxdiRuntime'
         $rtxdiHeader = Join-Path $RtxdiRuntimeRoot 'Include\Rtxdi\RtxdiParameters.h'
         $rtxdiSource = Join-Path $RtxdiRuntimeRoot 'Source\ReSTIRDI.cpp'
         $rtxdiCmake = Join-Path $RtxdiRuntimeRoot 'CMakeLists.txt'
+        $rtxdiWrapperCmake = Join-Path $rtxdiCmakeRoot 'CMakeLists.txt'
         if (!$RtxdiRuntimeRoot -or !(Test-Path -LiteralPath $rtxdiHeader -PathType Leaf) -or
             !(Test-Path -LiteralPath $rtxdiSource -PathType Leaf) -or !(Test-Path -LiteralPath $rtxdiCmake -PathType Leaf)) {
             throw "RTXDI build was enabled without the pinned v3.0.0 runtime sources under ThirdParty\RTXDI\Libraries\Rtxdi."
+        }
+        if (!(Test-Path -LiteralPath $rtxdiWrapperCmake -PathType Leaf)) {
+            throw "The D3D12LookDevPTWinUI RTXDI CMake wrapper is missing: '$rtxdiWrapperCmake'."
         }
         if (!$RtxdiBuildRoot -or !$RtxdiLibDir) {
             throw "RTXDI build paths were not provided."
         }
 
         $rtxdiLib = Join-Path $RtxdiLibDir $RtxdiLibName
-        # Libraries/Rtxdi is designed to be included by RTXDI's top-level
-        # project and intentionally has no project()/cmake_minimum_required().
-        # Keep the pinned submodule untouched and generate a tiny standalone
-        # wrapper inside the ignored build tree.
-        $rtxdiWrapperRoot = Join-Path $RtxdiBuildRoot '_standalone'
-        $rtxdiWrapperCmake = Join-Path $rtxdiWrapperRoot 'CMakeLists.txt'
-        New-Item -ItemType Directory -Force -Path $rtxdiWrapperRoot | Out-Null
-        $rtxdiSourceForCmake = $RtxdiRuntimeRoot.Replace('\', '/')
-        $wrapper = @"
-cmake_minimum_required(VERSION 3.24)
-project(D3D12LookDevPTWinUI_RTXDI LANGUAGES CXX)
-add_subdirectory("$rtxdiSourceForCmake" rtxdi-runtime)
-"@
-        if (!(Test-Path -LiteralPath $rtxdiWrapperCmake) -or
-            (Get-Content -LiteralPath $rtxdiWrapperCmake -Raw) -ne $wrapper) {
-            Set-Content -LiteralPath $rtxdiWrapperCmake -Value $wrapper -Encoding UTF8 -NoNewline
-        }
-        $cachePath = Join-Path $RtxdiBuildRoot 'CMakeCache.txt'
-        if ((Test-Path -LiteralPath $cachePath) -and !(Test-CMakeCacheMatchesSource -CachePath $cachePath -SourceRoot $rtxdiWrapperRoot)) {
-            throw "RTXDI CMake cache points to a different source tree. Remove '$RtxdiBuildRoot' and rebuild."
-        }
+        # Keep older direct/runtime-wrapper caches isolated from the checked-in
+        # standalone wrapper without deleting user-owned output during migration.
+        $rtxdiStandaloneBuildRoot = Join-Path $RtxdiBuildRoot 'Standalone'
+        $rtxdiRepositoryRoot = [System.IO.Path]::GetFullPath((Join-Path $RtxdiRuntimeRoot '..\..'))
+        $cachePath = Join-Path $rtxdiStandaloneBuildRoot 'CMakeCache.txt'
+        Reset-CMakeBuildRootIfStale -BuildRoot $rtxdiStandaloneBuildRoot -SourceRoot $rtxdiCmakeRoot -CachePath $cachePath -SafetyRoot $rtxdiRepositoryRoot
         if (!(Test-Path -LiteralPath $cachePath)) {
-            New-Item -ItemType Directory -Force -Path $RtxdiBuildRoot | Out-Null
+            New-Item -ItemType Directory -Force -Path $rtxdiStandaloneBuildRoot | Out-Null
             New-Item -ItemType Directory -Force -Path $RtxdiLibDir | Out-Null
-            & $CMakeExe -S $rtxdiWrapperRoot -B $RtxdiBuildRoot @cmakeGeneratorArgs -Wno-dev `
+            & $CMakeExe -S $rtxdiCmakeRoot -B $rtxdiStandaloneBuildRoot @cmakeGeneratorArgs -Wno-dev `
+                -DD3D12LOOKDEVPT_RTXDI_RUNTIME_ROOT="$RtxdiRuntimeRoot" `
                 -DCMAKE_ARCHIVE_OUTPUT_DIRECTORY="$RtxdiLibDir" `
                 -DCMAKE_ARCHIVE_OUTPUT_DIRECTORY_DEBUG="$RtxdiLibDir" `
                 -DCMAKE_ARCHIVE_OUTPUT_DIRECTORY_RELEASE="$RtxdiLibDir"
@@ -272,7 +313,7 @@ add_subdirectory("$rtxdiSourceForCmake" rtxdi-runtime)
         }
 
         if (!(Test-Path -LiteralPath $rtxdiLib -PathType Leaf)) {
-            & $CMakeExe --build $RtxdiBuildRoot --config $Configuration --target Rtxdi --parallel
+            & $CMakeExe --build $rtxdiStandaloneBuildRoot --config $Configuration --target Rtxdi --parallel
             if ($LASTEXITCODE -ne 0) {
                 exit $LASTEXITCODE
             }

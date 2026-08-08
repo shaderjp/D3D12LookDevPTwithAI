@@ -16,14 +16,17 @@
 #include "WinUI/WinUIEditor.h"
 
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <deque>
 #include <filesystem>
+#include <future>
 #include <map>
 #include <memory>
 #include <mutex>
+#include <optional>
 
 using namespace DirectX;
 using Microsoft::WRL::ComPtr;
@@ -33,7 +36,9 @@ enum class PathTracingMode
     Pathtracing,
     ReSTIR,
     ReSTIRDI,
-    ReSTIRCombined
+    ReSTIRCombined,
+    ReSTIRPT,
+    ReSTIRPTCombined,
 };
 
 class D3D12PathTracingBackend : public DXSample, public mcp::IServerHost
@@ -102,7 +107,7 @@ private:
     // Keep every full-screen/temporal stage on its own timestamp boundary.
     // Besides making PIX captures easier to correlate, this prevents quality
     // diagnostics and history publication from being charged to the denoiser.
-    static const UINT GpuTimestampCount = 15;
+    static const UINT GpuTimestampCount = 19;
 
     enum GpuTimestamp : UINT
     {
@@ -113,6 +118,10 @@ private:
         GpuTimestampAfterRestirSpatial,
         GpuTimestampAfterRestirShade,
         GpuTimestampAfterRestirPublish,
+        GpuTimestampAfterGiInitial,
+        GpuTimestampAfterGiFused,
+        GpuTimestampAfterPtInitial,
+        GpuTimestampAfterPtFused,
         GpuTimestampAfterDenoisePrepare,
         GpuTimestampAfterDenoiseCore,
         GpuTimestampAfterDenoiseComposite,
@@ -168,15 +177,34 @@ private:
         DescriptorFinalResolvedHdrUav,
         DescriptorQualityCounterUav,
         DescriptorQualityContributionUav,
+        DescriptorRestirGiCurrentUav,
+        DescriptorRestirGiHistoryUav,
+        DescriptorRestirPtCurrentUav,
+        DescriptorRestirPtHistoryUav,
+        DescriptorDlssDepthUav,
+        DescriptorDlssMotionUav,
+        DescriptorDlssNormalRoughnessUav,
+        DescriptorDlssAlbedoUav,
+        DescriptorDlssSpecularAlbedoUav,
+        DescriptorDlssExposureUav,
+        DescriptorPrimaryPositionConeUav,
+        DescriptorPrimaryGeometricNormalUav,
+        DescriptorPrimaryIdentityUav,
+        DescriptorSecondaryTaskOffsetsUav,
+        DescriptorSecondaryGroupOffsetsUav,
+        DescriptorSecondaryTasksUav,
+        DescriptorSecondaryResultsUav,
+        DescriptorSecondaryIndirectArgsUav,
         DescriptorVertexBuffer,
         DescriptorIndexBuffer,
         DescriptorGeometryBuffer,
         DescriptorMaterialBuffer,
         DescriptorLightBuffer,
+        DescriptorInstanceBuffer,
         DescriptorTextureBase
     };
 
-    // u0..u42 form one complete shader-visible output table. A second fixed
+    // u0..u60 form one complete shader-visible output table. A second fixed
     // copy lives after the scene/texture descriptors and swaps only the
     // SurfaceGuide current/previous bindings for odd frames.
     static constexpr UINT OutputTableDescriptorCount = DescriptorVertexBuffer;
@@ -204,6 +232,18 @@ private:
         OpenEnvironment,
         OpenProject,
         SaveProjectAs,
+    };
+
+    enum class SceneLoadStage : std::uint8_t
+    {
+        Idle,
+        Parsing,
+        LoadingAssets,
+        BuildingBLAS,
+        BuildingTLAS,
+        Completed,
+        Failed,
+        Cancelled,
     };
 
     // UI edits are deferred until the next update tick. Ordering is deliberate:
@@ -257,15 +297,37 @@ private:
         XMFLOAT4 performanceOptions;
         // x=NRD Composite + Final HDR TAA fusion for this submitted frame.
         XMFLOAT4 postProcessOptions;
+        // x=power estimate for the emissive/analytic area-light family,
+        // y=defensive uniform-family mixture fraction. Sun/environment weights
+        // are evaluated from the live scene constants.
+        XMFLOAT4 unifiedLightOptions;
+        // xy=internal render dimensions, zw=display/output dimensions.
+        // rayOptions.zw remains the canonical internal dispatch size.
+        XMFLOAT4 renderOutputOptions;
+        // Appended previous-frame camera state for reconstructing receiver
+        // positions from the ping-ponged SurfaceGuide history.
+        XMFLOAT4X4 previousInverseViewProjection;
+        XMFLOAT4 previousCameraPosition;
+        // Appended so the established fields above keep their ABI offsets.
+        XMFLOAT4X4 environmentLightToWorld;
+        XMFLOAT4X4 environmentWorldToLight;
+        XMFLOAT4 environmentTint;
     };
 
-    static_assert(sizeof(SceneConstantBuffer) == 704, "SceneConstants C++/HLSL ABI size changed.");
+    static_assert(sizeof(SceneConstantBuffer) == 960, "SceneConstants C++/HLSL ABI size changed.");
     static_assert(offsetof(SceneConstantBuffer, inverseViewProjection) == 0, "SceneConstants ABI mismatch.");
     static_assert(offsetof(SceneConstantBuffer, previousViewProjection) == 128, "SceneConstants ABI mismatch.");
     static_assert(offsetof(SceneConstantBuffer, cameraPosition) == 192, "SceneConstants ABI mismatch.");
     static_assert(offsetof(SceneConstantBuffer, materialFocusOptions) == 656, "SceneConstants ABI mismatch.");
     static_assert(offsetof(SceneConstantBuffer, performanceOptions) == 672, "SceneConstants ABI mismatch.");
     static_assert(offsetof(SceneConstantBuffer, postProcessOptions) == 688, "SceneConstants ABI mismatch.");
+    static_assert(offsetof(SceneConstantBuffer, unifiedLightOptions) == 704, "SceneConstants ABI mismatch.");
+    static_assert(offsetof(SceneConstantBuffer, renderOutputOptions) == 720, "SceneConstants ABI mismatch.");
+    static_assert(offsetof(SceneConstantBuffer, previousInverseViewProjection) == 736, "SceneConstants ABI mismatch.");
+    static_assert(offsetof(SceneConstantBuffer, previousCameraPosition) == 800, "SceneConstants ABI mismatch.");
+    static_assert(offsetof(SceneConstantBuffer, environmentLightToWorld) == 816, "SceneConstants ABI mismatch.");
+    static_assert(offsetof(SceneConstantBuffer, environmentWorldToLight) == 880, "SceneConstants ABI mismatch.");
+    static_assert(offsetof(SceneConstantBuffer, environmentTint) == 944, "SceneConstants ABI mismatch.");
 
     struct GpuTexture
     {
@@ -357,6 +419,10 @@ private:
         double restirSpatialMs = -1.0;
         double restirShadeMs = -1.0;
         double restirPublishMs = -1.0;
+        double restirGiInitialMs = -1.0;
+        double restirGiFusedMs = -1.0;
+        double restirPtInitialMs = -1.0;
+        double restirPtFusedMs = -1.0;
         double denoiseMs = -1.0;
         double denoisePrepareMs = -1.0;
         double denoiseCoreMs = -1.0;
@@ -380,15 +446,25 @@ private:
     ComPtr<ID3D12RootSignature> m_globalRootSignature;
     ComPtr<ID3D12StateObject> m_stateObject;
     ComPtr<ID3D12StateObjectProperties> m_stateObjectProperties;
+    ComPtr<ID3D12CommandSignature> m_dispatchRaysCommandSignature;
     // RTXDI DI is a two-dispatch graph: candidate+temporal Pass A and
     // spatial+visibility+shade Pass B.
     ComPtr<ID3D12PipelineState> m_rtxdiDiCandidatePipeline;
     ComPtr<ID3D12PipelineState> m_rtxdiDiSpatialPipeline;
+    ComPtr<ID3D12PipelineState> m_rtxdiGiInitialPipeline;
+    ComPtr<ID3D12PipelineState> m_rtxdiGiFusedPipeline;
+    ComPtr<ID3D12PipelineState> m_rtxdiPtInitialPipeline;
+    ComPtr<ID3D12PipelineState> m_rtxdiPtFusedPipeline;
     ComPtr<ID3D12PipelineState> m_denoiseTemporalPipeline;
     std::array<ComPtr<ID3D12PipelineState>, DenoiseAtrousPipelineCount> m_denoiseAtrousPipelines;
     ComPtr<ID3D12PipelineState> m_denoiseCompositePipeline;
     ComPtr<ID3D12PipelineState> m_nrdPreparePipeline;
     ComPtr<ID3D12PipelineState> m_nrdCompositePipeline;
+    ComPtr<ID3D12PipelineState> m_dlssPreparePipeline;
+    ComPtr<ID3D12PipelineState> m_secondaryTaskCountPipeline;
+    ComPtr<ID3D12PipelineState> m_secondaryGroupScanPipeline;
+    ComPtr<ID3D12PipelineState> m_secondaryTaskScatterPipeline;
+    ComPtr<ID3D12PipelineState> m_secondaryResolvePipeline;
     ComPtr<ID3D12PipelineState> m_finalTaaPipeline;
     ComPtr<ID3D12PipelineState> m_qualityCounterPipeline;
     ComPtr<ID3D12Resource> m_renderTargets[FrameCount];
@@ -413,9 +489,16 @@ private:
     ComPtr<ID3D12Resource> m_restirReservoirCurrent;
     ComPtr<ID3D12Resource> m_restirReservoirHistory;
     ComPtr<ID3D12Resource> m_restirReservoirSpatial;
+    ComPtr<ID3D12Resource> m_restirReservoirSpatialB;
     ComPtr<ID3D12Resource> m_restirDiReservoirCurrent;
     ComPtr<ID3D12Resource> m_restirDiReservoirHistory;
     ComPtr<ID3D12Resource> m_restirDiReservoirSpatial;
+    ComPtr<ID3D12Resource> m_restirGiReservoirA;
+    ComPtr<ID3D12Resource> m_restirGiReservoirB;
+    ComPtr<ID3D12Resource> m_restirPtReservoirA;
+    ComPtr<ID3D12Resource> m_restirPtReservoirB;
+    std::array<ComPtr<ID3D12Heap>, 2> m_restirAliasHeaps;
+    UINT64 m_restirAliasHeapSize = 0;
     ComPtr<ID3D12Resource> m_signalCurrentRadiance;
     ComPtr<ID3D12Resource> m_signalDirect;
     ComPtr<ID3D12Resource> m_signalIndirect;
@@ -434,10 +517,28 @@ private:
     ComPtr<ID3D12Resource> m_taaHistoryA;
     ComPtr<ID3D12Resource> m_taaHistoryB;
     ComPtr<ID3D12Resource> m_finalResolvedHdr;
+    bool m_accumulationAliasesTaaHistory = false;
     ComPtr<ID3D12Resource> m_qualityCounterBuffer;
     ComPtr<ID3D12Resource> m_qualityContribution;
     ComPtr<ID3D12Resource> m_nrdDiffuseConfidence;
     ComPtr<ID3D12Resource> m_nrdSpecularConfidence;
+    ComPtr<ID3D12Resource> m_dlssDepth;
+    ComPtr<ID3D12Resource> m_dlssMotion;
+    ComPtr<ID3D12Resource> m_dlssNormalRoughness;
+    ComPtr<ID3D12Resource> m_dlssAlbedo;
+    ComPtr<ID3D12Resource> m_dlssSpecularAlbedo;
+    ComPtr<ID3D12Resource> m_dlssExposure;
+    ComPtr<ID3D12Resource> m_primaryPositionCone;
+    ComPtr<ID3D12Resource> m_primaryGeometricNormal;
+    ComPtr<ID3D12Resource> m_primaryIdentity;
+    ComPtr<ID3D12Resource> m_secondaryTaskOffsets;
+    ComPtr<ID3D12Resource> m_secondaryGroupOffsets;
+    ComPtr<ID3D12Resource> m_secondaryTasks;
+    ComPtr<ID3D12Resource> m_secondaryResults;
+    ComPtr<ID3D12Resource> m_secondaryIndirectArgs;
+    UINT m_secondaryTaskCapacity = 1;
+    UINT m_secondaryGroupCount = 1;
+    bool m_dlssFallbackRebuildAfterFrame = false;
     ComPtr<ID3D12QueryHeap> m_gpuTimestampQueryHeap;
     UINT m_frameIndex = 0;
     UINT m_rtvDescriptorSize = 0;
@@ -446,6 +547,10 @@ private:
     UINT m_alternateOutputTableBase = 0;
     UINT m_restirReservoirElementCount = 1;
     UINT64 m_restirReservoirBufferSize = 0;
+    UINT m_restirGiReservoirElementCount = 1;
+    UINT64 m_restirGiReservoirBufferSize = 0;
+    UINT m_restirPtReservoirElementCount = 1;
+    UINT64 m_restirPtReservoirBufferSize = 0;
     UINT m_qualityCounterTileCountX = 1;
     UINT m_qualityCounterTileCountY = 1;
     UINT m_qualityCounterTileCount = 1;
@@ -462,6 +567,10 @@ private:
     double m_gpuRestirSpatialMs = 0.0;
     double m_gpuRestirShadeMs = 0.0;
     double m_gpuRestirPublishMs = 0.0;
+    double m_gpuRestirGiInitialMs = 0.0;
+    double m_gpuRestirGiFusedMs = 0.0;
+    double m_gpuRestirPtInitialMs = 0.0;
+    double m_gpuRestirPtFusedMs = 0.0;
     double m_gpuDenoiseMs = 0.0;
     double m_gpuDenoisePrepareMs = 0.0;
     double m_gpuDenoiseCoreMs = 0.0;
@@ -478,6 +587,7 @@ private:
     Bistro::Scene m_scene;
     std::vector<Bistro::RtGeometryRecord> m_geometryRecords;
     std::vector<Bistro::RtMaterial> m_rtMaterials;
+    std::vector<Bistro::RtInstance> m_rtInstances;
     std::vector<GpuTexture> m_textures;
     std::vector<std::array<UINT, Bistro::TextureSlotCount>> m_materialTextureIndices;
     std::vector<std::array<bool, Bistro::TextureSlotCount>> m_materialTextureExists;
@@ -486,10 +596,16 @@ private:
     ComPtr<ID3D12Resource> m_geometryBuffer;
     ComPtr<ID3D12Resource> m_materialBuffer;
     ComPtr<ID3D12Resource> m_lightBuffer;
+    ComPtr<ID3D12Resource> m_instanceBuffer;
     std::vector<ComPtr<ID3D12Resource>> m_uploadBuffers;
     AccelerationStructureBuffers m_bottomLevelAs;
+    std::vector<AccelerationStructureBuffers> m_bottomLevelInstances;
     AccelerationStructureBuffers m_topLevelAs;
+    UINT64 m_blasOriginalBytes = 0;
+    UINT64 m_blasCompactedBytes = 0;
     ShaderTableInfo m_rayGenTable;
+    ShaderTableInfo m_primaryRayGenTable;
+    ShaderTableInfo m_secondaryRayGenTable;
     ShaderTableInfo m_missTable;
     ShaderTableInfo m_hitGroupTable;
 
@@ -497,6 +613,9 @@ private:
     XMFLOAT3 m_defaultCameraPosition = XMFLOAT3(-16.32f, 4.66f, -10.41f);
     float m_defaultCameraYaw = DirectX::XMConvertToRadians(18.1f);
     float m_defaultCameraPitch = DirectX::XMConvertToRadians(2.8f);
+    float m_defaultCameraRoll = 0.0f;
+    float m_cameraFovDegrees = 60.0f;
+    float m_defaultCameraFovDegrees = 60.0f;
     std::chrono::steady_clock::time_point m_lastUpdate;
     float m_lightDirection[3] = { -0.35f, -0.8f, 0.45f };
     float m_lightColor[3] = { 1.0f, 0.96f, 0.88f };
@@ -539,6 +658,7 @@ private:
     bool m_emissiveLightsEnabled = true;
     bool m_proceduralLightsEnabled = true;
     bool m_environmentMapEnabled = false;
+    bool m_environmentEqualAreaMapping = false;
     bool m_restirTemporalReuse = true;
     int m_restirSpatialReusePasses = 2;
     int m_restirSpatialRadius = 16;
@@ -642,8 +762,10 @@ private:
     bool m_resetDenoiseHistoryRequested = true;
     XMFLOAT4 m_previousCameraMotionState = XMFLOAT4(0, 0, 0, 0);
     float m_previousCameraMotionPitch = 0.0f;
+    XMFLOAT2 m_previousCameraMotionRollFov = XMFLOAT2(0.0f, 60.0f);
     XMFLOAT4 m_lastCameraAndYaw = XMFLOAT4(0, 0, 0, 0);
     float m_lastCameraPitch = 0.0f;
+    XMFLOAT2 m_lastCameraRollFov = XMFLOAT2(0.0f, 60.0f);
     XMFLOAT4 m_lastLighting = XMFLOAT4(0, 0, 0, 0);
     XMFLOAT4 m_lastGiOptions = XMFLOAT4(0, 0, 0, 0);
     XMFLOAT4 m_lastPathOptions = XMFLOAT4(0, 0, 0, 0);
@@ -662,6 +784,17 @@ private:
     rb::RayBudgetState m_rayBudgetState;
     bool m_rtxdiAvailable = false;
     std::wstring m_environmentTexturePath;
+    XMFLOAT4X4 m_environmentLightToWorld = {
+        1.0f, 0.0f, 0.0f, 0.0f,
+        0.0f, 1.0f, 0.0f, 0.0f,
+        0.0f, 0.0f, 1.0f, 0.0f,
+        0.0f, 0.0f, 0.0f, 1.0f };
+    XMFLOAT4X4 m_environmentWorldToLight = {
+        1.0f, 0.0f, 0.0f, 0.0f,
+        0.0f, 1.0f, 0.0f, 0.0f,
+        0.0f, 0.0f, 1.0f, 0.0f,
+        0.0f, 0.0f, 0.0f, 1.0f };
+    XMFLOAT3 m_environmentTint = XMFLOAT3(1.0f, 1.0f, 1.0f);
     UINT m_environmentDescriptorIndex = 0;
     uint32_t m_activeLightCount = 0;
     uint32_t m_emissiveTriangleLightCount = 0;
@@ -700,6 +833,10 @@ private:
     void CreateLightBuffer();
     void CreateMaterialBuffer();
     bool LoadScenePath(const std::wstring& path, std::string& diagnostics);
+    bool CommitImportedScene(const std::wstring& path, rb::SceneImportResult&& imported, std::string& diagnostics);
+    void BeginAsyncSceneLoad(const std::wstring& path);
+    void PollAsyncSceneLoad();
+    void CancelAsyncSceneLoad();
     bool LoadEnvironmentPath(const std::wstring& path, std::string& diagnostics);
     bool SaveProjectToDisk(const std::wstring& path);
     bool LoadProjectFromDisk(const std::wstring& path, std::string& diagnostics);
@@ -763,19 +900,30 @@ private:
     mcp::CommandResult ExecuteMcpCommand(const mcp::CommandRequest& request);
     void CreateDescriptorHeap();
     void CreateOutputResources();
+    void RecreateResolutionDependentResources();
+    void ApplyConfiguredRenderScale(bool resetDynamicScale);
+    void UpdateDynamicResolution();
+    bool UsesTemporalUpscale() const;
+    bool UsesCompactSecondaryWorkList() const;
     void CreateGlobalRootSignature();
     void CreatePathtracingStateObject();
     void CreateSceneBuffers();
     void CreateTextures();
     void BuildAccelerationStructures();
+    void BuildInstancedAccelerationStructures();
     void CreateShaderTables();
     void CreateRestirReusePipeline();
     void CreateDenoisePipeline();
+    void CreateSecondaryWorkPipelines();
     void PopulateCommandList();
     void DispatchRays();
+    void DispatchCompactSecondaryWork();
     void RunRestirReusePass();
+    void RunRestirGiPass();
+    void RunRestirPtPass();
     void RunDenoisePass();
     bool RunNrdDenoisePass();
+    bool RunDlssRayReconstructionPass();
     void RunFinalTaaPass();
     bool ShouldFuseNrdFinalTaa() const;
     void RunQualityCounterPass();
@@ -840,6 +988,8 @@ private:
     ComPtr<ID3D12Resource> CreateUavBuffer(UINT64 size, D3D12_RESOURCE_STATES initialState, const wchar_t* name);
     UINT CurrentSurfaceGuideParity() const;
     UINT LastSubmittedSurfaceGuideParity() const;
+    ID3D12Resource* AccumulationResource(UINT parity) const;
+    ID3D12Resource* FinalResolvedHdrResource(UINT parity) const;
     ID3D12Resource* SurfaceGuideAovResource(UINT plane, UINT parity) const;
     ID3D12Resource* SurfaceGuideIdentityResource(UINT parity) const;
     D3D12_GPU_DESCRIPTOR_HANDLE CurrentOutputTableGpuDescriptor() const;
@@ -861,24 +1011,39 @@ private:
     std::wstring m_startupEnvironmentPath;
     std::string m_startupMcpToken;
     UINT m_startupMcpPort = 0;
+    mcp::AuthenticationMode m_startupMcpAuthenticationMode =
+        mcp::AuthenticationMode::BearerToken;
     mcp::AccessMode m_startupMcpAccessMode = mcp::AccessMode::ConfirmMutations;
     bool m_startupMcpServer = false;
     bool m_hasStartupSettingsPath = false;
     bool m_hasCommandLineProjectPath = false;
     bool m_hasCommandLineScenePath = false;
     bool m_hasCommandLineEnvironmentPath = false;
+    bool m_hasStartupMcpAuthenticationMode = false;
     bool m_hasStartupMcpAccessMode = false;
     std::wstring m_pendingProjectPath;
     std::wstring m_pendingScenePath;
+    std::wstring m_queuedSceneLoadPath;
     std::wstring m_pendingEnvironmentPath;
     std::string m_sceneDiagnostics = "Using built-in preview scene.";
     std::string m_projectDiagnostics;
     std::string m_startupDiagnostics;
     PendingFileDialog m_pendingFileDialog = PendingFileDialog::None;
+    std::future<rb::SceneImportResult> m_sceneLoadFuture;
+    std::optional<rb::SceneImportResult> m_sceneLoadCpuResult;
+    std::atomic_bool m_sceneLoadCancelRequested = false;
+    std::atomic<SceneLoadStage> m_sceneLoadStage = SceneLoadStage::Idle;
+    std::atomic_uint64_t m_sceneLoadCompleted = 0;
+    std::atomic_uint64_t m_sceneLoadTotal = 0;
+    mutable std::mutex m_sceneLoadProgressMutex;
+    std::wstring m_sceneLoadCurrentAsset;
     UINT m_pendingResizeWidth = 0;
     UINT m_pendingResizeHeight = 0;
     UINT m_renderWidth = 0;
     UINT m_renderHeight = 0;
+    float m_activeRenderScale = 1.0f;
+    uint32_t m_dynamicResolutionOverBudgetFrames = 0;
+    uint32_t m_dynamicResolutionUnderBudgetFrames = 0;
     PendingGpuResourceRefresh m_pendingGpuResourceRefresh = PendingGpuResourceRefresh::None;
     bool m_resizePending = false;
     bool m_minimized = false;

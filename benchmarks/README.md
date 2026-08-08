@@ -11,6 +11,10 @@ yaw wrapping, and a camera cut. The matching project presets are:
 - `projects/benchmark_interactive_interior.lookdevpt.json` and
   `projects/benchmark_reference_interior.lookdevpt.json` for Bistro Interior.
 
+`bistro_exterior_static.camera.json` holds the Exterior camera for all 420
+frames. It is intended for temporal-CV captures after a long static warmup, so
+stop-and-go recovery is not mixed into the stationary-noise measurement.
+
 Example:
 
 ```powershell
@@ -48,10 +52,10 @@ The performance thresholds are GPU p95 <= 16.7 ms, GPU p99 <= 20 ms, CPU p95
 <= 4 ms (GPU fence throttling is reported separately), and frame/history
 resources <= 512 MiB. Eligibility also requires an RTX 4070, a Bistro target
 scene, `interactive_game`, Beauty view, the prescribed ray budget, active NRD
-REBLUR and active RTXDI GI+DI without fallback. Until RTXDI evaluation is fully
-wired, the run remains intentionally ineligible instead of reporting a Baseline
-fallback as a passing final-pipeline result. For a release-quality result, run
-the same path three times and use the median run when comparing builds.
+REBLUR and active RTXDI GI+DI without fallback. A Baseline fallback is
+intentionally ineligible rather than being reported as a passing final-pipeline
+result. For a release-quality result, run the same path three times and use the
+median run when comparing builds.
 
 ## Measured-frame sequences
 
@@ -115,6 +119,10 @@ CV and are reported separately; no luminance floor is applied. It requires
 NumPy and writes `temporal-analysis.json` with the unchanged 1%/3% acceptance
 gate. Supplying a matched `--reference-hdr` also evaluates the strong-edge
 10-90% width ratio against the 1.15 blur limit.
+
+The HDR reader accepts DirectXTex's adaptive output, where an individual
+scanline can fall back from channel-RLE to raw RGBE when compression would be
+larger. The sequence may legally mix both row encodings in one file.
 
 The DDS parser and mask/CV behavior can be tested with:
 

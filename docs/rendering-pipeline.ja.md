@@ -7,7 +7,7 @@ English documentation: [Rendering Pipeline Learning Guide](rendering-pipeline.md
 最初に全体像を読み、次に興味のある段階を Debug View で観察し、最後にリンクした shader を読む順番がおすすめです。
 
 > [!NOTE]
-> この文書は「目標アーキテクチャ」ではなく現在の実装を説明します。Primary Visibility は独立 pass ではなく Path Tracing RayGen 内で生成されます。RTXDI は ReSTIR DI まで、DLSS Ray Reconstruction は runtime probe までが現在の範囲です。
+> この文書は「目標アーキテクチャ」ではなく現在の実装を説明します。条件を満たす DXR 1.1 Interactive Baseline/DI frame は独立 Primary Visibility と compact secondary task graph を使い、RTXDI GI/PT、Reference Still、DXR 1.0、diagnostic run は megakernel を維持します。RTXDI は DI/GI/checkerboard PT、DLSS Ray Reconstruction は frame ごとの tag/evaluation まで実装済みです。
 
 ## 1. 2種類の出力目標
 
@@ -26,36 +26,45 @@ Interactive の画像が Reference より速く安定するのは、過去 frame
 
 ```mermaid
 flowchart LR
-    FS["FrameState / camera / jitter / history validity"] --> PT["DXR DispatchRays<br/>path tracing + first-hit guides"]
+    FS["FrameState / camera / jitter / history validity"] --> W{"Compact secondary<br/>eligible?"}
+    W -->|"yes"| PV["Primary Visibility<br/>完全な guide と ID"]
+    PV --> CW["SPP prefix scan<br/>SecondaryTask list"]
+    CW --> SI["1D ExecuteIndirect<br/>secondary task + resolve"]
+    W -->|"no"| PT["DXR megakernel<br/>path tracing + first-hit guides"]
+    SI --> G
     PT --> G["Surface guides<br/>normal, view-Z, motion, identity"]
+    SI --> S
     PT --> S["Lighting signals<br/>diffuse, specular, residual"]
     G --> R{"RTXDI ReSTIR DI<br/>active?"}
     S --> R
     R -->|"yes"| RA["Pass A<br/>candidate + temporal"]
     RA --> RB["Pass B<br/>spatial + visibility + shade"]
-    R -->|"no"| D
-    RB --> D{"Denoiser"}
+    RB --> GI["Optional RTXDI GI / PT<br/>initial + fused reuse/shading"]
+    R -->|"no"| GI
+    GI --> D{"Reconstruction"}
     D -->|"NRD"| N["NrdPrepareCS<br/>REBLUR / RELAX"]
     D -->|"Internal"| I["Temporal + moments<br/>hit-distance-aware A-Trous"]
     D -->|"Off"| O["Current HDR"]
-    N --> T["FinalTaaCS<br/>HDR resolve + sharpen"]
+    D -->|"DLSS-RR"| DL["Guide prepare + tag<br/>slEvaluateFeature"]
+    N --> T["FinalTaaCS<br/>HDR TAA/TAAU + sharpen"]
     I --> T
     O --> T
+    DL --> TM
     T --> TM["Exposure + None / Reinhard / ACES fitted<br/>gamma encoding"]
-    TM --> P["Swap-chain copy + PRESENT transition"]
-    P --> C["DXGI composition + WinUI"]
+    TM --> P["Swapchain copy + WinUI composition + Present"]
 ```
 
 実際の command list の順序は次の通りです。
 
-1. `DispatchRays`
+1. `DispatchRays`、または Primary Visibility + compact task generation + 1D `ExecuteIndirect` + pixel resolve
 2. `RunRestirReusePass`
-3. `RunDenoisePass`
-4. `RunFinalTaaPass`
-5. 通常実行とcombined / quality benchmarkでは `RunQualityCounterPass`。performance benchmark時だけ省略
-6. `SealSurfaceGuideFrame`
-7. `CopyOutputToBackBuffer`
-8. composition swap-chain bufferを`PRESENT`へtransitionしてPresent
+3. 選択 indirect algorithm の `RunRestirGiPass` / `RunRestirPtPass`
+4. `RunDenoisePass`。DLSS-RR が選択され ready の場合は prepare/evaluation も含む
+5. native reconstruction の `RunFinalTaaPass`。DLSS-RR 成功時は bypass
+6. 通常実行とcombined / quality benchmarkでは `RunQualityCounterPass`。performance benchmark時だけ省略
+7. `SealSurfaceGuideFrame`
+8. `CopyOutputToBackBuffer`
+9. WinUI の swap-chain panel 経由で Present。Render Only Mode では editor chrome を非表示
 
 Tone mapping は概念上の最終段ですが、通常は `FinalTaaCS` の末尾で出力されます。Final TAAを使わない経路では、RayGenまたはdenoiser compositeが同じ表示変換を行います。
 
@@ -80,7 +89,7 @@ DXRでは次の acceleration structure を使います。
 - BLAS: mesh geometry の三角形を探索する構造
 - TLAS: instance と BLAS をまとめてscene全体を探索する構造
 
-非alpha geometryには `D3D12_RAYTRACING_GEOMETRY_FLAG_OPAQUE` を付け、不要な AnyHit 呼び出しを避けます。alpha maskが変わる編集では、geometry flagも変わるためBLASを更新します。
+非alpha geometryには `D3D12_RAYTRACING_GEOMETRY_FLAG_OPAQUE` を付け、不要な AnyHit 呼び出しを避けます。alpha maskが変わる編集では、geometry flagも変わるためBLASを更新します。static BLAS は compaction を要求して post-build compacted size を取得し、TLAS 構築前に compact copy し、初期化後に元 result/scratch を解放します。
 
 ### 3.2 Shader stage と小さい payload
 
@@ -130,6 +139,8 @@ surface shadingは次を組み合わせます。
 - roughness下限 `0.04`: 極端なdeltaに近いhighlightによる数値不安定を避ける
 
 continuation rayはdiffuse/specularのmixtureから1つのlobeを選びます。specular方向にはHeitz方式のisotropic GGX VNDF samplingを使い、grazing angleでも可視microfacet normalを効率よくsampleします。throughputは、選択したlobeだけではなくfull BSDFを同じmixture PDFで割って更新します。
+
+PBRT `dielectric` materialは独立したdelta interface経路を使います。界面の入射／出射向きを維持して正確な非偏光Fresnel反射率を評価し、全反射とSnell屈折、radiance transportのrelative-IOR Jacobianを適用します。PBRT `thindielectric`の透過方向は変えず、2界面分の実効Fresnelを使います。これらのdelta境界はdiffuse/glossy bounce budgetを消費しません。RTXDIには屈折後の正確なworld-space受光位置と入射方向を渡します。屈折causticsは現在のestimator対象外なので、shadowとinline GI visibilityは直進透過近似のままです。
 
 ### 4.2 Next Event Estimation と MIS
 
@@ -206,7 +217,7 @@ ray tracingにはrasterizerの画面微分が自動ではありません。mip 0
 | `g_signalResidual` | emission/sky等の非filter residual RGB + metallic |
 | confidence textures | diffuse/specularそれぞれのsample・history信頼度 |
 
-resource名の `Direct` / `Indirect` は古い命名です。現在の意味はDiffuse / Specular lobeです。C++の公開semantic契約は [`RenderStabilityTypes.h`](../Source/RenderStabilityTypes.h) の `SurfaceGuides` と `LightingSignals` に定義されています。ただし公開構造体は将来拡張を含む意味の契約であり、現在のGPU packはgeometric normalとshading normal、完全な各ID、ray footprintをすべて別々には保存していません。
+resource名の `Direct` / `Indirect` は古い命名です。現在の意味はDiffuse / Specular lobeです。C++の公開semantic契約は [`RenderStabilityTypes.h`](../Source/RenderStabilityTypes.h) の `SurfaceGuides` と `LightingSignals` に定義されています。compact Primary Visibility path は追加で position + ray-cone width、geometric normal + cone spread、完全な instance/geometry/primitive/material ID を書きます。shading normal は共通 guide pack に残します。
 
 primary hit距離とsecondary hit距離は別物です。denoiserがreflectionやdiffuse lobeの空間的広がりを判断するには、そのlobeの最初のcontinuation rayがどこまで進んだかが必要です。adaptive halfでsecondaryをskipした場合はhit distance 0を「未sample」のsentinelとして使います。
 
@@ -290,7 +301,7 @@ flowchart LR
 
 Pass Aではlocal candidateをregisterに置いたままprevious reservoirとcombineし、scratch Bへ1回だけ書きます。Pass Bはscratchだけを読み、stable historyでは4近傍、young/disocclusionでは最大8近傍をcombineします。最後に選ばれたsampleはcurrent surfaceでtarget、PDF、emissive texture、BSDF、visibilityを再評価します。
 
-現在RTXDI候補になるのはemissive mesh triangleとprocedural analytic area lightです。SunとEnvironment、secondary vertexのlightingはBaseline path tracerが担当します。RTXDI ReSTIR GI/PTは未実装なので、`ReSTIR GI`名を選んでもindirectはBaseline fallbackです。詳細は [RTXDI ReSTIR DI](rtxdi.ja.md) を参照してください。
+RTXDI と Baseline は emissive mesh triangle、analytic area light、Sun、Environment の統一 light 契約を共有します。`ReSTIR GI` は Baseline one-light direct + RTXDI GI、combined は RTXDI DI + GI を実行します。詳細は [RTXDI](rtxdi.ja.md) を参照してください。
 
 ## 9. Denoiser
 
@@ -337,7 +348,7 @@ denoiserは主にsurface lightingを安定化しますが、silhouette、sky、a
 6. 成熟した静止historyだけにcontrast-adaptive sharpenを適用
 7. HDR historyを保存し、exposure、tone mapper、gammaを適用
 
-静止時の長いhistory windowはnoiseを抑えますが、早くlockしすぎるとdenoiserの初期blurまで固定します。現在はREBLURのmaturity期間中に最大32 frame程度の更新apertureを残し、その後に長い安定windowへ移行します。sharpenは設定された強度（既定値 `0.15`）を上限とし、平坦部、極端なedge、motion中には弱めます。
+静止時の長いhistory windowはnoiseを抑えますが、早くlockしすぎるとdenoiserの初期blurまで固定します。現在はREBLURのmaturity期間中に最大32 frame程度の更新apertureを残し、その後に長い安定windowへ移行します。sharpenは設定された強度を上限とし、平坦部、極端なedge、motion中には弱めます。難しいsceneで残留Monte Carlo分散を増幅しないようopt-in（既定値 `0`）です。
 
 tone mapperは `None`、Reinhard、ACES fitted curveを選択できます。ここでのACESは完全なACES色管理pipelineではありません。どれもpath estimatorを変える処理ではなく、HDR値をdisplay可能な範囲へ写像する表示変換です。
 
@@ -351,7 +362,9 @@ Interactiveはframe timeと画質を両立するため、次を動的に調整�
 - 継続してGPU budget超過: 追加sample quota、bounce、最後にsecondary shading rateを削減
 - 十分長くbudget以下: 1段階ずつ品質を復帰
 
-adaptive SPPの分類は現在RayGen内のpixel単位です。internal denoiser使用時はprevious moments、外部backend時はsample 0と検証済みTAA historyのluminance residualを使います。8×8 tile compact work listや `ExecuteIndirect` による独立secondary passはまだ実装されていません。
+adaptive SPP は pixel 単位で分類します。internal denoiser 使用時は previous moments、外部 backend 時は sample 0 と検証済み TAA history の luminance residual を使います。eligible な Interactive Baseline/DI frame では、256-thread local prefix scan と group scan で SPP count を pixel/sample 順 `SecondaryTask` list と 1D DispatchRays argument に変換します。`ExecuteIndirect` は task ごとの result を書き、8x8 pixel resolve が競合書き込みなしで平均化します。
+
+compact path は現在、保存した primary intersection から直接継続せず secondary task ごとに完全な camera sample を再 trace します。workload graph と exact primary AOV 契約は実装済みですが、性能最適化の達成はまだ主張しません。DXR 1.0、Reference Still、RTXDI GI/PT、quality diagnostics は full-dispatch megakernel を使います。
 
 `adaptive_half` はprimary visibilityとprimary vertex direct lightingをfull resolutionに保ち、BSDF continuation以降だけをcheckerboardで半分skipします。ただし次はfull-rateへ昇格します。
 
@@ -365,7 +378,7 @@ adaptive SPPの分類は現在RayGen内のpixel単位です。internal denoiser�
 
 1 sppでは、ごく低確率の高energy pathが単発のfireflyになります。Interactiveではluminance limitを超えたpath contributionへ共通scaleを掛けます。
 
-重要なのは、BeautyだけをclampせずDiffuse/Specular信号にも同じscaleを掛けることです。そうしないとdenoiserが見る信号と最終推定値のenergyが一致しません。quality benchmarkは圧縮前後energyを記録します。
+重要なのは、BeautyだけをclampせずDiffuse/Specular信号にも同じscaleを掛けることです。そうしないとdenoiserが見る信号と最終推定値のenergyが一致しません。external denoiser のmaterial demodulationでfiltered outlierが再増幅される場合があるため、Final TAA前のHDR reconstruction境界で同じluminance契約を1回だけ再適用します。quality benchmarkはestimator圧縮前後のenergyを記録します。
 
 Reference Stillではlimitを0にしてcontribution compressionとtemporal clampを無効化します。
 
@@ -377,8 +390,10 @@ Reference Stillではlimitを0にしてcontribution compressionとtemporal clamp
 |---|---|
 | `Baseline PT` | Baseline MIS direct + indirect |
 | `ReSTIR DI` | RTXDI local-light DI + Baseline indirect / Sun / Environment |
-| `ReSTIR GI` | Baseline direct + indirect。ReSTIR GI/PTは未実装 |
-| `ReSTIR GI + DI` | RTXDI local-light DI + Baseline indirect。GI/PTはfallback |
+| `ReSTIR GI` | Baseline one-light direct + RTXDI GI |
+| `ReSTIR GI + DI` | RTXDI DI + RTXDI GI |
+| `ReSTIR PT` | Baseline one-light direct + checkerboard RTXDI PT |
+| `ReSTIR PT + DI` | RTXDI DI + checkerboard RTXDI PT |
 
 RTXDIをbuildしていない、runtime ABI checkに失敗、`restirBackend: off`、またはReference Stillの場合はBaseline PTへfallbackします。
 
@@ -403,7 +418,7 @@ RTXDIをbuildしていない、runtime ABI checkに失敗、`restirBackend: off`
 - fused 2-pass ReSTIR DIとreservoir publish copy削除
 - Surface Guideのfull-resolution history copy削除
 - 通常NRD BeautyでCompositeとFinal TAAを融合
-- WinUI compositionをrendererのGPU command listから分離し、Render Only Modeではeditor chromeをcollapse
+- 非表示の WinUI editor panel を更新せず、Render Only Mode では editor chrome を collapse
 - performance benchmarkでは全画面quality counterを実行しない
 
 これらの効果は `Diagnostics / Stats` とbenchmarkのpass別timestampで確認できます。
@@ -440,29 +455,29 @@ Beautyだけを見ると、問題がsampling、guide、denoiser、TAAのどこ�
 | path loop、BSDF、MIS、ray cone、AOV出力 | [`PathTracingABI.hlsli`](../Shaders/PathTracingABI.hlsli) |
 | Sobol / Owen sampling | [`PathTracingSampling.hlsli`](../Shaders/PathTracingSampling.hlsli) |
 | RTXDI 2-pass ReSTIR DI | [`ReSTIRResolve.hlsl`](../Shaders/ReSTIRResolve.hlsl) |
+| RTXDI GI / checkerboard PT | [`PathTracingReSTIR.hlsl`](../Shaders/PathTracingReSTIR.hlsl)、[`PathTracingReSTIRPT.hlsl`](../Shaders/PathTracingReSTIRPT.hlsl) |
+| Primary Visibility と compact secondary task | [`PathTracingSecondaryWork.hlsl`](../Shaders/PathTracingSecondaryWork.hlsl) |
 | internal temporal / A-Trous | [`PathTracingDenoise.hlsl`](../Shaders/PathTracingDenoise.hlsl) |
 | NRD input pack / composite | [`PathTracingNrd.hlsl`](../Shaders/PathTracingNrd.hlsl) |
-| HDR TAA / sharpen / tone map | [`PathTracingTaa.hlsl`](../Shaders/PathTracingTaa.hlsl) |
+| HDR TAA/TAAU / sharpen / tone map | [`PathTracingTaa.hlsl`](../Shaders/PathTracingTaa.hlsl) |
+| DLSS-RR guide prepare | [`PathTracingDlss.hlsl`](../Shaders/PathTracingDlss.hlsl) |
 | NRD SDK bridge | [`NrdBackend.cpp`](../Source/NrdBackend.cpp) |
 | RTXDI SDK/build boundary | [`RtxdiBackend.cpp`](../Source/RtxdiBackend.cpp) |
 | texture mipとalpha coverage | [`TextureLoader.cpp`](../Source/TextureLoader.cpp) |
 
 ## 17. 現在の制限
 
-次は将来拡張であり、現在実装済みとして扱わないでください。
+次は将来拡張であり、現在完了済みとして扱わないでください。
 
-- 独立したPrimary Visibility passとcompact secondary work list
-- geometric normalとshading normalを分離したAOV、完全なinstance/material/primitive ID
-- RTXDI ReSTIR PT / GI
-- Sun / Environmentを含む統一RTXDI candidate table
-- secondary one-light mixture MIS
-- BLAS compaction
-- hardware traversal / AnyHitの実ray counter
+- camera sample を再 trace せず、保存済み primary intersection から compact secondary task を継続する最適化
+- 現在の reconnection target shift を超える、RTXDI Full Sample 相当の完全な PT hybrid-shift path replay
 - moving instance、skinning、continuous deformation用previous transform
-- DLSS Ray Reconstructionのframe resource tagとevaluation
-- dynamic resolution、TAAU、低解像度NRD
+- NVIDIA 発行 NGX application ID と対応 GPU/failure matrix を使う active DLSS-RR 認証
+- 全必須 Bistro/HDRI/material scene の temporal/reference 品質 acceptance
 - DXR非対応GPU向けのraster fallback
 - UI/JSONに残る `movingJitterScale` の実jitter振幅への反映
+
+shader counter は primary、secondary、shadow、DI/GI/PT visibility、AnyHit invocation を報告します。標準 DXR は BVH node visit 数を公開しないため、hardware traversal とは表記しません。
 
 また、optional backendが「起動できる」ことと、すべてのsceneで1080p60、blur、ghostingの品質gateを満たすことは別です。固定camera path、high-SPP reference、pass timingを使ってsceneごとに検証する必要があります。
 

@@ -1,9 +1,11 @@
 #include "stdafx.h"
 #include "D3D12PathTracingBackend.h"
 #include "DenoiseSettingsJson.h"
+#include "PbrtSceneImporter.h"
 #include "ProjectPath.h"
 
 #include "TextureLoader.h"
+#include "TransientResourceAllocator.h"
 
 #include <DirectXTex.h>
 
@@ -40,6 +42,8 @@ namespace
     constexpr DXGI_FORMAT ReferenceAccumulationFormat = DXGI_FORMAT_R32G32B32A32_FLOAT;
     constexpr DXGI_FORMAT SignalFormat = DXGI_FORMAT_R16G16B16A16_FLOAT;
     constexpr UINT RestirReservoirStride = 24u; // sizeof(RTXDI_PackedDIReservoir)
+    constexpr UINT RestirGiReservoirStride = 32u; // sizeof(RTXDI_PackedGIReservoir)
+    constexpr UINT RestirPtReservoirStride = 64u; // sizeof(RTXDI_PackedPTReservoir)
 
     // Mirrors RayPayload/ShadowPayload in PathTracingABI.hlsli. These host-side
     // definitions turn accidental HLSL ABI growth into an explicit state-object
@@ -67,6 +71,8 @@ namespace
     static_assert(offsetof(ShadowPayloadAbi, rayConeSpread) == 8u);
 
     const wchar_t* RayGenShaderName = L"RayGen";
+    const wchar_t* PrimaryRayGenShaderName = L"PrimaryRayGen";
+    const wchar_t* SecondaryRayGenShaderName = L"SecondaryRayGen";
     const wchar_t* MissShaderName = L"Miss";
     const wchar_t* ShadowMissShaderName = L"ShadowMiss";
     const wchar_t* ClosestHitShaderName = L"ClosestHit";
@@ -97,7 +103,9 @@ namespace
 
     bool UsesRestirReuse(PathTracingMode mode)
     {
-        return mode == PathTracingMode::ReSTIR || mode == PathTracingMode::ReSTIRDI || mode == PathTracingMode::ReSTIRCombined;
+        return mode == PathTracingMode::ReSTIR || mode == PathTracingMode::ReSTIRDI ||
+            mode == PathTracingMode::ReSTIRCombined || mode == PathTracingMode::ReSTIRPT ||
+            mode == PathTracingMode::ReSTIRPTCombined;
     }
 
     bool UsesRestirGI(PathTracingMode mode)
@@ -105,15 +113,27 @@ namespace
         return mode == PathTracingMode::ReSTIR || mode == PathTracingMode::ReSTIRCombined;
     }
 
-    bool UsesRestirDI(PathTracingMode mode)
+    bool UsesRestirPT(PathTracingMode mode)
     {
-        return mode == PathTracingMode::ReSTIRDI || mode == PathTracingMode::ReSTIRCombined;
+        return mode == PathTracingMode::ReSTIRPT || mode == PathTracingMode::ReSTIRPTCombined;
     }
 
-    constexpr const char* RenderModeLabels[] = { "Baseline PT", "ReSTIR GI", "ReSTIR DI", "ReSTIR GI + DI" };
-    constexpr const char* RenderModeValues[] = { "baseline", "restir_gi", "restir_di", "restir_gi_di" };
-    constexpr const char* TextureSlotLabels[] = { "Base Color", "Normal", "Roughness", "Metallic", "Occlusion", "Emissive" };
-    constexpr const char* TextureSlotKeys[] = { "baseColor", "normal", "roughness", "metallic", "occlusion", "emissive" };
+    bool UsesRestirDI(PathTracingMode mode)
+    {
+        return mode == PathTracingMode::ReSTIRDI || mode == PathTracingMode::ReSTIRCombined ||
+            mode == PathTracingMode::ReSTIRPTCombined;
+    }
+
+    constexpr const char* RenderModeLabels[] =
+    {
+        "Baseline PT", "ReSTIR GI", "ReSTIR DI", "ReSTIR GI + DI", "ReSTIR PT", "ReSTIR PT + DI"
+    };
+    constexpr const char* RenderModeValues[] =
+    {
+        "baseline", "restir_gi", "restir_di", "restir_gi_di", "restir_pt", "restir_pt_di"
+    };
+    constexpr const char* TextureSlotLabels[] = { "Base Color", "Normal", "Roughness", "Metallic", "Occlusion", "Emissive", "Alpha" };
+    constexpr const char* TextureSlotKeys[] = { "baseColor", "normal", "roughness", "metallic", "occlusion", "emissive", "alpha" };
     constexpr const char* MaterialFocusLabels[] = { "Normal", "Isolate", "Dim" };
     constexpr const char* ToneMapperLabels[] = { "None", "Reinhard", "ACES" };
     constexpr const char* DebugViewLabels[] =
@@ -128,7 +148,8 @@ namespace
         "Temporal Output Detail", "A-Trous Output", "Reactive Mask", "History Match", "History Confidence",
         "NRD World Normal", "NRD Roughness", "NRD Linear View-Z", "NRD 2.5D Motion",
         "NRD Disocclusion / History", "NRD Input Validation", "TAA History Length",
-        "TAA History Acceptance"
+        "TAA History Acceptance", "GI Weight", "GI Age", "GI Validity",
+        "GI Temporal Acceptance", "GI Initial vs Resampled"
     };
     constexpr int DebugViewMax = static_cast<int>(_countof(DebugViewLabels)) - 1;
 
@@ -241,6 +262,10 @@ namespace
             return "ReSTIR DI";
         case PathTracingMode::ReSTIRCombined:
             return "ReSTIR GI + DI";
+        case PathTracingMode::ReSTIRPT:
+            return "ReSTIR PT";
+        case PathTracingMode::ReSTIRPTCombined:
+            return "ReSTIR PT + DI";
         default:
             return "Path Tracing";
         }
@@ -263,6 +288,14 @@ namespace
         if (name == "ReSTIR GI + DI" || name == "restir_gi_di" || name == "combined")
         {
             return PathTracingMode::ReSTIRCombined;
+        }
+        if (name == "ReSTIR PT" || name == "restir_pt")
+        {
+            return PathTracingMode::ReSTIRPT;
+        }
+        if (name == "ReSTIR PT + DI" || name == "restir_pt_di")
+        {
+            return PathTracingMode::ReSTIRPTCombined;
         }
         return fallback;
     }
@@ -341,7 +374,7 @@ namespace
             return static_cast<wchar_t>(std::towlower(ch));
         });
         return ext == L".png" || ext == L".jpg" || ext == L".jpeg" || ext == L".tga" ||
-            ext == L".dds" || ext == L".hdr" || ext == L".bmp";
+            ext == L".dds" || ext == L".hdr" || ext == L".exr" || ext == L".bmp";
     }
 
     std::wstring MaterialPresetDirectory()
@@ -988,26 +1021,106 @@ namespace
         scene.assetRoot = std::filesystem::path(imported.path).parent_path().wstring();
         scene.boundsMin = imported.boundsMin;
         scene.boundsMax = imported.boundsMax;
-        scene.vertices.reserve(imported.vertices.size());
-        for (const rb::SceneVertex& src : imported.vertices)
+        if (!imported.meshes.empty())
         {
-            Bistro::Vertex vertex;
-            vertex.position = src.position;
-            vertex.normal = src.normal;
-            vertex.tangent = src.tangent;
-            vertex.texcoord = src.texcoord;
-            scene.vertices.push_back(vertex);
+            std::size_t totalVertices = 0;
+            std::size_t totalIndices = 0;
+            std::size_t totalDraws = 0;
+            for (const rb::SceneMesh& mesh : imported.meshes)
+            {
+                if (mesh.vertices.size() > UINT32_MAX || mesh.indices.size() > UINT32_MAX || mesh.draws.size() > UINT32_MAX ||
+                    mesh.vertices.size() > std::numeric_limits<std::size_t>::max() - totalVertices ||
+                    mesh.indices.size() > std::numeric_limits<std::size_t>::max() - totalIndices ||
+                    mesh.draws.size() > std::numeric_limits<std::size_t>::max() - totalDraws)
+                {
+                    throw std::runtime_error("Imported scene exceeds addressable CPU mesh-buffer size.");
+                }
+                totalVertices += mesh.vertices.size();
+                totalIndices += mesh.indices.size();
+                totalDraws += mesh.draws.size();
+            }
+            if (totalVertices > UINT32_MAX || totalIndices > UINT32_MAX)
+            {
+                throw std::runtime_error("Imported scene exceeds 32-bit GPU mesh-buffer addressing.");
+            }
+            if (totalDraws >= (1u << 24u))
+            {
+                throw std::runtime_error("Imported scene exceeds the DXR 24-bit global geometry limit.");
+            }
+            if (totalVertices > std::numeric_limits<UINT64>::max() / sizeof(Bistro::Vertex) ||
+                totalIndices > std::numeric_limits<UINT64>::max() / sizeof(uint32_t))
+            {
+                throw std::runtime_error("Imported scene GPU allocation size overflowed.");
+            }
+            scene.vertices.reserve(totalVertices);
+            scene.indices.reserve(totalIndices);
+            scene.draws.reserve(totalDraws);
+            scene.meshes.reserve(imported.meshes.size());
+            for (const rb::SceneMesh& sourceMesh : imported.meshes)
+            {
+                if (scene.vertices.size() > UINT32_MAX || scene.indices.size() > UINT32_MAX || scene.draws.size() > UINT32_MAX)
+                {
+                    throw std::runtime_error("Imported scene exceeds 32-bit mesh-buffer addressing.");
+                }
+                Bistro::MeshRange mesh;
+                mesh.vertexOffset = static_cast<uint32_t>(scene.vertices.size());
+                mesh.vertexCount = static_cast<uint32_t>(sourceMesh.vertices.size());
+                mesh.indexOffset = static_cast<uint32_t>(scene.indices.size());
+                mesh.indexCount = static_cast<uint32_t>(sourceMesh.indices.size());
+                mesh.drawOffset = static_cast<uint32_t>(scene.draws.size());
+                mesh.drawCount = static_cast<uint32_t>(sourceMesh.draws.size());
+                mesh.boundsMin = sourceMesh.boundsMin;
+                mesh.boundsMax = sourceMesh.boundsMax;
+                for (const rb::SceneVertex& src : sourceMesh.vertices)
+                {
+                    scene.vertices.push_back({ src.position, src.normal, src.tangent, src.texcoord });
+                }
+                for (const uint32_t localIndex : sourceMesh.indices)
+                {
+                    if (localIndex >= sourceMesh.vertices.size()) throw std::runtime_error("Imported mesh index is out of bounds.");
+                    scene.indices.push_back(mesh.vertexOffset + localIndex);
+                }
+                for (const rb::SceneDraw& src : sourceMesh.draws)
+                {
+                    scene.draws.push_back({ src.indexCount, mesh.indexOffset + src.startIndex, 0, src.materialIndex });
+                }
+                scene.meshes.push_back(mesh);
+            }
+            scene.instances.reserve(imported.instances.size());
+            for (const rb::SceneInstance& src : imported.instances)
+            {
+                scene.instances.push_back({ src.meshIndex, src.transform, src.normalTransform });
+            }
         }
-        scene.indices = imported.indices;
-        scene.draws.reserve(imported.draws.size());
-        for (const rb::SceneDraw& src : imported.draws)
+        else
         {
-            Bistro::DrawItem draw;
-            draw.indexCount = src.indexCount;
-            draw.startIndex = src.startIndex;
-            draw.baseVertex = src.baseVertex;
-            draw.materialIndex = src.materialIndex;
-            scene.draws.push_back(draw);
+            scene.vertices.reserve(imported.vertices.size());
+            for (const rb::SceneVertex& src : imported.vertices)
+            {
+                scene.vertices.push_back({ src.position, src.normal, src.tangent, src.texcoord });
+            }
+            scene.indices = imported.indices;
+            for (const rb::SceneDraw& src : imported.draws)
+            {
+                scene.draws.push_back({ src.indexCount, src.startIndex, src.baseVertex, src.materialIndex });
+            }
+        }
+        scene.hasAuthoredLighting = imported.hasAuthoredLighting;
+        scene.analyticLights.reserve(imported.lights.size());
+        for (const rb::SceneLight& sourceLight : imported.lights)
+        {
+            Bistro::AnalyticLight light;
+            light.type = sourceLight.type == rb::SceneLightType::Spot
+                ? Bistro::AnalyticLightType::Spot
+                : sourceLight.type == rb::SceneLightType::Distant
+                    ? Bistro::AnalyticLightType::Distant
+                    : Bistro::AnalyticLightType::Point;
+            light.position = sourceLight.position;
+            light.direction = sourceLight.direction;
+            light.radiance = sourceLight.radiance;
+            light.coneAngleDegrees = sourceLight.coneAngleDegrees;
+            light.coneDeltaDegrees = sourceLight.coneDeltaDegrees;
+            scene.analyticLights.push_back(light);
         }
         scene.materials.reserve(imported.materials.size());
         for (const rb::SceneMaterial& src : imported.materials)
@@ -1020,6 +1133,7 @@ namespace
             material.textures[Bistro::TextureSlotMetallic] = src.assignment.textureOverrideEnabled[static_cast<size_t>(rb::TextureSlot::Metallic)] ? src.assignment.textureOverrides[static_cast<size_t>(rb::TextureSlot::Metallic)] : src.metallicTexturePath;
             material.textures[Bistro::TextureSlotOcclusion] = src.assignment.textureOverrideEnabled[static_cast<size_t>(rb::TextureSlot::Occlusion)] ? src.assignment.textureOverrides[static_cast<size_t>(rb::TextureSlot::Occlusion)] : src.occlusionTexturePath;
             material.textures[Bistro::TextureSlotEmissive] = src.assignment.textureOverrideEnabled[static_cast<size_t>(rb::TextureSlot::Emissive)] ? src.assignment.textureOverrides[static_cast<size_t>(rb::TextureSlot::Emissive)] : src.emissiveTexturePath;
+            material.textures[Bistro::TextureSlotAlpha] = src.assignment.textureOverrideEnabled[static_cast<size_t>(rb::TextureSlot::Alpha)] ? src.assignment.textureOverrides[static_cast<size_t>(rb::TextureSlot::Alpha)] : src.alphaTexturePath;
             material.baseColorFactor = XMFLOAT4(src.assignment.baseColorFactor[0], src.assignment.baseColorFactor[1], src.assignment.baseColorFactor[2], src.assignment.baseColorFactor[3]);
             material.emissiveFactor = XMFLOAT4(src.assignment.emissiveFactor[0], src.assignment.emissiveFactor[1], src.assignment.emissiveFactor[2], src.assignment.emissiveFactor[3]);
             material.roughnessFactor = src.assignment.roughnessFactor;
@@ -1028,7 +1142,12 @@ namespace
             material.normalStrength = src.assignment.normalStrength;
             material.alphaCutoff = src.assignment.alphaCutoff;
             material.alphaMasked = src.assignment.alphaMode == rb::AlphaMode::Mask || src.assignment.baseColorFactor[3] < 0.99f;
+            material.twoSidedEmission = src.twoSidedEmission;
             material.packedOcclusionRoughnessMetallic = src.assignment.packedOcclusionRoughnessMetallic;
+            material.transmissionFactor = src.transmissionFactor;
+            material.indexOfRefraction = src.indexOfRefraction;
+            material.thinDielectric = src.thinDielectric;
+            material.uvScaleOffset = src.uvScaleOffset;
             scene.materials.push_back(material);
         }
         if (scene.materials.empty())
@@ -1082,7 +1201,8 @@ void D3D12PathTracingBackend::OnInit()
     LoadPipeline();
     LoadAssets();
     LoadMcpUserSettings();
-    if (m_startupMcpPort > 0 || !m_startupMcpToken.empty() || m_hasStartupMcpAccessMode)
+    if (m_startupMcpPort > 0 || !m_startupMcpToken.empty() ||
+        m_hasStartupMcpAuthenticationMode || m_hasStartupMcpAccessMode)
     {
         std::lock_guard<std::mutex> lock(m_mcpSettingsMutex);
         if (m_startupMcpPort > 0)
@@ -1092,6 +1212,11 @@ void D3D12PathTracingBackend::OnInit()
         if (!m_startupMcpToken.empty())
         {
             m_mcpSettings.token = m_startupMcpToken;
+        }
+        if (m_hasStartupMcpAuthenticationMode)
+        {
+            m_mcpSettings.authenticationMode =
+                m_startupMcpAuthenticationMode;
         }
         if (m_hasStartupMcpAccessMode)
         {
@@ -1245,8 +1370,8 @@ void D3D12PathTracingBackend::Resize(UINT width, UINT height)
 
     m_width = width;
     m_height = height;
-    m_renderWidth = width;
-    m_renderHeight = height;
+    m_dlssBackendRuntime.UpdateMode(m_width, m_height, m_dlssMode);
+    ApplyConfiguredRenderScale(false);
     m_aspectRatio = static_cast<float>(m_width) / static_cast<float>(m_height);
     m_viewport = CD3DX12_VIEWPORT(0.0f, 0.0f, static_cast<float>(m_width), static_cast<float>(m_height));
     m_scissorRect = CD3DX12_RECT(0, 0, static_cast<LONG>(m_width), static_cast<LONG>(m_height));
@@ -1254,11 +1379,161 @@ void D3D12PathTracingBackend::Resize(UINT width, UINT height)
     constexpr UINT flags =
         DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT;
     ThrowIfFailed(m_swapChain->ResizeBuffers(FrameCount, m_width, m_height, BackBufferFormat, flags));
-    m_dlssBackendRuntime.UpdateMode(m_width, m_height, m_dlssMode);
     m_nrdBackendRuntime.Resize(m_device.Get(), m_renderWidth, m_renderHeight);
     m_frameIndex = m_swapChain->GetCurrentBackBufferIndex();
     CreateRenderTargetViews();
     CreateGpuResourcesForCurrentScene();
+}
+
+bool D3D12PathTracingBackend::UsesTemporalUpscale() const
+{
+    return m_qualitySettings.qualityProfile != rb::QualityProfile::ReferenceStill &&
+        (m_renderWidth != m_width || m_renderHeight != m_height);
+}
+
+bool D3D12PathTracingBackend::UsesCompactSecondaryWorkList() const
+{
+    const bool qualityDiagnostics = m_benchmarkHarness &&
+        lookdevpt::benchmark::IncludesQuality(m_benchmarkOptions.benchmarkKind);
+    return m_qualitySettings.qualityProfile == rb::QualityProfile::InteractiveGame &&
+        m_raytracingTier >= D3D12_RAYTRACING_TIER_1_1 &&
+        !UsesRestirGI(m_mode) &&
+        !UsesRestirPT(m_mode) &&
+        m_maxPathBounces > 1 &&
+        m_debugViewMode == 0 &&
+        !qualityDiagnostics;
+}
+
+void D3D12PathTracingBackend::ApplyConfiguredRenderScale(bool resetDynamicScale)
+{
+    const DlssStatus& dlssStatus = m_dlssBackendRuntime.Status();
+    if (m_qualitySettings.qualityProfile != rb::QualityProfile::ReferenceStill &&
+        IsDlssSelected() &&
+        dlssStatus.evaluationReady &&
+        dlssStatus.recommendedRenderWidth > 0u &&
+        dlssStatus.recommendedRenderHeight > 0u)
+    {
+        m_renderWidth = (std::min)(dlssStatus.recommendedRenderWidth, m_width);
+        m_renderHeight = (std::min)(dlssStatus.recommendedRenderHeight, m_height);
+        m_activeRenderScale = (std::min)(
+            static_cast<float>(m_renderWidth) /
+                static_cast<float>((std::max)(m_width, 1u)),
+            static_cast<float>(m_renderHeight) /
+                static_cast<float>((std::max)(m_height, 1u)));
+        return;
+    }
+
+    float requestedScale = 1.0f;
+    if (m_qualitySettings.qualityProfile != rb::QualityProfile::ReferenceStill)
+    {
+        switch (m_qualitySettings.resolutionMode)
+        {
+        case rb::ResolutionMode::Fixed:
+            requestedScale = m_qualitySettings.fixedRenderScale;
+            break;
+        case rb::ResolutionMode::Dynamic:
+            if (resetDynamicScale || m_activeRenderScale <= 0.0f)
+            {
+                m_activeRenderScale = m_qualitySettings.maxRenderScale;
+            }
+            requestedScale = std::clamp(
+                m_activeRenderScale,
+                m_qualitySettings.minRenderScale,
+                m_qualitySettings.maxRenderScale);
+            break;
+        case rb::ResolutionMode::Native:
+        default:
+            requestedScale = 1.0f;
+            break;
+        }
+    }
+
+    const rb::RenderExtent extent =
+        rb::ResolveRenderExtent(m_width, m_height, requestedScale);
+    m_activeRenderScale = extent.scale;
+    m_renderWidth = extent.width;
+    m_renderHeight = extent.height;
+}
+
+void D3D12PathTracingBackend::RecreateResolutionDependentResources()
+{
+    if (!m_device || !m_descriptorHeap)
+    {
+        return;
+    }
+
+    WaitForPreviousFrame();
+    m_nrdBackendRuntime.Resize(m_device.Get(), m_renderWidth, m_renderHeight);
+    CreateOutputResources();
+    InvalidateHistory(rb::FrameChangeMask::Resolution);
+    ResetRenderingHistory();
+    LogDiagnostic(
+        "Internal render resolution changed to " +
+        std::to_string(m_renderWidth) + "x" + std::to_string(m_renderHeight) +
+        " (" + std::to_string(m_activeRenderScale) + "x)." );
+}
+
+void D3D12PathTracingBackend::UpdateDynamicResolution()
+{
+    if (m_qualitySettings.resolutionMode != rb::ResolutionMode::Dynamic ||
+        m_qualitySettings.qualityProfile == rb::QualityProfile::ReferenceStill ||
+        (IsDlssSelected() &&
+            m_dlssBackendRuntime.CanEvaluateRayReconstruction()) ||
+        !m_gpuTimingValid)
+    {
+        m_dynamicResolutionOverBudgetFrames = 0;
+        m_dynamicResolutionUnderBudgetFrames = 0;
+        return;
+    }
+
+    const float targetMs = m_qualitySettings.rayBudget.targetGpuMs;
+    const uint32_t settleFrames =
+        (std::max)(m_qualitySettings.rayBudget.settleFrames, 1u);
+    float nextScale = m_activeRenderScale;
+    if (m_gpuFrameMs > static_cast<double>(targetMs))
+    {
+        ++m_dynamicResolutionOverBudgetFrames;
+        m_dynamicResolutionUnderBudgetFrames = 0;
+        if (m_dynamicResolutionOverBudgetFrames >= settleFrames)
+        {
+            nextScale -= 1.0f / 16.0f;
+            m_dynamicResolutionOverBudgetFrames = 0;
+        }
+    }
+    else if (m_gpuFrameMs <
+        static_cast<double>((std::max)(targetMs - 1.5f, 1.0f)))
+    {
+        ++m_dynamicResolutionUnderBudgetFrames;
+        m_dynamicResolutionOverBudgetFrames = 0;
+        if (m_dynamicResolutionUnderBudgetFrames >= settleFrames * 4u)
+        {
+            nextScale += 1.0f / 16.0f;
+            m_dynamicResolutionUnderBudgetFrames = 0;
+        }
+    }
+    else
+    {
+        m_dynamicResolutionOverBudgetFrames = 0;
+        m_dynamicResolutionUnderBudgetFrames = 0;
+    }
+
+    nextScale = rb::QuantizeRenderScale(std::clamp(
+        nextScale,
+        m_qualitySettings.minRenderScale,
+        m_qualitySettings.maxRenderScale));
+    if (std::abs(nextScale - m_activeRenderScale) < 1.0e-6f)
+    {
+        return;
+    }
+
+    const UINT previousWidth = m_renderWidth;
+    const UINT previousHeight = m_renderHeight;
+    m_activeRenderScale = nextScale;
+    ApplyConfiguredRenderScale(false);
+    if (m_renderWidth != previousWidth || m_renderHeight != previousHeight)
+    {
+        RecreateResolutionDependentResources();
+    }
 }
 
 void D3D12PathTracingBackend::LoadAssets()
@@ -1285,8 +1560,10 @@ void D3D12PathTracingBackend::CreateGpuResourcesForCurrentScene()
 {
     LogDiagnostic("CreateGpuResourcesForCurrentScene: begin.");
     WaitForPreviousFrame();
+    ApplyConfiguredRenderScale(false);
     m_geometryRecords.clear();
     m_rtMaterials.clear();
+    m_rtInstances.clear();
     m_materialTextureIndices.clear();
     m_textures.clear();
     m_uploadBuffers.clear();
@@ -1303,6 +1580,33 @@ void D3D12PathTracingBackend::CreateGpuResourcesForCurrentScene()
         record.baseVertex = draw.baseVertex;
         record.materialIndex = draw.materialIndex;
         m_geometryRecords.push_back(record);
+    }
+
+    auto appendInstanceRecord = [&](const XMFLOAT4X4& objectToWorld, const XMFLOAT4X4& normalToWorld)
+    {
+        Bistro::RtInstance record{};
+        record.objectToWorldColumn0 = XMFLOAT4(objectToWorld._11, objectToWorld._21, objectToWorld._31, objectToWorld._41);
+        record.objectToWorldColumn1 = XMFLOAT4(objectToWorld._12, objectToWorld._22, objectToWorld._32, objectToWorld._42);
+        record.objectToWorldColumn2 = XMFLOAT4(objectToWorld._13, objectToWorld._23, objectToWorld._33, objectToWorld._43);
+        record.objectToWorldColumn3 = XMFLOAT4(objectToWorld._14, objectToWorld._24, objectToWorld._34, objectToWorld._44);
+        record.normalToWorldColumn0 = XMFLOAT4(normalToWorld._11, normalToWorld._21, normalToWorld._31, normalToWorld._41);
+        record.normalToWorldColumn1 = XMFLOAT4(normalToWorld._12, normalToWorld._22, normalToWorld._32, normalToWorld._42);
+        record.normalToWorldColumn2 = XMFLOAT4(normalToWorld._13, normalToWorld._23, normalToWorld._33, normalToWorld._43);
+        record.normalToWorldColumn3 = XMFLOAT4(normalToWorld._14, normalToWorld._24, normalToWorld._34, normalToWorld._44);
+        m_rtInstances.push_back(record);
+    };
+    if (m_scene.instances.empty())
+    {
+        XMFLOAT4X4 identity;
+        XMStoreFloat4x4(&identity, XMMatrixIdentity());
+        appendInstanceRecord(identity, identity);
+    }
+    else
+    {
+        for (const Bistro::SceneInstance& instance : m_scene.instances)
+        {
+            appendInstanceRecord(instance.transform, instance.normalTransform);
+        }
     }
 
     for (FrameContext& frameContext : m_frameContexts)
@@ -1331,6 +1635,7 @@ void D3D12PathTracingBackend::CreateGpuResourcesForCurrentScene()
     CreatePathtracingStateObject();
     CreateRestirReusePipeline();
     CreateDenoisePipeline();
+    CreateSecondaryWorkPipelines();
     LogDiagnostic("CreateGpuResourcesForCurrentScene: acceleration structures.");
     BuildAccelerationStructures();
     LogDiagnostic("CreateGpuResourcesForCurrentScene: shader tables.");
@@ -1404,6 +1709,122 @@ void D3D12PathTracingBackend::RefreshEditableGpuResources(bool reloadTextures, b
     m_uploadBuffers.clear();
 }
 
+void D3D12PathTracingBackend::BeginAsyncSceneLoad(const std::wstring& path)
+{
+    if (path.empty()) return;
+    if (m_sceneLoadFuture.valid() || m_sceneLoadCpuResult)
+    {
+        m_sceneLoadCancelRequested.store(true, std::memory_order_relaxed);
+        m_queuedSceneLoadPath = path;
+        m_sceneDiagnostics = "Cancelling the current scene load before starting the queued scene.";
+        return;
+    }
+
+    m_sceneLoadCancelRequested.store(false, std::memory_order_relaxed);
+    m_sceneLoadCompleted.store(0, std::memory_order_relaxed);
+    m_sceneLoadTotal.store(0, std::memory_order_relaxed);
+    m_sceneLoadStage.store(SceneLoadStage::Parsing, std::memory_order_relaxed);
+    {
+        std::scoped_lock lock(m_sceneLoadProgressMutex);
+        m_sceneLoadCurrentAsset = path;
+    }
+    m_sceneDiagnostics = "Parsing scene...";
+    m_sceneLoadFuture = std::async(std::launch::async, [this, path]()
+    {
+        const std::filesystem::path scenePath(path);
+        if (rb::IsPbrtScenePath(scenePath))
+        {
+            return rb::ImportPbrtScene(path, &m_sceneLoadCancelRequested,
+                [this](const rb::SceneImportProgress& progress)
+                {
+                    SceneLoadStage stage = SceneLoadStage::Parsing;
+                    if (progress.stage == rb::SceneImportProgress::Stage::LoadingAssets)
+                        stage = SceneLoadStage::LoadingAssets;
+                    m_sceneLoadStage.store(stage, std::memory_order_relaxed);
+                    m_sceneLoadCompleted.store(progress.completed, std::memory_order_relaxed);
+                    m_sceneLoadTotal.store(progress.total, std::memory_order_relaxed);
+                    std::scoped_lock lock(m_sceneLoadProgressMutex);
+                    m_sceneLoadCurrentAsset = progress.currentAsset;
+                });
+        }
+        m_sceneLoadStage.store(SceneLoadStage::LoadingAssets, std::memory_order_relaxed);
+        return rb::SceneImporter{}.ImportScene(path);
+    });
+}
+
+void D3D12PathTracingBackend::CancelAsyncSceneLoad()
+{
+    if (m_sceneLoadFuture.valid() || m_sceneLoadCpuResult)
+    {
+        m_sceneLoadCancelRequested.store(true, std::memory_order_relaxed);
+        m_sceneDiagnostics = "Cancelling scene load...";
+    }
+}
+
+void D3D12PathTracingBackend::PollAsyncSceneLoad()
+{
+    if (m_sceneLoadCpuResult)
+    {
+        if (m_sceneLoadCancelRequested.load(std::memory_order_relaxed))
+        {
+            m_sceneLoadCpuResult.reset();
+            m_sceneLoadStage.store(SceneLoadStage::Cancelled, std::memory_order_relaxed);
+            m_sceneDiagnostics = "Scene load cancelled; the previous scene is unchanged.";
+        }
+        else
+        {
+            rb::SceneImportResult imported = std::move(*m_sceneLoadCpuResult);
+            m_sceneLoadCpuResult.reset();
+            std::string diagnostics;
+            const std::wstring path = imported.scene.path;
+            m_sceneLoadStage.store(SceneLoadStage::BuildingBLAS, std::memory_order_relaxed);
+            if (CommitImportedScene(path, std::move(imported), diagnostics))
+                m_sceneLoadStage.store(SceneLoadStage::Completed, std::memory_order_relaxed);
+            else
+            {
+                m_sceneLoadStage.store(SceneLoadStage::Failed, std::memory_order_relaxed);
+                m_sceneDiagnostics = diagnostics;
+            }
+        }
+    }
+    else if (m_sceneLoadFuture.valid() &&
+        m_sceneLoadFuture.wait_for(std::chrono::seconds(0)) == std::future_status::ready)
+    {
+        rb::SceneImportResult imported;
+        try
+        {
+            imported = m_sceneLoadFuture.get();
+        }
+        catch (const std::exception& exception)
+        {
+            imported.diagnostics = exception.what();
+        }
+        if (m_sceneLoadCancelRequested.load(std::memory_order_relaxed))
+        {
+            m_sceneLoadStage.store(SceneLoadStage::Cancelled, std::memory_order_relaxed);
+            m_sceneDiagnostics = "Scene load cancelled; the previous scene is unchanged.";
+        }
+        else if (!imported.succeeded)
+        {
+            m_sceneLoadStage.store(SceneLoadStage::Failed, std::memory_order_relaxed);
+            m_sceneDiagnostics = imported.diagnostics;
+        }
+        else
+        {
+            m_sceneLoadStage.store(SceneLoadStage::BuildingBLAS, std::memory_order_relaxed);
+            m_sceneDiagnostics = "CPU scene data is ready; building BLAS...";
+            m_sceneLoadCpuResult = std::move(imported);
+        }
+    }
+
+    if (!m_sceneLoadFuture.valid() && !m_sceneLoadCpuResult && !m_queuedSceneLoadPath.empty())
+    {
+        const std::wstring queued = std::move(m_queuedSceneLoadPath);
+        m_queuedSceneLoadPath.clear();
+        BeginAsyncSceneLoad(queued);
+    }
+}
+
 bool D3D12PathTracingBackend::LoadScenePath(const std::wstring& path, std::string& diagnostics)
 {
     LogDiagnostic(L"LoadScenePath: importing " + path);
@@ -1414,6 +1835,41 @@ bool D3D12PathTracingBackend::LoadScenePath(const std::wstring& path, std::strin
         LogDiagnostic("LoadScenePath: import failed: " + diagnostics);
         return false;
     }
+
+    return CommitImportedScene(path, std::move(imported), diagnostics);
+}
+
+bool D3D12PathTracingBackend::CommitImportedScene(
+    const std::wstring& path,
+    rb::SceneImportResult&& imported,
+    std::string& diagnostics)
+{
+    Bistro::Scene previousScene = m_scene;
+    const std::wstring previousScenePath = m_scenePath;
+    const std::string previousSceneDiagnostics = m_sceneDiagnostics;
+    const Bistro::FpsCamera previousCamera = m_camera;
+    const XMFLOAT3 previousDefaultCameraPosition = m_defaultCameraPosition;
+    const float previousDefaultCameraYaw = m_defaultCameraYaw;
+    const float previousDefaultCameraPitch = m_defaultCameraPitch;
+    const float previousDefaultCameraRoll = m_defaultCameraRoll;
+    const float previousDefaultCameraFov = m_defaultCameraFovDegrees;
+    const float previousCameraFov = m_cameraFovDegrees;
+    const std::wstring previousEnvironmentPath = m_environmentTexturePath;
+    const bool previousEnvironmentEnabled = m_environmentMapEnabled;
+    const bool previousEnvironmentEqualAreaMapping = m_environmentEqualAreaMapping;
+    const float previousEnvironmentIntensity = m_environmentIntensity;
+    const float previousEnvironmentRotation = m_environmentRotation;
+    const XMFLOAT4X4 previousEnvironmentLightToWorld = m_environmentLightToWorld;
+    const XMFLOAT4X4 previousEnvironmentWorldToLight = m_environmentWorldToLight;
+    const XMFLOAT3 previousEnvironmentTint = m_environmentTint;
+    const float previousLightIntensity = m_lightIntensity;
+    const float previousSunIntensity = m_sunIntensity;
+    const bool previousSkyEnabled = m_skyEnabled;
+    const float previousProceduralLightIntensity = m_proceduralLightIntensity;
+    const bool previousProjectDirty = m_projectDirty;
+    const auto previousSourceMaterials = m_sourceMaterials;
+    const auto previousTextureOverrides = m_textureOverrideEnabled;
+    const auto previousMaterialUsage = m_materialUsage;
 
     try
     {
@@ -1437,6 +1893,69 @@ bool D3D12PathTracingBackend::LoadScenePath(const std::wstring& path, std::strin
         m_defaultCameraPosition = XMFLOAT3(center.x, center.y + radius * 0.25f, center.z - radius * 2.5f);
         m_defaultCameraYaw = 0.0f;
         m_defaultCameraPitch = XMConvertToRadians(5.0f);
+        m_defaultCameraRoll = 0.0f;
+        m_defaultCameraFovDegrees = 60.0f;
+        if (imported.scene.camera)
+        {
+            const rb::SceneCamera& camera = *imported.scene.camera;
+            XMVECTOR forward = XMVector3Normalize(XMLoadFloat3(&camera.forward));
+            const float forwardY = std::clamp(XMVectorGetY(forward), -1.0f, 1.0f);
+            m_defaultCameraPosition = camera.position;
+            m_defaultCameraYaw = std::atan2(XMVectorGetX(forward), XMVectorGetZ(forward));
+            m_defaultCameraPitch = std::asin(forwardY);
+            XMVECTOR right = XMVector3Normalize(XMVector3Cross(XMVectorSet(0.0f, 1.0f, 0.0f, 0.0f), forward));
+            if (XMVectorGetX(XMVector3LengthSq(right)) < 1.0e-8f) right = XMVectorSet(1.0f, 0.0f, 0.0f, 0.0f);
+            const XMVECTOR baseUp = XMVector3Normalize(XMVector3Cross(forward, right));
+            const XMVECTOR authoredUp = XMVector3Normalize(XMLoadFloat3(&camera.up));
+            m_defaultCameraRoll = std::atan2(
+                XMVectorGetX(XMVector3Dot(authoredUp, right)),
+                XMVectorGetX(XMVector3Dot(authoredUp, baseUp)));
+            m_defaultCameraFovDegrees = std::clamp(camera.fovDegrees, 1.0f, 179.0f);
+        }
+        if (imported.scene.environment)
+        {
+            const rb::SceneEnvironment& environment = *imported.scene.environment;
+            m_environmentTexturePath = environment.texturePath;
+            // An infinite light with no filename is a valid constant PBRT
+            // environment, represented by the white fallback texture.
+            m_environmentMapEnabled = true;
+            m_environmentEqualAreaMapping = environment.equalAreaMapping;
+            m_environmentIntensity = (std::max)({ environment.scale.x, environment.scale.y, environment.scale.z, 0.0f });
+            const float inverseIntensity = m_environmentIntensity > 0.0f ? 1.0f / m_environmentIntensity : 0.0f;
+            m_environmentTint = XMFLOAT3(
+                environment.scale.x * inverseIntensity,
+                environment.scale.y * inverseIntensity,
+                environment.scale.z * inverseIntensity);
+            XMMATRIX lightToWorld = XMLoadFloat4x4(&environment.lightToWorld);
+            const XMVECTOR determinant = XMMatrixDeterminant(lightToWorld);
+            if (!std::isfinite(XMVectorGetX(determinant)) || std::abs(XMVectorGetX(determinant)) < 1.0e-8f)
+            {
+                throw std::runtime_error("PBRT infinite-light transform is singular.");
+            }
+            const XMMATRIX worldToLight = XMMatrixInverse(nullptr, lightToWorld);
+            XMStoreFloat4x4(&m_environmentLightToWorld, lightToWorld);
+            XMStoreFloat4x4(&m_environmentWorldToLight, worldToLight);
+            // The PBRT CTM is represented by the full matrices above. The
+            // legacy yaw control remains an additional user rotation.
+            m_environmentRotation = 0.0f;
+        }
+        else if (rb::IsPbrtScenePath(std::filesystem::path(path)))
+        {
+            m_environmentTexturePath.clear();
+            m_environmentMapEnabled = false;
+            m_environmentEqualAreaMapping = false;
+            m_environmentTint = XMFLOAT3(1.0f, 1.0f, 1.0f);
+            XMStoreFloat4x4(&m_environmentLightToWorld, XMMatrixIdentity());
+            XMStoreFloat4x4(&m_environmentWorldToLight, XMMatrixIdentity());
+            m_environmentRotation = 0.0f;
+        }
+        if (imported.scene.hasAuthoredLighting)
+        {
+            m_lightIntensity = 0.0f;
+            m_sunIntensity = 0.0f;
+            m_skyEnabled = false;
+            m_proceduralLightIntensity = 1.0f;
+        }
         ResetCameraView();
         LogDiagnostic("LoadScenePath: creating GPU resources for imported scene.");
         CreateGpuResourcesForCurrentScene();
@@ -1449,6 +1968,41 @@ bool D3D12PathTracingBackend::LoadScenePath(const std::wstring& path, std::strin
     {
         diagnostics = ex.what();
         LogDiagnostic("LoadScenePath: exception: " + diagnostics);
+        m_scene = std::move(previousScene);
+        m_scenePath = previousScenePath;
+        m_sceneDiagnostics = previousSceneDiagnostics;
+        m_camera = previousCamera;
+        m_defaultCameraPosition = previousDefaultCameraPosition;
+        m_defaultCameraYaw = previousDefaultCameraYaw;
+        m_defaultCameraPitch = previousDefaultCameraPitch;
+        m_defaultCameraRoll = previousDefaultCameraRoll;
+        m_defaultCameraFovDegrees = previousDefaultCameraFov;
+        m_cameraFovDegrees = previousCameraFov;
+        m_environmentTexturePath = previousEnvironmentPath;
+        m_environmentMapEnabled = previousEnvironmentEnabled;
+        m_environmentEqualAreaMapping = previousEnvironmentEqualAreaMapping;
+        m_environmentIntensity = previousEnvironmentIntensity;
+        m_environmentRotation = previousEnvironmentRotation;
+        m_environmentLightToWorld = previousEnvironmentLightToWorld;
+        m_environmentWorldToLight = previousEnvironmentWorldToLight;
+        m_environmentTint = previousEnvironmentTint;
+        m_lightIntensity = previousLightIntensity;
+        m_sunIntensity = previousSunIntensity;
+        m_skyEnabled = previousSkyEnabled;
+        m_proceduralLightIntensity = previousProceduralLightIntensity;
+        m_projectDirty = previousProjectDirty;
+        m_sourceMaterials = previousSourceMaterials;
+        m_textureOverrideEnabled = previousTextureOverrides;
+        m_materialUsage = previousMaterialUsage;
+        try
+        {
+            CreateGpuResourcesForCurrentScene();
+            diagnostics += " The previous scene was restored.";
+        }
+        catch (const std::exception& rollbackException)
+        {
+            diagnostics += std::string(" Previous-scene GPU rollback failed: ") + rollbackException.what();
+        }
         return false;
     }
 }
@@ -1462,10 +2016,18 @@ bool D3D12PathTracingBackend::LoadEnvironmentPath(const std::wstring& path, std:
     }
     const std::wstring previousPath = m_environmentTexturePath;
     const bool previousEnabled = m_environmentMapEnabled;
+    const bool previousEqualAreaMapping = m_environmentEqualAreaMapping;
+    const XMFLOAT4X4 previousLightToWorld = m_environmentLightToWorld;
+    const XMFLOAT4X4 previousWorldToLight = m_environmentWorldToLight;
+    const XMFLOAT3 previousTint = m_environmentTint;
     try
     {
         m_environmentTexturePath = path;
         m_environmentMapEnabled = !path.empty();
+        m_environmentEqualAreaMapping = false;
+        m_environmentTint = XMFLOAT3(1.0f, 1.0f, 1.0f);
+        XMStoreFloat4x4(&m_environmentLightToWorld, XMMatrixIdentity());
+        XMStoreFloat4x4(&m_environmentWorldToLight, XMMatrixIdentity());
         InvalidateHistory(rb::FrameChangeMask::Hdri);
         RefreshEditableGpuResources(true, false);
         diagnostics = path.empty() ? "Environment texture cleared." : "Environment texture loaded.";
@@ -1476,6 +2038,10 @@ bool D3D12PathTracingBackend::LoadEnvironmentPath(const std::wstring& path, std:
     {
         m_environmentTexturePath = previousPath;
         m_environmentMapEnabled = previousEnabled;
+        m_environmentEqualAreaMapping = previousEqualAreaMapping;
+        m_environmentLightToWorld = previousLightToWorld;
+        m_environmentWorldToLight = previousWorldToLight;
+        m_environmentTint = previousTint;
         try
         {
             RefreshEditableGpuResources(true, false);
@@ -1922,7 +2488,7 @@ bool D3D12PathTracingBackend::SaveProjectToDisk(const std::wstring& path)
     file << "  \"environmentPath\": \"" << cld::EscapeJson(WideToUtf8(m_environmentTexturePath)) << "\",\n";
     file << "  \"mode\": \"" << PathtracingModeName(m_mode) << "\",\n";
     file << "  \"quality\": " << rb::QualitySettingsToJson(m_qualitySettings) << ",\n";
-    file << "  \"camera\": {\"position\": [" << camera.x << ", " << camera.y << ", " << camera.z << "], \"yaw\": " << m_camera.GetYawRadians() << ", \"pitch\": " << m_camera.GetPitchRadians() << "},\n";
+    file << "  \"camera\": {\"position\": [" << camera.x << ", " << camera.y << ", " << camera.z << "], \"yaw\": " << m_camera.GetYawRadians() << ", \"pitch\": " << m_camera.GetPitchRadians() << ", \"roll\": " << m_camera.GetRollRadians() << ", \"fovDegrees\": " << m_cameraFovDegrees << "},\n";
     file << "  \"lighting\": {\"direction\": [" << m_lightDirection[0] << ", " << m_lightDirection[1] << ", " << m_lightDirection[2] << "], \"intensity\": " << m_lightIntensity << "},\n";
     file << "  \"materials\": [\n";
     for (size_t i = 0; i < m_scene.materials.size(); ++i)
@@ -2078,6 +2644,12 @@ bool D3D12PathTracingBackend::LoadProjectFromDisk(const std::wstring& path, std:
 
         std::string denoiseCompatibilityWarning;
         const DenoiseBackend initialDenoiseBackend = m_denoiseBackend;
+        const bool initialDenoiserEnabled = m_denoiserEnabled;
+        const int initialDebugView = m_debugViewMode;
+        bool explicitDenoiseBackend = false;
+        DenoiseBackend projectDenoiseBackend = m_denoiseBackend;
+        bool explicitDenoiserEnabled = false;
+        bool projectDenoiserEnabled = m_denoiserEnabled;
 
         const PathTracingMode loadedMode = PathtracingModeFromName(cld::JsonStringOr(root, "mode"), m_mode);
         const bool modeChanged = loadedMode != m_mode;
@@ -2228,7 +2800,12 @@ bool D3D12PathTracingBackend::LoadProjectFromDisk(const std::wstring& path, std:
         if (const cld::JsonValue* camera = cld::FindMember(root, "camera"))
         {
             const std::array<float, 3> position = cld::JsonFloat3Or(*camera, "position", { m_defaultCameraPosition.x, m_defaultCameraPosition.y, m_defaultCameraPosition.z });
-            m_camera.Reset(XMFLOAT3(position[0], position[1], position[2]), static_cast<float>(cld::JsonNumberOr(*camera, "yaw", m_defaultCameraYaw)), static_cast<float>(cld::JsonNumberOr(*camera, "pitch", m_defaultCameraPitch)));
+            m_camera.Reset(
+                XMFLOAT3(position[0], position[1], position[2]),
+                static_cast<float>(cld::JsonNumberOr(*camera, "yaw", m_defaultCameraYaw)),
+                static_cast<float>(cld::JsonNumberOr(*camera, "pitch", m_defaultCameraPitch)),
+                static_cast<float>(cld::JsonNumberOr(*camera, "roll", m_defaultCameraRoll)));
+            m_cameraFovDegrees = std::clamp(static_cast<float>(cld::JsonNumberOr(*camera, "fovDegrees", m_defaultCameraFovDegrees)), 1.0f, 179.0f);
         }
         if (const cld::JsonValue* lighting = cld::FindMember(root, "lighting"))
         {
@@ -2298,6 +2875,8 @@ bool D3D12PathTracingBackend::LoadProjectFromDisk(const std::wstring& path, std:
                     return false;
                 }
                 m_denoiseBackend = backend;
+                explicitDenoiseBackend = true;
+                projectDenoiseBackend = backend;
                 WaitForPreviousFrame();
                 m_nrdBackendRuntime.UpdateMethod(m_device.Get(), SelectedNrdMethod());
             }
@@ -2313,6 +2892,11 @@ bool D3D12PathTracingBackend::LoadProjectFromDisk(const std::wstring& path, std:
                 m_dlssBackendRuntime.UpdateMode(m_width, m_height, m_dlssMode);
             }
             m_denoiserEnabled = cld::JsonBoolOr(*denoise, "enabled", m_denoiserEnabled);
+            if (cld::FindMember(*denoise, "enabled"))
+            {
+                explicitDenoiserEnabled = true;
+                projectDenoiserEnabled = m_denoiserEnabled;
+            }
             m_dlssEnabledWhenAvailable = cld::JsonBoolOr(*denoise, "dlssEnabledWhenAvailable", m_dlssEnabledWhenAvailable);
             m_splitSignalDenoise = cld::JsonBoolOr(*denoise, "splitSignalDenoise", m_splitSignalDenoise);
             m_realtimeReconstruction = cld::JsonBoolOr(*denoise, "realtimeReconstruction", m_realtimeReconstruction);
@@ -2355,9 +2939,26 @@ bool D3D12PathTracingBackend::LoadProjectFromDisk(const std::wstring& path, std:
             qualityResourcesChanged =
                 parsedQuality.qualityProfile != m_qualitySettings.qualityProfile ||
                 parsedQuality.restirBackend != m_qualitySettings.restirBackend ||
-                parsedQuality.finalTaa != m_qualitySettings.finalTaa;
+                parsedQuality.finalTaa != m_qualitySettings.finalTaa ||
+                parsedQuality.resolutionMode != m_qualitySettings.resolutionMode ||
+                parsedQuality.fixedRenderScale != m_qualitySettings.fixedRenderScale ||
+                parsedQuality.minRenderScale != m_qualitySettings.minRenderScale ||
+                parsedQuality.maxRenderScale != m_qualitySettings.maxRenderScale;
             m_qualitySettings = parsedQuality;
             ApplyQualitySettingsToRenderer();
+            if (explicitDenoiseBackend)
+            {
+                m_denoiseBackend = projectDenoiseBackend;
+            }
+            if (explicitDenoiserEnabled)
+            {
+                m_denoiserEnabled = projectDenoiserEnabled;
+            }
+            if (explicitDenoiseBackend)
+            {
+                WaitForPreviousFrame();
+                m_nrdBackendRuntime.UpdateMethod(m_device.Get(), SelectedNrdMethod());
+            }
         }
         if (const cld::JsonValue* view = cld::FindMember(root, "view"))
         {
@@ -2378,7 +2979,12 @@ bool D3D12PathTracingBackend::LoadProjectFromDisk(const std::wstring& path, std:
             m_selectedMaterial = std::clamp(static_cast<int>(cld::JsonNumberOr(*view, "selectedMaterial", m_selectedMaterial)), 0, (std::max)(0, static_cast<int>(m_scene.materials.size()) - 1));
         }
 
-        if (modeChanged || qualityResourcesChanged || initialDenoiseBackend != m_denoiseBackend)
+        const bool fusedNrdContractChanged =
+            IsNrdSelected() &&
+            (initialDenoiserEnabled != m_denoiserEnabled ||
+                (initialDebugView == 0) != (m_debugViewMode == 0));
+        if (modeChanged || qualityResourcesChanged || initialDenoiseBackend != m_denoiseBackend ||
+            fusedNrdContractChanged)
         {
             CreateGpuResourcesForCurrentScene();
         }
@@ -2672,7 +3278,10 @@ bool D3D12PathTracingBackend::ApplyAction(const std::string& method, const cld::
         const std::array<float, 3> position = cld::JsonFloat3Or(params, "position", { current.x, current.y, current.z });
         const float yaw = static_cast<float>(cld::JsonNumberOr(params, "yaw", m_camera.GetYawRadians()));
         const float pitch = std::clamp(static_cast<float>(cld::JsonNumberOr(params, "pitch", m_camera.GetPitchRadians())), XMConvertToRadians(-83.0f), XMConvertToRadians(83.0f));
-        if (!std::isfinite(position[0]) || !std::isfinite(position[1]) || !std::isfinite(position[2]) || !std::isfinite(yaw) || !std::isfinite(pitch))
+        const float roll = static_cast<float>(cld::JsonNumberOr(params, "roll", m_camera.GetRollRadians()));
+        const float fovDegrees = std::clamp(static_cast<float>(cld::JsonNumberOr(params, "fovDegrees", m_cameraFovDegrees)), 1.0f, 179.0f);
+        if (!std::isfinite(position[0]) || !std::isfinite(position[1]) || !std::isfinite(position[2]) ||
+            !std::isfinite(yaw) || !std::isfinite(pitch) || !std::isfinite(roll) || !std::isfinite(fovDegrees))
         {
             diagnostics = "Camera contains non-finite values.";
             return false;
@@ -2691,7 +3300,8 @@ bool D3D12PathTracingBackend::ApplyAction(const std::string& method, const cld::
 
         if (!validateOnly)
         {
-            m_camera.Reset(XMFLOAT3(position[0], position[1], position[2]), yaw, pitch);
+            m_camera.Reset(XMFLOAT3(position[0], position[1], position[2]), yaw, pitch, roll);
+            m_cameraFovDegrees = fovDegrees;
             if (historyMode == rb::CameraHistoryMode::Reset)
             {
                 InvalidateHistory(rb::FrameChangeMask::CameraCut);
@@ -2718,6 +3328,11 @@ bool D3D12PathTracingBackend::ApplyAction(const std::string& method, const cld::
             const bool restirBackendChanged = parsedQuality.restirBackend != m_qualitySettings.restirBackend;
             const bool qualityProfileChanged = parsedQuality.qualityProfile != m_qualitySettings.qualityProfile;
             const bool finalTaaResourcesChanged = parsedQuality.finalTaa != m_qualitySettings.finalTaa;
+            const bool resolutionResourcesChanged =
+                parsedQuality.resolutionMode != m_qualitySettings.resolutionMode ||
+                parsedQuality.fixedRenderScale != m_qualitySettings.fixedRenderScale ||
+                parsedQuality.minRenderScale != m_qualitySettings.minRenderScale ||
+                parsedQuality.maxRenderScale != m_qualitySettings.maxRenderScale;
             const DenoiseBackend previousDenoiseBackend = m_denoiseBackend;
             m_qualitySettings = parsedQuality;
             ApplyQualitySettingsToRenderer();
@@ -2728,7 +3343,8 @@ bool D3D12PathTracingBackend::ApplyAction(const std::string& method, const cld::
                 qualityChanges |= rb::FrameChangeMask::QualityProfile;
             }
             InvalidateHistory(qualityChanges);
-            if (restirBackendChanged || qualityProfileChanged || denoiseBackendChanged || finalTaaResourcesChanged)
+            if (restirBackendChanged || qualityProfileChanged || denoiseBackendChanged ||
+                finalTaaResourcesChanged || resolutionResourcesChanged)
             {
                 CreateGpuResourcesForCurrentScene();
             }
@@ -3279,6 +3895,7 @@ bool D3D12PathTracingBackend::ApplyAction(const std::string& method, const cld::
         if (!validateOnly)
         {
             const bool denoiseBackendChanged = denoiseBackend != m_denoiseBackend;
+            const bool previousDenoiserEnabled = m_denoiserEnabled;
             if (hasPreset)
             {
                 ApplyNoisePreset(preset);
@@ -3338,7 +3955,9 @@ bool D3D12PathTracingBackend::ApplyAction(const std::string& method, const cld::
             {
                 m_nrdBackendRuntime.ResetHistory();
             }
-            if (denoiseBackendChanged)
+            const bool fusedNrdContractChanged =
+                IsNrdSelected() && previousDenoiserEnabled != m_denoiserEnabled;
+            if (denoiseBackendChanged || fusedNrdContractChanged)
             {
                 // Backend-specific histories are allocated exclusively. Rebuild
                 // the resource graph only when the selected backend changes.
@@ -3365,6 +3984,8 @@ bool D3D12PathTracingBackend::ApplyAction(const std::string& method, const cld::
         {
             const bool debugContractChanged = debugView != m_debugViewMode ||
                 cld::JsonBoolOr(params, "normalMapYFlip", m_debugNormalMapYFlip) != m_debugNormalMapYFlip;
+            const bool fusedNrdContractChanged =
+                IsNrdSelected() && ((debugView == 0) != (m_debugViewMode == 0));
             m_debugViewMode = debugView;
             m_debugNormalMapYFlip = cld::JsonBoolOr(params, "normalMapYFlip", m_debugNormalMapYFlip);
             m_environmentMapEnabled = cld::JsonBoolOr(params, "environmentEnabled", m_environmentMapEnabled);
@@ -3375,6 +3996,10 @@ bool D3D12PathTracingBackend::ApplyAction(const std::string& method, const cld::
             else if (debugContractChanged)
             {
                 InvalidateHistory(rb::FrameChangeMask::DenoiserSettings);
+            }
+            if (fusedNrdContractChanged)
+            {
+                CreateGpuResourcesForCurrentScene();
             }
             m_projectDirty = true;
         }
@@ -3703,6 +4328,10 @@ void D3D12PathTracingBackend::LoadMcpUserSettings()
                 loadedSettings.port = static_cast<uint16_t>(std::clamp(static_cast<int>(cld::JsonNumberOr(root, "port", loadedSettings.port)), 1, 65535));
                 loadedSettings.requestTimeoutSeconds = std::clamp(static_cast<int>(cld::JsonNumberOr(root, "requestTimeoutSeconds", loadedSettings.requestTimeoutSeconds)), 5, 300);
                 loadedSettings.accessMode = mcp::AccessModeFromName(cld::JsonStringOr(root, "accessMode"), loadedSettings.accessMode);
+                loadedSettings.authenticationMode =
+                    mcp::AuthenticationModeFromName(
+                        cld::JsonStringOr(root, "authenticationMode"),
+                        loadedSettings.authenticationMode);
                 loadedSettings.token = cld::JsonStringOr(root, "token", loadedSettings.token);
             }
         }
@@ -3747,6 +4376,9 @@ void D3D12PathTracingBackend::SaveMcpUserSettings()
     file << "  \"port\": " << settings.port << ",\n";
     file << "  \"requestTimeoutSeconds\": " << settings.requestTimeoutSeconds << ",\n";
     file << "  \"accessMode\": \"" << mcp::AccessModeName(settings.accessMode) << "\",\n";
+    file << "  \"authenticationMode\": \""
+         << mcp::AuthenticationModeName(settings.authenticationMode)
+         << "\",\n";
     file << "  \"token\": \"" << cld::EscapeJson(settings.token) << "\"\n";
     file << "}\n";
 }
@@ -3820,6 +4452,7 @@ mcp::CommandResult D3D12PathTracingBackend::ExecuteMcpCommand(const mcp::Command
                 m_mcpLatestCaptureBase64 = std::move(base64Png);
                 m_mcpLastCaptureDiagnostics = diagnostics;
             }
+            m_mcpServer.PublishResourceUpdates({ "lookdevpt://captures/latest.png" });
             std::ostringstream json;
             json << "{\"ok\":true,\"diagnostics\":\"" << cld::EscapeJson(diagnostics) << "\",\"captureId\":" << captureId
                  << ",\"resource\":\"lookdevpt://captures/latest.png\",\"idResource\":\"lookdevpt://captures/" << captureId
@@ -3897,7 +4530,7 @@ mcp::CommandResult D3D12PathTracingBackend::ExecuteMcpCommand(const mcp::Command
             const XMVECTOR forward = XMVector3Normalize(XMVectorSet(sinf(yaw) * cosf(pitch), sinf(pitch), cosf(yaw) * cosf(pitch), 0.0f));
             XMFLOAT3 position;
             XMStoreFloat3(&position, XMLoadFloat3(&center) - forward * distance);
-            m_camera.Reset(position, yaw, pitch);
+            m_camera.Reset(position, yaw, pitch, preserveOrientation ? m_camera.GetRollRadians() : 0.0f);
             ResetRenderingHistory();
             m_projectDirty = true;
             std::ostringstream json;
@@ -4165,6 +4798,10 @@ mcp::CommandResult D3D12PathTracingBackend::ExecuteMcpCommand(const mcp::Command
                 }
                 ids.push_back(id);
             }
+            if (!ids.empty())
+            {
+                m_mcpServer.PublishResourceUpdates({ "lookdevpt://captures/latest.png" });
+            }
             if (restoreView)
             {
                 m_debugViewMode = originalView;
@@ -4266,25 +4903,40 @@ void D3D12PathTracingBackend::UpdateMcpSnapshots()
         presetsJson = BuildMaterialPresetsJson();
     }
 
-    std::lock_guard<std::mutex> lock(m_mcpSnapshotMutex);
-    if (updateState) m_mcpStateJson = std::move(stateJson);
-    if (updateStats)
+    std::vector<std::string> updatedResources;
     {
-        m_mcpStatsJson = std::move(statsJson);
-        m_mcpDiagnosticsJson = std::move(diagnosticsJson);
+        std::lock_guard<std::mutex> lock(m_mcpSnapshotMutex);
+        if (updateState)
+        {
+            if (stateJson != m_mcpStateJson) updatedResources.push_back("lookdevpt://state");
+            m_mcpStateJson = std::move(stateJson);
+        }
+        if (updateStats)
+        {
+            if (statsJson != m_mcpStatsJson) updatedResources.push_back("lookdevpt://stats");
+            if (diagnosticsJson != m_mcpDiagnosticsJson) updatedResources.push_back("lookdevpt://diagnostics");
+            m_mcpStatsJson = std::move(statsJson);
+            m_mcpDiagnosticsJson = std::move(diagnosticsJson);
+        }
+        if (revisionChanged)
+        {
+            if (materialsJson != m_mcpMaterialsJson) updatedResources.push_back("lookdevpt://materials");
+            if (projectJson != m_mcpProjectJson) updatedResources.push_back("lookdevpt://project");
+            if (sceneSummaryJson != m_mcpSceneSummaryJson) updatedResources.push_back("lookdevpt://scene/summary");
+            if (variantsJson != m_mcpMaterialVariantsJson) updatedResources.push_back("lookdevpt://material-variants");
+            if (presetsJson != m_mcpMaterialPresetsJson) updatedResources.push_back("lookdevpt://material-presets");
+            m_mcpMaterialsJson = std::move(materialsJson);
+            m_mcpProjectJson = std::move(projectJson);
+            m_mcpSceneSummaryJson = std::move(sceneSummaryJson);
+            m_mcpMaterialVariantsJson = std::move(variantsJson);
+            m_mcpMaterialPresetsJson = std::move(presetsJson);
+            m_mcpSnapshotRevisions = revisions;
+            m_mcpSnapshotProjectDirty = m_projectDirty;
+            m_mcpSnapshotMaterialCatalogRevision = m_mcpMaterialCatalogRevision;
+            m_mcpStaticSnapshotsValid = true;
+        }
     }
-    if (revisionChanged)
-    {
-        m_mcpMaterialsJson = std::move(materialsJson);
-        m_mcpProjectJson = std::move(projectJson);
-        m_mcpSceneSummaryJson = std::move(sceneSummaryJson);
-        m_mcpMaterialVariantsJson = std::move(variantsJson);
-        m_mcpMaterialPresetsJson = std::move(presetsJson);
-        m_mcpSnapshotRevisions = revisions;
-        m_mcpSnapshotProjectDirty = m_projectDirty;
-        m_mcpSnapshotMaterialCatalogRevision = m_mcpMaterialCatalogRevision;
-        m_mcpStaticSnapshotsValid = true;
-    }
+    m_mcpServer.PublishResourceUpdates(updatedResources);
     if (updateState) m_mcpNextStateSnapshot = now + std::chrono::milliseconds(33);
     if (updateStats) m_mcpNextStatsSnapshot = now + std::chrono::milliseconds(100);
 }
@@ -4299,12 +4951,22 @@ std::string D3D12PathTracingBackend::BuildMcpStateJson() const
     out << "\"projectPath\":\"" << cld::EscapeJson(WideToUtf8(m_projectPath)) << "\",";
     out << "\"projectDirty\":" << (m_projectDirty ? "true" : "false") << ",";
     out << "\"quality\":" << rb::QualitySettingsToJson(m_qualitySettings) << ",";
-    const bool finalTaaActive = m_qualitySettings.finalTaa &&
+    out << "\"resolution\":{\"mode\":\""
+        << rb::ResolutionModeName(m_qualitySettings.resolutionMode)
+        << "\",\"outputWidth\":" << m_width
+        << ",\"outputHeight\":" << m_height
+        << ",\"renderWidth\":" << m_renderWidth
+        << ",\"renderHeight\":" << m_renderHeight
+        << ",\"activeScale\":" << m_activeRenderScale
+        << ",\"taauActive\":" << (UsesTemporalUpscale() ? "true" : "false")
+        << "},";
+    const bool finalTaaActive = (m_qualitySettings.finalTaa || UsesTemporalUpscale()) &&
         m_qualitySettings.qualityProfile != rb::QualityProfile::ReferenceStill && m_finalTaaPipeline;
     out << "\"finalTaaActive\":" << (finalTaaActive ? "true" : "false") << ",";
     out << "\"camera\":{\"position\":";
     AppendJsonFloat3(out, camera);
     out << ",\"yaw\":" << m_camera.GetYawRadians() << ",\"pitch\":" << m_camera.GetPitchRadians()
+        << ",\"roll\":" << m_camera.GetRollRadians() << ",\"fovDegrees\":" << m_cameraFovDegrees
         << ",\"baseMoveSpeed\":" << m_baseMoveSpeed << ",\"fastMoveSpeed\":" << m_fastMoveSpeed << "},";
     out << "\"lighting\":{\"direction\":";
     AppendJsonFloat3(out, m_lightDirection);
@@ -4327,16 +4989,52 @@ std::string D3D12PathTracingBackend::BuildMcpStateJson() const
         << "\",\"activeSecondaryRate\":" << m_activeSecondaryShadingRate
         << ",\"autoSecondaryHalfActive\":" << (m_autoSecondaryHalfActive ? "true" : "false") << "},";
     const RtxdiStatus& rtxdiStatus = m_rtxdiBackendRuntime.Status();
-    const bool rtxdiDiActive = m_qualitySettings.qualityProfile != rb::QualityProfile::ReferenceStill && m_rtxdiAvailable &&
-        m_qualitySettings.restirBackend == rb::RestirBackend::Rtxdi && UsesRestirDI(m_mode);
-    const bool rtxdiGiActive = rtxdiStatus.giEvaluationReady &&
-        m_qualitySettings.restirBackend == rb::RestirBackend::Rtxdi && UsesRestirGI(m_mode);
-    const char* effectiveRestir = rtxdiDiActive
-        ? (UsesRestirGI(m_mode) ? "rtxdi_di+baseline_gi" : "rtxdi_di")
-        : "baseline";
+    const bool realtimeRtxdiRequested =
+        m_qualitySettings.qualityProfile != rb::QualityProfile::ReferenceStill &&
+        m_rtxdiAvailable &&
+        m_qualitySettings.restirBackend == rb::RestirBackend::Rtxdi;
+    const bool rtxdiDiActive =
+        realtimeRtxdiRequested && rtxdiStatus.diEvaluationReady && UsesRestirDI(m_mode);
+    const bool rtxdiGiActive =
+        realtimeRtxdiRequested && rtxdiStatus.giEvaluationReady && UsesRestirGI(m_mode);
+    const bool rtxdiPtActive = rtxdiStatus.ptEvaluationReady &&
+        m_qualitySettings.restirBackend == rb::RestirBackend::Rtxdi && UsesRestirPT(m_mode);
+    const RtxdiReservoirLayout diReservoirLayout =
+        m_rtxdiBackendRuntime.CalculateReservoirLayout(m_renderWidth, m_renderHeight);
+    const RtxdiReservoirLayout giReservoirLayout =
+        m_rtxdiBackendRuntime.CalculateGiReservoirLayout(m_renderWidth, m_renderHeight);
+    const RtxdiReservoirLayout ptReservoirLayout =
+        m_rtxdiBackendRuntime.CalculatePtReservoirLayout(m_renderWidth, m_renderHeight);
+    const std::uint64_t diReservoirBytes = rtxdiDiActive
+        ? static_cast<std::uint64_t>(diReservoirLayout.arrayPitch) * diReservoirLayout.elementStride * 2ull
+        : 0ull;
+    const std::uint64_t giReservoirBytes = rtxdiGiActive
+        ? static_cast<std::uint64_t>(giReservoirLayout.arrayPitch) * giReservoirLayout.elementStride * 2ull
+        : 0ull;
+    const std::uint64_t ptReservoirBytes = rtxdiPtActive
+        ? static_cast<std::uint64_t>(ptReservoirLayout.arrayPitch) * ptReservoirLayout.elementStride * 2ull
+        : 0ull;
+    const char* activeIndirectAlgorithm =
+        rtxdiPtActive ? "rtxdi_restir_pt" : (rtxdiGiActive ? "rtxdi_restir_gi" : "baseline_pt");
+    const char* effectiveRestir = "baseline";
+    if (rtxdiPtActive)
+    {
+        effectiveRestir = rtxdiDiActive ? "rtxdi_pt+di" : "rtxdi_pt";
+    }
+    else if (rtxdiGiActive)
+    {
+        effectiveRestir = rtxdiDiActive ? "rtxdi_gi+di" : "rtxdi_gi";
+    }
+    else if (rtxdiDiActive)
+    {
+        effectiveRestir = (UsesRestirGI(m_mode) || UsesRestirPT(m_mode))
+            ? "rtxdi_di+baseline_indirect"
+            : "rtxdi_di";
+    }
     out << "\"restir\":{\"requestedBackend\":\"" << rb::RestirBackendName(m_qualitySettings.restirBackend)
         << "\",\"rtxdiAvailable\":" << (m_rtxdiAvailable ? "true" : "false")
         << ",\"effective\":\"" << effectiveRestir
+        << "\",\"activeIndirectAlgorithm\":\"" << activeIndirectAlgorithm
         << "\",\"rtxdiStatus\":{\"requestedAtBuild\":" << (rtxdiStatus.requestedAtBuild ? "true" : "false")
         << ",\"compiled\":" << (rtxdiStatus.compiled ? "true" : "false")
         << ",\"sdkAvailable\":" << (rtxdiStatus.sdkAvailable ? "true" : "false")
@@ -4344,8 +5042,13 @@ std::string D3D12PathTracingBackend::BuildMcpStateJson() const
         << ",\"evaluationReady\":" << (rtxdiStatus.evaluationReady ? "true" : "false")
         << ",\"diEvaluationReady\":" << (rtxdiStatus.diEvaluationReady ? "true" : "false")
         << ",\"giEvaluationReady\":" << (rtxdiStatus.giEvaluationReady ? "true" : "false")
+        << ",\"ptEvaluationReady\":" << (rtxdiStatus.ptEvaluationReady ? "true" : "false")
         << ",\"diActive\":" << (rtxdiDiActive ? "true" : "false")
         << ",\"giActive\":" << (rtxdiGiActive ? "true" : "false")
+        << ",\"ptActive\":" << (rtxdiPtActive ? "true" : "false")
+        << ",\"diReservoirBytes\":" << diReservoirBytes
+        << ",\"giReservoirBytes\":" << giReservoirBytes
+        << ",\"ptReservoirBytes\":" << ptReservoirBytes
         << ",\"version\":\"" << cld::EscapeJson(rtxdiStatus.sdkVersion)
         << "\",\"sdkCommit\":\"" << cld::EscapeJson(rtxdiStatus.sdkCommit)
         << "\",\"runtimeCommit\":\"" << cld::EscapeJson(rtxdiStatus.runtimeCommit)
@@ -4418,6 +5121,10 @@ std::string D3D12PathTracingBackend::BuildMcpStatsJson() const
         << ",\"pipelineMs\":" << m_gpuFrameMs
         << ",\"pathTraceMs\":" << m_gpuPathTraceMs
         << ",\"restirReuseMs\":" << m_gpuRestirMs
+        << ",\"restirGiInitialMs\":" << m_gpuRestirGiInitialMs
+        << ",\"restirGiFusedMs\":" << m_gpuRestirGiFusedMs
+        << ",\"restirPtInitialMs\":" << m_gpuRestirPtInitialMs
+        << ",\"restirPtFusedMs\":" << m_gpuRestirPtFusedMs
         << ",\"denoiseMs\":" << m_gpuDenoiseMs
         << ",\"copyMs\":" << m_gpuCopyMs
         << ",\"uiMs\":" << m_gpuUiMs
@@ -4429,7 +5136,9 @@ std::string D3D12PathTracingBackend::BuildMcpStatsJson() const
     out << "\"submittedIndices\":" << m_sceneSubmittedIndexCount << ",";
     out << "\"primitives\":" << m_scenePrimitiveCount << ",";
     out << "\"blasGeometries\":" << m_geometryRecords.size() << ",";
-    out << "\"tlasInstances\":1,";
+    out << "\"blasOriginalBytes\":" << m_blasOriginalBytes << ",";
+    out << "\"blasCompactedBytes\":" << m_blasCompactedBytes << ",";
+    out << "\"tlasInstances\":" << (m_scene.instances.empty() ? 1u : m_scene.instances.size()) << ",";
     out << "\"lights\":" << m_activeLightCount << ",";
     out << "\"emissiveTriangleLights\":" << m_emissiveTriangleLightCount << ",";
     out << "\"proceduralAreaLights\":" << m_proceduralAreaLightCount << ",";
@@ -4437,7 +5146,7 @@ std::string D3D12PathTracingBackend::BuildMcpStatsJson() const
     out << "\"historyDomains\":{\"validMask\":" << static_cast<uint32_t>(m_validHistoryDomains)
         << ",\"lastChangeMask\":" << static_cast<uint32_t>(m_frameState.changes) << "},";
     out << "\"activeMode\":\"" << PathtracingModeName(m_mode) << "\",";
-    const bool finalTaaActive = m_qualitySettings.finalTaa &&
+    const bool finalTaaActive = (m_qualitySettings.finalTaa || UsesTemporalUpscale()) &&
         m_qualitySettings.qualityProfile != rb::QualityProfile::ReferenceStill && m_finalTaaPipeline;
     out << "\"finalTaaActive\":" << (finalTaaActive ? "true" : "false") << ",";
     out << "\"reservoirCount\":" << m_restirReservoirElementCount << ",";
@@ -4447,6 +5156,9 @@ std::string D3D12PathTracingBackend::BuildMcpStatsJson() const
     out << "\"resourceMemory\":{\"frameAndHistoryBytes\":" << m_frameHistoryResourceBytes
         << ",\"frameAndHistoryMiB\":" << (static_cast<double>(m_frameHistoryResourceBytes) / (1024.0 * 1024.0))
         << ",\"budgetMiB\":512.0"
+        << ",\"headroomMiB\":" << ((512.0 * 1024.0 * 1024.0 - static_cast<double>(m_frameHistoryResourceBytes)) / (1024.0 * 1024.0))
+        << ",\"restirAliasHeapBytes\":" << (m_restirAliasHeapSize * m_restirAliasHeaps.size())
+        << ",\"taaOutputHistoryAliased\":" << (m_accumulationAliasesTaaHistory ? "true" : "false")
         << ",\"withinBudget\":" << (m_frameHistoryResourceBytes <= 512ull * 1024ull * 1024ull ? "true" : "false")
         << ",\"allocationProfile\":\"" << resourceProfile << "\"},";
     out << "\"secondaryShading\":{\"requested\":\""
@@ -4596,7 +5308,8 @@ std::string D3D12PathTracingBackend::BuildMcpDiagnosticsJson() const
     out << "\"server\":{\"running\":" << (status.running ? "true" : "false")
         << ",\"endpoint\":\"" << cld::EscapeJson(status.endpoint)
         << "\",\"lastError\":\"" << cld::EscapeJson(status.lastError)
-        << "\",\"activeSessions\":" << status.activeSessions
+        << "\",\"activeLegacySessions\":" << status.activeLegacySessions
+        << ",\"activeSubscriptions\":" << status.activeSubscriptions
         << ",\"activeRequests\":" << status.activeRequests
         << ",\"pendingCommands\":" << m_mcpDispatcher.PendingCount() << ",\"recentRequests\":[";
     for (size_t i = 0; i < status.recentRequests.size(); ++i)
@@ -4663,18 +5376,23 @@ std::string D3D12PathTracingBackend::BuildMcpCaptureIndexJson() const
 
 uint64_t D3D12PathTracingBackend::StoreMcpCapture(std::string base64Png, int debugView, const std::string& label)
 {
-    std::lock_guard<std::mutex> lock(m_mcpSnapshotMutex);
-    McpCapture capture;
-    capture.id = m_nextMcpCaptureId++;
-    capture.debugView = debugView;
-    capture.label = label;
-    capture.base64Png = std::move(base64Png);
-    m_mcpCaptures.push_back(std::move(capture));
-    while (m_mcpCaptures.size() > 8)
+    uint64_t id = 0;
     {
-        m_mcpCaptures.pop_front();
+        std::lock_guard<std::mutex> lock(m_mcpSnapshotMutex);
+        McpCapture capture;
+        capture.id = m_nextMcpCaptureId++;
+        capture.debugView = debugView;
+        capture.label = label;
+        capture.base64Png = std::move(base64Png);
+        m_mcpCaptures.push_back(std::move(capture));
+        while (m_mcpCaptures.size() > 8)
+        {
+            m_mcpCaptures.pop_front();
+        }
+        id = m_mcpCaptures.back().id;
     }
-    return m_mcpCaptures.back().id;
+    m_mcpServer.PublishResourceUpdates({ "lookdevpt://captures/index" });
+    return id;
 }
 
 bool D3D12PathTracingBackend::FindMcpCapture(uint64_t id, std::string& base64Png, std::string& label) const
@@ -5148,10 +5866,16 @@ bool D3D12PathTracingBackend::SaveBenchmarkArtifactSet(
 
     const bool capturesFinalTaa =
         m_qualitySettings.qualityProfile != rb::QualityProfile::ReferenceStill &&
-        m_qualitySettings.finalTaa && (m_debugViewMode < 41 || m_debugViewMode >= 47);
+        (m_qualitySettings.finalTaa ||
+            UsesTemporalUpscale() ||
+            (IsDlssSelected() &&
+                m_dlssBackendRuntime.Status().lastEvaluationSucceeded)) &&
+        (m_debugViewMode < 41 || m_debugViewMode >= 47);
     ID3D12Resource* finalHdrSource = m_qualitySettings.qualityProfile == rb::QualityProfile::ReferenceStill
         ? m_accumulationOutput.Get()
-        : (capturesFinalTaa ? m_finalResolvedHdr.Get() : m_postDenoiseHdr.Get());
+        : (capturesFinalTaa
+            ? FinalResolvedHdrResource(LastSubmittedSurfaceGuideParity())
+            : m_postDenoiseHdr.Get());
     if (!finalHdrSource)
     {
         diagnostics = "Benchmark HDR source is not available.";
@@ -5281,6 +6005,8 @@ bool D3D12PathTracingBackend::RenderPathTracingOutputForCapture(std::string& dia
         m_commandList->SetDescriptorHeaps(_countof(descriptorHeaps), descriptorHeaps);
         DispatchRays();
         RunRestirReusePass();
+        RunRestirGiPass();
+        RunRestirPtPass();
         RunDenoisePass();
         RunFinalTaaPass();
         SealSurfaceGuideFrame();
@@ -5398,16 +6124,31 @@ void D3D12PathTracingBackend::CreateOutputResources()
     const DXGI_FORMAT accumulationFormat = m_qualitySettings.qualityProfile == rb::QualityProfile::ReferenceStill
         ? ReferenceAccumulationFormat
         : SignalFormat;
-    D3D12_RESOURCE_DESC accumulationDesc = CD3DX12_RESOURCE_DESC::Tex2D(accumulationFormat, m_width, m_height, 1, 1, 1, 0, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
+    D3D12_RESOURCE_DESC accumulationDesc = CD3DX12_RESOURCE_DESC::Tex2D(
+        accumulationFormat,
+        m_renderWidth,
+        m_renderHeight,
+        1,
+        1,
+        1,
+        0,
+        D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
     const bool referenceOnlyResources = m_qualitySettings.qualityProfile == rb::QualityProfile::ReferenceStill;
+    const bool dlssResourceSet =
+        !referenceOnlyResources &&
+        IsDlssSelected() &&
+        m_dlssBackendRuntime.CanEvaluateRayReconstruction();
+    const bool finalTaaResourceSet =
+        !referenceOnlyResources &&
+        (m_qualitySettings.finalTaa || UsesTemporalUpscale() || dlssResourceSet);
     // Reference output does not need temporal guides during ordinary use, but
     // deterministic benchmark captures promise full-resolution AOVs from the
     // same submitted frame. Keep only the guides/signals full in that case;
     // all temporal denoiser histories remain 1x1 placeholders.
     const bool benchmarkAovCapture = m_benchmarkHarness != nullptr;
     const bool fullGuideResources = !referenceOnlyResources || benchmarkAovCapture;
-    const UINT guideWidth = fullGuideResources ? m_width : 1u;
-    const UINT guideHeight = fullGuideResources ? m_height : 1u;
+    const UINT guideWidth = fullGuideResources ? m_renderWidth : 1u;
+    const UINT guideHeight = fullGuideResources ? m_renderHeight : 1u;
     const bool nrdResourceSet = !referenceOnlyResources && IsNrdSelected() && m_nrdBackendRuntime.CanEvaluate();
     const bool nativeExternalDenoiser = nrdResourceSet ||
         (!referenceOnlyResources && IsDlssSelected() && m_dlssBackendRuntime.CanEvaluateRayReconstruction());
@@ -5438,12 +6179,46 @@ void D3D12PathTracingBackend::CreateOutputResources()
         DXGI_FORMAT_R32_UINT, guideWidth, guideHeight, 1, 1, 1, 0, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
     const bool qualityDiagnosticsEnabled = m_benchmarkHarness &&
         lookdevpt::benchmark::IncludesQuality(m_benchmarkOptions.benchmarkKind);
-    const UINT qualityWidth = qualityDiagnosticsEnabled ? m_width : 1u;
-    const UINT qualityHeight = qualityDiagnosticsEnabled ? m_height : 1u;
+    const UINT qualityWidth = qualityDiagnosticsEnabled ? m_renderWidth : 1u;
+    const UINT qualityHeight = qualityDiagnosticsEnabled ? m_renderHeight : 1u;
     D3D12_RESOURCE_DESC qualityContributionDesc = CD3DX12_RESOURCE_DESC::Tex2D(
         DXGI_FORMAT_R32_UINT, qualityWidth, qualityHeight, 1, 1, 1, 0, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
-    createDefaultTexture(accumulationDesc, &m_accumulationOutput);
-    m_accumulationOutput->SetName(L"PathtracingAccumulation");
+    m_accumulationAliasesTaaHistory =
+        finalTaaResourceSet && !UsesTemporalUpscale();
+    if (m_accumulationAliasesTaaHistory)
+    {
+        // The interactive accumulation target is frame-local. ReSTIR and the
+        // denoisers consume it before Final TAA, so the next TAA history can
+        // occupy the same physical texture and overwrite it at the end of the
+        // frame. Descriptor-table parity selects B on even frames and A on odd.
+        createDefaultTexture(signalDesc, &m_taaHistoryA);
+        m_taaHistoryA->SetName(L"TAA History / Frame Accumulation A");
+        createDefaultTexture(signalDesc, &m_taaHistoryB);
+        m_taaHistoryB->SetName(L"TAA History / Frame Accumulation B");
+        m_accumulationOutput = m_taaHistoryB;
+    }
+    else
+    {
+        createDefaultTexture(accumulationDesc, &m_accumulationOutput);
+        m_accumulationOutput->SetName(L"PathtracingAccumulation");
+        D3D12_RESOURCE_DESC taaDesc = CD3DX12_RESOURCE_DESC::Tex2D(
+            SignalFormat,
+            finalTaaResourceSet ? m_width : 1u,
+            finalTaaResourceSet ? m_height : 1u,
+            1,
+            1,
+            1,
+            0,
+            D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
+        createDefaultTexture(taaDesc, &m_taaHistoryA);
+        m_taaHistoryA->SetName(finalTaaResourceSet
+            ? L"TAAU History A"
+            : L"TAA History A Placeholder");
+        createDefaultTexture(taaDesc, &m_taaHistoryB);
+        m_taaHistoryB->SetName(finalTaaResourceSet
+            ? L"TAAU History B"
+            : L"TAA History B Placeholder");
+    }
     createDefaultTexture(signalDesc, &m_denoiseAov0);
     m_denoiseAov0->SetName(L"SurfaceGuide A Normal ViewZ");
     createDefaultTexture(signalDesc, &m_denoiseAov1);
@@ -5510,19 +6285,23 @@ void D3D12PathTracingBackend::CreateOutputResources()
     m_nrdDiffDenoised->SetName(L"NRD Diffuse Denoised");
     createDefaultTexture(nrdRadianceDesc, &m_nrdSpecDenoised);
     m_nrdSpecDenoised->SetName(L"NRD Specular Denoised");
-    createDefaultTexture(signalDesc, &m_postDenoiseHdr);
-    m_postDenoiseHdr->SetName(L"Post Denoise HDR");
-    createDefaultTexture(signalDesc, &m_taaHistoryA);
-    m_taaHistoryA->SetName(L"TAA History A");
-    createDefaultTexture(signalDesc, &m_taaHistoryB);
-    m_taaHistoryB->SetName(L"TAA History B");
-    const bool finalTaaResourceSet = !referenceOnlyResources && m_qualitySettings.finalTaa;
+    const bool fusedNrdTaaResourceSet =
+        nrdResourceSet && m_denoiserEnabled &&
+        (m_qualitySettings.finalTaa || UsesTemporalUpscale()) &&
+        m_debugViewMode == 0 &&
+        !qualityDiagnosticsEnabled;
+    D3D12_RESOURCE_DESC postDenoiseHdrDesc = fusedNrdTaaResourceSet
+        ? combinedSignalPlaceholderDesc
+        : signalDesc;
+    createDefaultTexture(postDenoiseHdrDesc, &m_postDenoiseHdr);
+    m_postDenoiseHdr->SetName(fusedNrdTaaResourceSet
+        ? L"Post Denoise HDR Fused Placeholder"
+        : L"Post Denoise HDR");
     if (finalTaaResourceSet)
     {
-        // Progressive accumulation has no consumers after the final TAA pass.
-        // Reuse it as the sharpened HDR resolve target instead of retaining a
-        // fourth full-resolution temporal color surface.
-        m_finalResolvedHdr = m_accumulationOutput;
+        // Base-table parity uses B; the alternate table overrides both the
+        // accumulation and final-resolve UAVs with A below.
+        m_finalResolvedHdr = m_taaHistoryB;
     }
     else
     {
@@ -5538,6 +6317,146 @@ void D3D12PathTracingBackend::CreateOutputResources()
     m_nrdDiffuseConfidence->SetName(L"NRD Diffuse History Confidence");
     createDefaultTexture(nrdConfidenceDesc, &m_nrdSpecularConfidence);
     m_nrdSpecularConfidence->SetName(L"NRD Specular History Confidence");
+
+    const UINT dlssGuideWidth = dlssResourceSet ? guideWidth : 1u;
+    const UINT dlssGuideHeight = dlssResourceSet ? guideHeight : 1u;
+    D3D12_RESOURCE_DESC dlssDepthDesc = CD3DX12_RESOURCE_DESC::Tex2D(
+        DXGI_FORMAT_R32_FLOAT,
+        dlssGuideWidth,
+        dlssGuideHeight,
+        1,
+        1,
+        1,
+        0,
+        D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
+    D3D12_RESOURCE_DESC dlssMotionDesc = CD3DX12_RESOURCE_DESC::Tex2D(
+        DXGI_FORMAT_R16G16_FLOAT,
+        dlssGuideWidth,
+        dlssGuideHeight,
+        1,
+        1,
+        1,
+        0,
+        D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
+    D3D12_RESOURCE_DESC dlssGuideDesc = CD3DX12_RESOURCE_DESC::Tex2D(
+        DXGI_FORMAT_R16G16B16A16_FLOAT,
+        dlssGuideWidth,
+        dlssGuideHeight,
+        1,
+        1,
+        1,
+        0,
+        D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
+    D3D12_RESOURCE_DESC dlssExposureDesc = CD3DX12_RESOURCE_DESC::Tex2D(
+        DXGI_FORMAT_R32_FLOAT,
+        1u,
+        1u,
+        1,
+        1,
+        1,
+        0,
+        D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
+    createDefaultTexture(dlssDepthDesc, &m_dlssDepth);
+    m_dlssDepth->SetName(dlssResourceSet ? L"DLSS-RR Linear Depth" : L"DLSS-RR Depth Placeholder");
+    createDefaultTexture(dlssMotionDesc, &m_dlssMotion);
+    m_dlssMotion->SetName(dlssResourceSet ? L"DLSS-RR Motion" : L"DLSS-RR Motion Placeholder");
+    createDefaultTexture(dlssGuideDesc, &m_dlssNormalRoughness);
+    m_dlssNormalRoughness->SetName(dlssResourceSet
+        ? L"DLSS-RR Normal Roughness"
+        : L"DLSS-RR Normal Roughness Placeholder");
+    createDefaultTexture(dlssGuideDesc, &m_dlssAlbedo);
+    m_dlssAlbedo->SetName(dlssResourceSet ? L"DLSS-RR Albedo" : L"DLSS-RR Albedo Placeholder");
+    createDefaultTexture(dlssGuideDesc, &m_dlssSpecularAlbedo);
+    m_dlssSpecularAlbedo->SetName(dlssResourceSet
+        ? L"DLSS-RR Specular Albedo"
+        : L"DLSS-RR Specular Albedo Placeholder");
+    createDefaultTexture(dlssExposureDesc, &m_dlssExposure);
+    m_dlssExposure->SetName(L"DLSS-RR Exposure");
+
+    const bool compactSecondaryResources = UsesCompactSecondaryWorkList();
+    const UINT compactWidth = compactSecondaryResources ? m_renderWidth : 1u;
+    const UINT compactHeight = compactSecondaryResources ? m_renderHeight : 1u;
+    const UINT64 compactPixelCount = static_cast<UINT64>(compactWidth) * compactHeight;
+    const UINT compactMaxSpp = compactSecondaryResources
+        ? static_cast<UINT>((std::max)(
+            (std::max)(m_giSamplesPerFrame, 1),
+            m_adaptiveSamplingEnabled ? (std::max)(m_maxAdaptiveSamplesPerPixel, 1) : 1))
+        : 1u;
+    const UINT64 requestedTaskCapacity = compactPixelCount * compactMaxSpp;
+    if (requestedTaskCapacity > UINT_MAX)
+    {
+        throw std::runtime_error("Compact secondary task capacity exceeds the DXR dispatch limit.");
+    }
+    m_secondaryTaskCapacity = static_cast<UINT>((std::max)(requestedTaskCapacity, UINT64{ 1 }));
+    m_secondaryGroupCount = static_cast<UINT>((std::max)(
+        (compactPixelCount + 255u) / 256u,
+        UINT64{ 1 }));
+
+    D3D12_RESOURCE_DESC primaryPositionDesc = CD3DX12_RESOURCE_DESC::Tex2D(
+        DXGI_FORMAT_R32G32B32A32_FLOAT,
+        m_renderWidth,
+        m_renderHeight,
+        1,
+        1,
+        1,
+        0,
+        D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
+    D3D12_RESOURCE_DESC primaryNormalDesc = CD3DX12_RESOURCE_DESC::Tex2D(
+        DXGI_FORMAT_R16G16B16A16_FLOAT,
+        m_renderWidth,
+        m_renderHeight,
+        1,
+        1,
+        1,
+        0,
+        D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
+    D3D12_RESOURCE_DESC primaryIdentityDesc = CD3DX12_RESOURCE_DESC::Tex2D(
+        DXGI_FORMAT_R32G32B32A32_UINT,
+        compactWidth,
+        compactHeight,
+        1,
+        1,
+        1,
+        0,
+        D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
+    createDefaultTexture(primaryPositionDesc, &m_primaryPositionCone);
+    m_primaryPositionCone->SetName(L"Primary Surface Position RayConeWidth");
+    createDefaultTexture(primaryNormalDesc, &m_primaryGeometricNormal);
+    m_primaryGeometricNormal->SetName(L"Primary Surface Incident Direction RayConeSpread");
+    createDefaultTexture(primaryIdentityDesc, &m_primaryIdentity);
+    m_primaryIdentity->SetName(compactSecondaryResources
+        ? L"Primary Visibility Exact Identity"
+        : L"Primary Visibility Identity Placeholder");
+    m_secondaryTaskOffsets = CreateUavBuffer(
+        compactPixelCount * sizeof(UINT),
+        D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+        compactSecondaryResources
+            ? L"Secondary Task Pixel Prefix"
+            : L"Secondary Task Prefix Placeholder");
+    m_secondaryGroupOffsets = CreateUavBuffer(
+        static_cast<UINT64>(m_secondaryGroupCount) * sizeof(UINT),
+        D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+        compactSecondaryResources
+            ? L"Secondary Task Group Prefix"
+            : L"Secondary Task Group Prefix Placeholder");
+    m_secondaryTasks = CreateUavBuffer(
+        static_cast<UINT64>(m_secondaryTaskCapacity) * 8u,
+        D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+        compactSecondaryResources
+            ? L"Compact Secondary Tasks"
+            : L"Secondary Task Placeholder");
+    m_secondaryResults = CreateUavBuffer(
+        static_cast<UINT64>(m_secondaryTaskCapacity) * 32u,
+        D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+        compactSecondaryResources
+            ? L"Compact Secondary Results"
+            : L"Secondary Result Placeholder");
+    m_secondaryIndirectArgs = CreateUavBuffer(
+        Align(sizeof(D3D12_DISPATCH_RAYS_DESC), D3D12_UAV_COUNTER_PLACEMENT_ALIGNMENT),
+        D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+        compactSecondaryResources
+            ? L"Compact Secondary DispatchRays Arguments"
+            : L"Secondary DispatchRays Arguments Placeholder");
 
     D3D12_UNORDERED_ACCESS_VIEW_DESC outputUav = {};
     outputUav.Format = BackBufferFormat;
@@ -5594,9 +6513,83 @@ void D3D12PathTracingBackend::CreateOutputResources()
     createTextureUav(m_previousSurfaceIdentity.Get(), DXGI_FORMAT_R32_UINT, DescriptorPreviousSurfaceIdentityUav);
     createTextureUav(m_finalResolvedHdr.Get(), DXGI_FORMAT_R16G16B16A16_FLOAT, DescriptorFinalResolvedHdrUav);
     createTextureUav(m_qualityContribution.Get(), DXGI_FORMAT_R32_UINT, DescriptorQualityContributionUav);
+    createTextureUav(m_dlssDepth.Get(), DXGI_FORMAT_R32_FLOAT, DescriptorDlssDepthUav);
+    createTextureUav(m_dlssMotion.Get(), DXGI_FORMAT_R16G16_FLOAT, DescriptorDlssMotionUav);
+    createTextureUav(
+        m_dlssNormalRoughness.Get(),
+        DXGI_FORMAT_R16G16B16A16_FLOAT,
+        DescriptorDlssNormalRoughnessUav);
+    createTextureUav(m_dlssAlbedo.Get(), DXGI_FORMAT_R16G16B16A16_FLOAT, DescriptorDlssAlbedoUav);
+    createTextureUav(
+        m_dlssSpecularAlbedo.Get(),
+        DXGI_FORMAT_R16G16B16A16_FLOAT,
+        DescriptorDlssSpecularAlbedoUav);
+    createTextureUav(m_dlssExposure.Get(), DXGI_FORMAT_R32_FLOAT, DescriptorDlssExposureUav);
+    createTextureUav(
+        m_primaryPositionCone.Get(),
+        DXGI_FORMAT_R32G32B32A32_FLOAT,
+        DescriptorPrimaryPositionConeUav);
+    createTextureUav(
+        m_primaryGeometricNormal.Get(),
+        DXGI_FORMAT_R16G16B16A16_FLOAT,
+        DescriptorPrimaryGeometricNormalUav);
+    createTextureUav(
+        m_primaryIdentity.Get(),
+        DXGI_FORMAT_R32G32B32A32_UINT,
+        DescriptorPrimaryIdentityUav);
 
-    m_qualityCounterTileCountX = qualityDiagnosticsEnabled ? (m_width + 15u) / 16u : 1u;
-    m_qualityCounterTileCountY = qualityDiagnosticsEnabled ? (m_height + 15u) / 16u : 1u;
+    auto createStructuredUav = [&](
+        ID3D12Resource* resource,
+        UINT elementCount,
+        UINT stride,
+        UINT slot)
+    {
+        D3D12_UNORDERED_ACCESS_VIEW_DESC uav{};
+        uav.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
+        uav.Buffer.NumElements = elementCount;
+        uav.Buffer.StructureByteStride = stride;
+        m_device->CreateUnorderedAccessView(
+            resource,
+            nullptr,
+            &uav,
+            CpuDescriptor(slot));
+    };
+    createStructuredUav(
+        m_secondaryTaskOffsets.Get(),
+        static_cast<UINT>((std::max)(compactPixelCount, UINT64{ 1 })),
+        sizeof(UINT),
+        DescriptorSecondaryTaskOffsetsUav);
+    createStructuredUav(
+        m_secondaryGroupOffsets.Get(),
+        m_secondaryGroupCount,
+        sizeof(UINT),
+        DescriptorSecondaryGroupOffsetsUav);
+    createStructuredUav(
+        m_secondaryTasks.Get(),
+        m_secondaryTaskCapacity,
+        8u,
+        DescriptorSecondaryTasksUav);
+    createStructuredUav(
+        m_secondaryResults.Get(),
+        m_secondaryTaskCapacity,
+        32u,
+        DescriptorSecondaryResultsUav);
+    D3D12_UNORDERED_ACCESS_VIEW_DESC indirectArgsUav{};
+    indirectArgsUav.Format = DXGI_FORMAT_R32_TYPELESS;
+    indirectArgsUav.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
+    indirectArgsUav.Buffer.NumElements = static_cast<UINT>(
+        Align(sizeof(D3D12_DISPATCH_RAYS_DESC), sizeof(UINT)) / sizeof(UINT));
+    indirectArgsUav.Buffer.Flags = D3D12_BUFFER_UAV_FLAG_RAW;
+    m_device->CreateUnorderedAccessView(
+        m_secondaryIndirectArgs.Get(),
+        nullptr,
+        &indirectArgsUav,
+        CpuDescriptor(DescriptorSecondaryIndirectArgsUav));
+
+    m_qualityCounterTileCountX =
+        qualityDiagnosticsEnabled ? (m_renderWidth + 15u) / 16u : 1u;
+    m_qualityCounterTileCountY =
+        qualityDiagnosticsEnabled ? (m_renderHeight + 15u) / 16u : 1u;
     m_qualityCounterTileCount = (std::max)(1u, m_qualityCounterTileCountX * m_qualityCounterTileCountY);
     m_qualityCounterBufferSize = static_cast<UINT64>(m_qualityCounterTileCount) *
         sizeof(lookdevpt::benchmark::QualityCounterTileV1);
@@ -5614,32 +6607,215 @@ void D3D12PathTracingBackend::CreateOutputResources()
         &qualityCounterUav,
         CpuDescriptor(DescriptorQualityCounterUav));
 
-    // RTXDI DI uses two fixed physical reservoirs. Pass A reads history A and
-    // writes candidate+temporal scratch B; Pass B reads B and overwrites A
-    // only after every previous-history consumer has completed. Binding u2
-    // and u3 to A keeps the root ABI stable without descriptor rewrites or a
-    // 50 MiB/frame history copy.
+    // RTXDI DI history is independent from its transient candidate scratch.
+    // In GI+DI mode, each parity has a placed-resource heap shared by that DI
+    // scratch and the GI write target. DI completes before GI starts, while
+    // the opposite heap remains immutable GI history, so their lifetimes
+    // never overlap.
     const bool allocateFullRestirReservoirs =
         m_rtxdiAvailable && m_qualitySettings.restirBackend == rb::RestirBackend::Rtxdi &&
         UsesRestirDI(m_mode) && m_qualitySettings.qualityProfile != rb::QualityProfile::ReferenceStill;
-    const RtxdiReservoirLayout reservoirLayout = m_rtxdiBackendRuntime.CalculateReservoirLayout(m_width, m_height);
+    const bool allocateFullGiReservoirs =
+        m_rtxdiAvailable && m_qualitySettings.restirBackend == rb::RestirBackend::Rtxdi &&
+        UsesRestirGI(m_mode) && m_qualitySettings.qualityProfile != rb::QualityProfile::ReferenceStill;
+    const bool allocateFullPtReservoirs =
+        m_rtxdiAvailable && m_qualitySettings.restirBackend == rb::RestirBackend::Rtxdi &&
+        UsesRestirPT(m_mode) && m_qualitySettings.qualityProfile != rb::QualityProfile::ReferenceStill;
+    const bool allocateFullIndirectReservoirs =
+        allocateFullGiReservoirs || allocateFullPtReservoirs;
+    const bool aliasDiScratchWithIndirect =
+        allocateFullRestirReservoirs && allocateFullIndirectReservoirs;
+    const RtxdiReservoirLayout reservoirLayout =
+        m_rtxdiBackendRuntime.CalculateReservoirLayout(m_renderWidth, m_renderHeight);
+    const RtxdiReservoirLayout giReservoirLayout =
+        m_rtxdiBackendRuntime.CalculateGiReservoirLayout(m_renderWidth, m_renderHeight);
+    const RtxdiReservoirLayout ptReservoirLayout =
+        m_rtxdiBackendRuntime.CalculatePtReservoirLayout(m_renderWidth, m_renderHeight);
     if (allocateFullRestirReservoirs && reservoirLayout.elementStride != RestirReservoirStride)
     {
         throw std::runtime_error("RTXDI packed DI reservoir ABI changed.");
     }
+    if (allocateFullGiReservoirs && giReservoirLayout.elementStride != RestirGiReservoirStride)
+    {
+        throw std::runtime_error("RTXDI packed GI reservoir ABI changed.");
+    }
+    if (allocateFullPtReservoirs && ptReservoirLayout.elementStride != RestirPtReservoirStride)
+    {
+        throw std::runtime_error("RTXDI packed PT reservoir ABI changed.");
+    }
     m_restirReservoirElementCount = allocateFullRestirReservoirs ? (std::max)(1u, reservoirLayout.arrayPitch) : 1u;
     m_restirReservoirBufferSize = static_cast<UINT64>(m_restirReservoirElementCount) * RestirReservoirStride;
+    m_restirGiReservoirElementCount = allocateFullGiReservoirs
+        ? (std::max)(1u, giReservoirLayout.arrayPitch)
+        : 1u;
+    m_restirGiReservoirBufferSize =
+        static_cast<UINT64>(m_restirGiReservoirElementCount) * RestirGiReservoirStride;
+    m_restirPtReservoirElementCount = allocateFullPtReservoirs
+        ? (std::max)(1u, ptReservoirLayout.arrayPitch)
+        : 1u;
+    m_restirPtReservoirBufferSize =
+        static_cast<UINT64>(m_restirPtReservoirElementCount) * RestirPtReservoirStride;
+
     m_restirReservoirCurrent = CreateUavBuffer(m_restirReservoirBufferSize, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, L"RTXDI DI History Output A");
-    if (allocateFullRestirReservoirs)
+    m_restirReservoirHistory = m_restirReservoirCurrent;
+    m_restirAliasHeapSize = 0;
+    for (ComPtr<ID3D12Heap>& heap : m_restirAliasHeaps)
     {
-        m_restirReservoirHistory = m_restirReservoirCurrent;
-        m_restirReservoirSpatial = CreateUavBuffer(m_restirReservoirBufferSize, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, L"RTXDI DI Candidate Temporal Scratch B");
+        heap.Reset();
+    }
+    m_restirReservoirSpatial.Reset();
+    m_restirReservoirSpatialB.Reset();
+    m_restirGiReservoirA.Reset();
+    m_restirGiReservoirB.Reset();
+    m_restirPtReservoirA.Reset();
+    m_restirPtReservoirB.Reset();
+
+    if (aliasDiScratchWithIndirect)
+    {
+        const D3D12_RESOURCE_DESC diScratchDesc = CD3DX12_RESOURCE_DESC::Buffer(
+            m_restirReservoirBufferSize,
+            D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
+        const D3D12_RESOURCE_DESC giDesc = CD3DX12_RESOURCE_DESC::Buffer(
+            m_restirGiReservoirBufferSize,
+            D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
+        const D3D12_RESOURCE_DESC ptDesc = CD3DX12_RESOURCE_DESC::Buffer(
+            m_restirPtReservoirBufferSize,
+            D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
+        const D3D12_RESOURCE_ALLOCATION_INFO diInfo =
+            m_device->GetResourceAllocationInfo(0, 1, &diScratchDesc);
+        const D3D12_RESOURCE_ALLOCATION_INFO giInfo =
+            m_device->GetResourceAllocationInfo(0, 1, &giDesc);
+        const D3D12_RESOURCE_ALLOCATION_INFO ptInfo =
+            m_device->GetResourceAllocationInfo(0, 1, &ptDesc);
+        const D3D12_RESOURCE_ALLOCATION_INFO indirectInfo =
+            allocateFullGiReservoirs ? giInfo : ptInfo;
+        // The DI candidate/spatial passes complete before the current
+        // indirect reservoir becomes active. Declare those intervals here so
+        // future graph changes cannot silently overlap placed resources.
+        const rb::TransientResourcePlan aliasPlan =
+            rb::BuildTransientResourcePlan({
+                {
+                    "diScratch",
+                    diInfo.SizeInBytes,
+                    diInfo.Alignment,
+                    0u,
+                    1u,
+                },
+                {
+                    allocateFullGiReservoirs ? "giCurrent" : "ptCurrent",
+                    indirectInfo.SizeInBytes,
+                    indirectInfo.Alignment,
+                    2u,
+                    3u,
+                },
+            });
+        const rb::TransientResourcePlacement* diPlacement =
+            aliasPlan.Find("diScratch");
+        const rb::TransientResourcePlacement* indirectPlacement =
+            aliasPlan.Find(
+                allocateFullGiReservoirs ? "giCurrent" : "ptCurrent");
+        if (!diPlacement || !indirectPlacement ||
+            diPlacement->offset != indirectPlacement->offset)
+        {
+            throw std::runtime_error(
+                "DI scratch and current indirect reservoir no longer have disjoint lifetimes.");
+        }
+        m_restirAliasHeapSize = aliasPlan.heapSize;
+        D3D12_HEAP_DESC heapDesc = {};
+        heapDesc.SizeInBytes = m_restirAliasHeapSize;
+        heapDesc.Alignment = (std::max)(diInfo.Alignment, indirectInfo.Alignment);
+        heapDesc.Properties = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT);
+        heapDesc.Flags = D3D12_HEAP_FLAG_ALLOW_ONLY_BUFFERS;
+        for (UINT parity = 0u; parity < 2u; ++parity)
+        {
+            ThrowIfFailed(m_device->CreateHeap(
+                &heapDesc,
+                IID_PPV_ARGS(&m_restirAliasHeaps[parity])));
+            m_restirAliasHeaps[parity]->SetName(
+                parity == 0u ? L"RTXDI Alias Heap A" : L"RTXDI Alias Heap B");
+        }
+        ThrowIfFailed(m_device->CreatePlacedResource(
+            m_restirAliasHeaps[0].Get(), diPlacement->offset, &diScratchDesc,
+            D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr,
+            IID_PPV_ARGS(&m_restirReservoirSpatial)));
+        ThrowIfFailed(m_device->CreatePlacedResource(
+            m_restirAliasHeaps[1].Get(), diPlacement->offset, &diScratchDesc,
+            D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr,
+            IID_PPV_ARGS(&m_restirReservoirSpatialB)));
+        m_restirReservoirSpatial->SetName(L"RTXDI DI Scratch A (aliases GI A)");
+        m_restirReservoirSpatialB->SetName(L"RTXDI DI Scratch B (aliases GI B)");
+        if (allocateFullGiReservoirs)
+        {
+            ThrowIfFailed(m_device->CreatePlacedResource(
+                m_restirAliasHeaps[0].Get(), indirectPlacement->offset, &giDesc,
+                D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr,
+                IID_PPV_ARGS(&m_restirGiReservoirA)));
+            ThrowIfFailed(m_device->CreatePlacedResource(
+                m_restirAliasHeaps[1].Get(), indirectPlacement->offset, &giDesc,
+                D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr,
+                IID_PPV_ARGS(&m_restirGiReservoirB)));
+            m_restirGiReservoirA->SetName(L"RTXDI GI Reservoir A (aliases DI Scratch A)");
+            m_restirGiReservoirB->SetName(L"RTXDI GI Reservoir B (aliases DI Scratch B)");
+            m_restirPtReservoirA = CreateUavBuffer(
+                m_restirPtReservoirBufferSize,
+                D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                L"RTXDI PT Reservoir Placeholder");
+            m_restirPtReservoirB = m_restirPtReservoirA;
+        }
+        else
+        {
+            ThrowIfFailed(m_device->CreatePlacedResource(
+                m_restirAliasHeaps[0].Get(), indirectPlacement->offset, &ptDesc,
+                D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr,
+                IID_PPV_ARGS(&m_restirPtReservoirA)));
+            ThrowIfFailed(m_device->CreatePlacedResource(
+                m_restirAliasHeaps[1].Get(), indirectPlacement->offset, &ptDesc,
+                D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr,
+                IID_PPV_ARGS(&m_restirPtReservoirB)));
+            m_restirPtReservoirA->SetName(L"RTXDI PT Reservoir A (aliases DI Scratch A)");
+            m_restirPtReservoirB->SetName(L"RTXDI PT Reservoir B (aliases DI Scratch B)");
+            m_restirGiReservoirA = CreateUavBuffer(
+                m_restirGiReservoirBufferSize,
+                D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                L"RTXDI GI Reservoir Placeholder");
+            m_restirGiReservoirB = m_restirGiReservoirA;
+        }
     }
     else
     {
-        m_restirReservoirHistory = m_restirReservoirCurrent;
-        m_restirReservoirSpatial = m_restirReservoirCurrent;
+        m_restirReservoirSpatial = allocateFullRestirReservoirs
+            ? CreateUavBuffer(
+                m_restirReservoirBufferSize,
+                D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                L"RTXDI DI Candidate Temporal Scratch")
+            : m_restirReservoirCurrent;
+        m_restirReservoirSpatialB = m_restirReservoirSpatial;
+        m_restirGiReservoirA = CreateUavBuffer(
+            m_restirGiReservoirBufferSize,
+            D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+            allocateFullGiReservoirs
+                ? L"RTXDI GI Reservoir A"
+                : L"RTXDI GI Reservoir Placeholder");
+        m_restirGiReservoirB = allocateFullGiReservoirs
+            ? CreateUavBuffer(
+                m_restirGiReservoirBufferSize,
+                D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                L"RTXDI GI Reservoir B")
+            : m_restirGiReservoirA;
+        m_restirPtReservoirA = CreateUavBuffer(
+            m_restirPtReservoirBufferSize,
+            D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+            allocateFullPtReservoirs
+                ? L"RTXDI PT Reservoir A"
+                : L"RTXDI PT Reservoir Placeholder");
+        m_restirPtReservoirB = allocateFullPtReservoirs
+            ? CreateUavBuffer(
+                m_restirPtReservoirBufferSize,
+                D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                L"RTXDI PT Reservoir B")
+            : m_restirPtReservoirA;
     }
+
     m_restirDiReservoirCurrent = m_restirReservoirCurrent;
     m_restirDiReservoirHistory = m_restirReservoirHistory;
     m_restirDiReservoirSpatial = m_restirReservoirSpatial;
@@ -5655,6 +6831,27 @@ void D3D12PathTracingBackend::CreateOutputResources()
     m_device->CreateUnorderedAccessView(m_restirDiReservoirHistory.Get(), nullptr, &reservoirUav, CpuDescriptor(DescriptorRestirDiHistoryUav));
     m_device->CreateUnorderedAccessView(m_restirDiReservoirSpatial.Get(), nullptr, &reservoirUav, CpuDescriptor(DescriptorRestirDiSpatialUav));
 
+    D3D12_UNORDERED_ACCESS_VIEW_DESC giReservoirUav = {};
+    giReservoirUav.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
+    giReservoirUav.Buffer.NumElements = m_restirGiReservoirElementCount;
+    giReservoirUav.Buffer.StructureByteStride = RestirGiReservoirStride;
+    m_device->CreateUnorderedAccessView(
+        m_restirGiReservoirA.Get(), nullptr, &giReservoirUav,
+        CpuDescriptor(DescriptorRestirGiCurrentUav));
+    m_device->CreateUnorderedAccessView(
+        m_restirGiReservoirB.Get(), nullptr, &giReservoirUav,
+        CpuDescriptor(DescriptorRestirGiHistoryUav));
+    D3D12_UNORDERED_ACCESS_VIEW_DESC ptReservoirUav = {};
+    ptReservoirUav.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
+    ptReservoirUav.Buffer.NumElements = m_restirPtReservoirElementCount;
+    ptReservoirUav.Buffer.StructureByteStride = RestirPtReservoirStride;
+    m_device->CreateUnorderedAccessView(
+        m_restirPtReservoirA.Get(), nullptr, &ptReservoirUav,
+        CpuDescriptor(DescriptorRestirPtCurrentUav));
+    m_device->CreateUnorderedAccessView(
+        m_restirPtReservoirB.Get(), nullptr, &ptReservoirUav,
+        CpuDescriptor(DescriptorRestirPtHistoryUav));
+
     // Table 0 presents physical A as current and B as previous. Clone every
     // binding (including the fixed two-buffer ReSTIR descriptors) into the odd
     // table, then swap only SurfaceGuide slots. Both tables are immutable for
@@ -5664,6 +6861,18 @@ void D3D12PathTracingBackend::CreateOutputResources()
         CpuDescriptor(m_alternateOutputTableBase),
         CpuDescriptor(DescriptorOutputUav),
         D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+    if (m_accumulationAliasesTaaHistory)
+    {
+        m_device->CreateUnorderedAccessView(
+            m_taaHistoryA.Get(), nullptr, &accumulationUav,
+            CpuDescriptor(m_alternateOutputTableBase + DescriptorAccumulationUav));
+    }
+    if (finalTaaResourceSet)
+    {
+        m_device->CreateUnorderedAccessView(
+            m_taaHistoryA.Get(), nullptr, &signalUav,
+            CpuDescriptor(m_alternateOutputTableBase + DescriptorFinalResolvedHdrUav));
+    }
     m_device->CreateUnorderedAccessView(
         m_previousDenoiseAov0.Get(), nullptr, &signalUav,
         CpuDescriptor(m_alternateOutputTableBase + DescriptorDenoiseAov0Uav));
@@ -5688,8 +6897,26 @@ void D3D12PathTracingBackend::CreateOutputResources()
     createTextureUav(
         m_surfaceIdentity.Get(), DXGI_FORMAT_R32_UINT,
         m_alternateOutputTableBase + DescriptorPreviousSurfaceIdentityUav);
+    m_device->CreateUnorderedAccessView(
+        m_restirGiReservoirB.Get(), nullptr, &giReservoirUav,
+        CpuDescriptor(m_alternateOutputTableBase + DescriptorRestirGiCurrentUav));
+    m_device->CreateUnorderedAccessView(
+        m_restirGiReservoirA.Get(), nullptr, &giReservoirUav,
+        CpuDescriptor(m_alternateOutputTableBase + DescriptorRestirGiHistoryUav));
+    m_device->CreateUnorderedAccessView(
+        m_restirPtReservoirB.Get(), nullptr, &ptReservoirUav,
+        CpuDescriptor(m_alternateOutputTableBase + DescriptorRestirPtCurrentUav));
+    m_device->CreateUnorderedAccessView(
+        m_restirPtReservoirA.Get(), nullptr, &ptReservoirUav,
+        CpuDescriptor(m_alternateOutputTableBase + DescriptorRestirPtHistoryUav));
+    m_device->CreateUnorderedAccessView(
+        m_restirReservoirSpatialB.Get(), nullptr, &reservoirUav,
+        CpuDescriptor(m_alternateOutputTableBase + DescriptorRestirSpatialUav));
+    m_device->CreateUnorderedAccessView(
+        m_restirReservoirSpatialB.Get(), nullptr, &reservoirUav,
+        CpuDescriptor(m_alternateOutputTableBase + DescriptorRestirDiSpatialUav));
 
-    const std::array<ID3D12Resource*, 43> frameHistoryResources =
+    const std::array<ID3D12Resource*, 62> frameHistoryResources =
     {
         m_PathtracingOutput.Get(), m_accumulationOutput.Get(),
         m_denoiseAov0.Get(), m_denoiseAov1.Get(), m_denoiseAov2.Get(),
@@ -5706,8 +6933,16 @@ void D3D12PathTracingBackend::CreateOutputResources()
         m_finalResolvedHdr.Get(),
         m_qualityCounterBuffer.Get(), m_qualityContribution.Get(),
         m_nrdDiffuseConfidence.Get(), m_nrdSpecularConfidence.Get(),
-        m_restirReservoirCurrent.Get(), m_restirReservoirHistory.Get(), m_restirReservoirSpatial.Get(),
+        m_restirReservoirCurrent.Get(), m_restirReservoirHistory.Get(),
+        m_restirReservoirSpatial.Get(), m_restirReservoirSpatialB.Get(),
         m_restirDiReservoirCurrent.Get(), m_restirDiReservoirHistory.Get(), m_restirDiReservoirSpatial.Get(),
+        m_restirGiReservoirA.Get(), m_restirGiReservoirB.Get(),
+        m_restirPtReservoirA.Get(), m_restirPtReservoirB.Get(),
+        m_dlssDepth.Get(), m_dlssMotion.Get(), m_dlssNormalRoughness.Get(),
+        m_dlssAlbedo.Get(), m_dlssSpecularAlbedo.Get(), m_dlssExposure.Get(),
+        m_primaryPositionCone.Get(), m_primaryGeometricNormal.Get(), m_primaryIdentity.Get(),
+        m_secondaryTaskOffsets.Get(), m_secondaryGroupOffsets.Get(),
+        m_secondaryTasks.Get(), m_secondaryResults.Get(), m_secondaryIndirectArgs.Get(),
     };
     std::vector<ID3D12Resource*> uniqueResources;
     uniqueResources.reserve(frameHistoryResources.size());
@@ -5718,10 +6953,23 @@ void D3D12PathTracingBackend::CreateOutputResources()
         {
             continue;
         }
+        if (m_restirAliasHeapSize != 0u &&
+            (resource == m_restirReservoirSpatial.Get() ||
+             resource == m_restirReservoirSpatialB.Get() ||
+             (allocateFullGiReservoirs &&
+                (resource == m_restirGiReservoirA.Get() ||
+                 resource == m_restirGiReservoirB.Get())) ||
+             (allocateFullPtReservoirs &&
+                (resource == m_restirPtReservoirA.Get() ||
+                 resource == m_restirPtReservoirB.Get()))))
+        {
+            continue;
+        }
         uniqueResources.push_back(resource);
         const D3D12_RESOURCE_DESC resourceDesc = resource->GetDesc();
         m_frameHistoryResourceBytes += m_device->GetResourceAllocationInfo(0, 1, &resourceDesc).SizeInBytes;
     }
+    m_frameHistoryResourceBytes += m_restirAliasHeapSize * m_restirAliasHeaps.size();
 }
 
 void D3D12PathTracingBackend::CreateGlobalRootSignature()
@@ -5729,7 +6977,7 @@ void D3D12PathTracingBackend::CreateGlobalRootSignature()
     CD3DX12_DESCRIPTOR_RANGE uavRange;
     uavRange.Init(D3D12_DESCRIPTOR_RANGE_TYPE_UAV, DescriptorVertexBuffer, 0, 0);
     CD3DX12_DESCRIPTOR_RANGE sceneBufferRange;
-    sceneBufferRange.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 5, 1, 0);
+    sceneBufferRange.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 6, 1, 0);
     CD3DX12_DESCRIPTOR_RANGE textureRange;
     textureRange.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, static_cast<UINT>(m_scene.materials.size()) * TextureSlotCount + 2u, 0, 1);
 
@@ -5771,6 +7019,7 @@ void D3D12PathTracingBackend::CreateSceneBuffers()
     m_vertexBuffer = CreateDefaultBuffer(m_scene.vertices.data(), m_scene.vertices.size() * sizeof(Bistro::Vertex), D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, L"RtVertices");
     m_indexBuffer = CreateDefaultBuffer(m_scene.indices.data(), m_scene.indices.size() * sizeof(uint32_t), D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, L"RtIndices");
     m_geometryBuffer = CreateDefaultBuffer(m_geometryRecords.data(), m_geometryRecords.size() * sizeof(Bistro::RtGeometryRecord), D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, L"RtGeometryRecords");
+    m_instanceBuffer = CreateDefaultBuffer(m_rtInstances.data(), m_rtInstances.size() * sizeof(Bistro::RtInstance), D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, L"RtInstances");
     CreateLightBuffer();
 
     D3D12_SHADER_RESOURCE_VIEW_DESC vertexSrv = {};
@@ -5793,6 +7042,13 @@ void D3D12PathTracingBackend::CreateSceneBuffers()
     geometrySrv.Buffer.NumElements = static_cast<UINT>(m_geometryRecords.size());
     geometrySrv.Buffer.StructureByteStride = sizeof(Bistro::RtGeometryRecord);
     m_device->CreateShaderResourceView(m_geometryBuffer.Get(), &geometrySrv, CpuDescriptor(DescriptorGeometryBuffer));
+
+    D3D12_SHADER_RESOURCE_VIEW_DESC instanceSrv = {};
+    instanceSrv.ViewDimension = D3D12_SRV_DIMENSION_BUFFER;
+    instanceSrv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    instanceSrv.Buffer.NumElements = static_cast<UINT>(m_rtInstances.size());
+    instanceSrv.Buffer.StructureByteStride = sizeof(Bistro::RtInstance);
+    m_device->CreateShaderResourceView(m_instanceBuffer.Get(), &instanceSrv, CpuDescriptor(DescriptorInstanceBuffer));
 
     const UINT constantSize = CalculateConstantBufferByteSize(sizeof(SceneConstantBuffer));
     auto uploadHeapProps = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD);
@@ -5950,7 +7206,15 @@ void D3D12PathTracingBackend::CreateMaterialBuffer()
         {
             materialFeatures |= Bistro::RtMaterialFeatureEmissiveTexture;
         }
+        if (textureExists[Bistro::TextureSlotAlpha])
+        {
+            materialFeatures |= Bistro::RtMaterialFeatureAlphaTexture;
+        }
         rtMaterial.materialFeatures = materialFeatures;
+        rtMaterial.transmissionFactor = std::clamp(material.transmissionFactor, 0.0f, 1.0f);
+        rtMaterial.indexOfRefraction = std::clamp(material.indexOfRefraction, 1.0001f, 3.0f);
+        rtMaterial.thinDielectric = material.thinDielectric ? 1u : 0u;
+        rtMaterial.uvScaleOffset = material.uvScaleOffset;
         m_rtMaterials[materialIndex] = rtMaterial;
     }
 
@@ -5975,7 +7239,9 @@ void D3D12PathTracingBackend::CreateTextures()
     const uint8_t roughness[] = { 122, 122, 122, 255 };
     const uint8_t metallic[] = { 0, 0, 0, 255 };
     const uint8_t black[] = { 0, 0, 0, 255 };
-    const uint8_t environmentFallback[] = { 35, 68, 110, 255 };
+    // Disabled environments never sample this resource. White lets a PBRT
+    // infinite light without a filename represent its authored constant L.
+    const uint8_t environmentFallback[] = { 255, 255, 255, 255 };
     std::map<std::wstring, UINT> cache;
     m_materialTextureIndices.resize(m_scene.materials.size());
 
@@ -5993,6 +7259,7 @@ void D3D12PathTracingBackend::CreateTextures()
         indices[Bistro::TextureSlotMetallic] = CreateTextureResource(material.textures[Bistro::TextureSlotMetallic], false, metallic, cache);
         indices[Bistro::TextureSlotOcclusion] = CreateTextureResource(material.textures[Bistro::TextureSlotOcclusion], false, white, cache);
         indices[Bistro::TextureSlotEmissive] = CreateTextureResource(material.textures[Bistro::TextureSlotEmissive], true, black, cache);
+        indices[Bistro::TextureSlotAlpha] = CreateTextureResource(material.textures[Bistro::TextureSlotAlpha], false, white, cache, alphaCoverageCutoff);
 
         for (UINT slot = 0; slot < TextureSlotCount; ++slot)
         {
@@ -6022,7 +7289,9 @@ void D3D12PathTracingBackend::CreateTextures()
 
     const Bistro::TextureData environmentImportanceSource = Bistro::LoadEnvironmentImportanceSource(
         m_environmentTexturePath, environmentFallback);
-    std::vector<Bistro::EnvironmentAliasEntry> environmentAlias = Bistro::BuildEnvironmentAliasTable(environmentImportanceSource);
+    std::vector<Bistro::EnvironmentAliasEntry> environmentAlias = Bistro::BuildEnvironmentAliasTable(
+        environmentImportanceSource,
+        m_environmentEqualAreaMapping);
     if (environmentAlias.empty())
     {
         environmentAlias.push_back({});
@@ -6086,6 +7355,8 @@ void D3D12PathTracingBackend::CreatePathtracingStateObject()
     D3D12_SHADER_BYTECODE shaderBytecode = CD3DX12_SHADER_BYTECODE(shader.data(), shader.size());
     library->SetDXILLibrary(&shaderBytecode);
     library->DefineExport(RayGenShaderName);
+    library->DefineExport(PrimaryRayGenShaderName);
+    library->DefineExport(SecondaryRayGenShaderName);
     library->DefineExport(MissShaderName);
     library->DefineExport(ShadowMissShaderName);
     library->DefineExport(ClosestHitShaderName);
@@ -6126,8 +7397,14 @@ void D3D12PathTracingBackend::CreateRestirReusePipeline()
 {
     m_rtxdiDiCandidatePipeline.Reset();
     m_rtxdiDiSpatialPipeline.Reset();
+    m_rtxdiGiInitialPipeline.Reset();
+    m_rtxdiGiFusedPipeline.Reset();
+    m_rtxdiPtInitialPipeline.Reset();
+    m_rtxdiPtFusedPipeline.Reset();
+    m_rtxdiBackendRuntime.SetRendererEvaluationReady(false, false);
     if (!m_rtxdiAvailable || m_qualitySettings.restirBackend != rb::RestirBackend::Rtxdi ||
-        !UsesRestirDI(m_mode) || m_qualitySettings.qualityProfile == rb::QualityProfile::ReferenceStill)
+        (!UsesRestirDI(m_mode) && !UsesRestirGI(m_mode) && !UsesRestirPT(m_mode)) ||
+        m_qualitySettings.qualityProfile == rb::QualityProfile::ReferenceStill)
     {
         return;
     }
@@ -6149,8 +7426,24 @@ void D3D12PathTracingBackend::CreateRestirReusePipeline()
     // Candidate.cso is fused candidate+temporal Pass A. Spatial.cso is fused
     // spatial+visibility+shade Pass B. The two legacy entry points remain
     // shader-build compatible but no longer need PSOs or dispatches.
-    createPipeline(L"RtxdiDiCandidate.cso", m_rtxdiDiCandidatePipeline);
-    createPipeline(L"RtxdiDiSpatial.cso", m_rtxdiDiSpatialPipeline);
+    if (UsesRestirDI(m_mode))
+    {
+        createPipeline(L"RtxdiDiCandidate.cso", m_rtxdiDiCandidatePipeline);
+        createPipeline(L"RtxdiDiSpatial.cso", m_rtxdiDiSpatialPipeline);
+    }
+    if (UsesRestirGI(m_mode))
+    {
+        createPipeline(L"RtxdiGiInitial.cso", m_rtxdiGiInitialPipeline);
+        createPipeline(L"RtxdiGiFused.cso", m_rtxdiGiFusedPipeline);
+    }
+    if (UsesRestirPT(m_mode))
+    {
+        createPipeline(L"RtxdiPtInitial.cso", m_rtxdiPtInitialPipeline);
+        createPipeline(L"RtxdiPtFused.cso", m_rtxdiPtFusedPipeline);
+    }
+    m_rtxdiBackendRuntime.SetRendererEvaluationReady(
+        m_rtxdiGiInitialPipeline && m_rtxdiGiFusedPipeline,
+        m_rtxdiPtInitialPipeline && m_rtxdiPtFusedPipeline);
 }
 
 void D3D12PathTracingBackend::CreateDenoisePipeline()
@@ -6178,12 +7471,56 @@ void D3D12PathTracingBackend::CreateDenoisePipeline()
     createPipeline(L"PathTracingDenoiseComposite.cso", m_denoiseCompositePipeline);
     createPipeline(L"PathTracingNrdPrepare.cso", m_nrdPreparePipeline);
     createPipeline(L"PathTracingNrdComposite.cso", m_nrdCompositePipeline);
+    createPipeline(L"PathTracingDlssPrepare.cso", m_dlssPreparePipeline);
     createPipeline(L"PathTracingFinalTaa.cso", m_finalTaaPipeline);
     createPipeline(L"PathTracingQualityCounters.cso", m_qualityCounterPipeline);
 }
 
+void D3D12PathTracingBackend::CreateSecondaryWorkPipelines()
+{
+    m_secondaryTaskCountPipeline.Reset();
+    m_secondaryGroupScanPipeline.Reset();
+    m_secondaryTaskScatterPipeline.Reset();
+    m_secondaryResolvePipeline.Reset();
+    if (!UsesCompactSecondaryWorkList())
+    {
+        return;
+    }
+
+    const std::wstring exeDir = GetAssetFullPath(L"");
+    auto createPipeline = [&](
+        const wchar_t* fileName,
+        ComPtr<ID3D12PipelineState>& pipeline)
+    {
+        byte* shaderData = nullptr;
+        UINT shaderSize = 0;
+        ThrowIfFailed(ReadDataFromFile(
+            (exeDir + fileName).c_str(),
+            &shaderData,
+            &shaderSize));
+        std::vector<UINT8> shader(shaderData, shaderData + shaderSize);
+        free(shaderData);
+        D3D12_COMPUTE_PIPELINE_STATE_DESC desc{};
+        desc.pRootSignature = m_globalRootSignature.Get();
+        desc.CS = CD3DX12_SHADER_BYTECODE(shader.data(), shader.size());
+        ThrowIfFailed(m_device->CreateComputePipelineState(
+            &desc,
+            IID_PPV_ARGS(&pipeline)));
+    };
+    createPipeline(L"SecondaryTaskCount.cso", m_secondaryTaskCountPipeline);
+    createPipeline(L"SecondaryGroupScan.cso", m_secondaryGroupScanPipeline);
+    createPipeline(L"SecondaryTaskScatter.cso", m_secondaryTaskScatterPipeline);
+    createPipeline(L"SecondaryResolve.cso", m_secondaryResolvePipeline);
+}
+
 void D3D12PathTracingBackend::BuildAccelerationStructures()
 {
+    if (!m_scene.meshes.empty() && !m_scene.instances.empty())
+    {
+        BuildInstancedAccelerationStructures();
+        return;
+    }
+
     std::vector<D3D12_RAYTRACING_GEOMETRY_DESC> geometryDescs;
     geometryDescs.reserve(m_scene.draws.size());
     for (const Bistro::DrawItem& draw : m_scene.draws)
@@ -6197,9 +7534,10 @@ void D3D12PathTracingBackend::BuildAccelerationStructures()
         desc.Triangles.IndexBuffer = m_indexBuffer->GetGPUVirtualAddress() + draw.startIndex * sizeof(uint32_t);
         desc.Triangles.IndexCount = draw.indexCount;
         desc.Triangles.IndexFormat = DXGI_FORMAT_R32_UINT;
-        const bool alphaMasked = draw.materialIndex < m_scene.materials.size() &&
-            m_scene.materials[draw.materialIndex].alphaMasked;
-        desc.Flags = alphaMasked
+        const bool requiresAnyHit = draw.materialIndex < m_scene.materials.size() &&
+            (m_scene.materials[draw.materialIndex].alphaMasked ||
+                m_scene.materials[draw.materialIndex].transmissionFactor > 0.0f);
+        desc.Flags = requiresAnyHit
             ? D3D12_RAYTRACING_GEOMETRY_FLAG_NONE
             : D3D12_RAYTRACING_GEOMETRY_FLAG_OPAQUE;
         geometryDescs.push_back(desc);
@@ -6210,7 +7548,9 @@ void D3D12PathTracingBackend::BuildAccelerationStructures()
     bottomInputs.DescsLayout = D3D12_ELEMENTS_LAYOUT_ARRAY;
     bottomInputs.NumDescs = static_cast<UINT>(geometryDescs.size());
     bottomInputs.pGeometryDescs = geometryDescs.data();
-    bottomInputs.Flags = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_TRACE;
+    bottomInputs.Flags =
+        D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_TRACE |
+        D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_ALLOW_COMPACTION;
 
     D3D12_RAYTRACING_ACCELERATION_STRUCTURE_PREBUILD_INFO bottomInfo = {};
     m_device->GetRaytracingAccelerationStructurePrebuildInfo(&bottomInputs, &bottomInfo);
@@ -6219,8 +7559,10 @@ void D3D12PathTracingBackend::BuildAccelerationStructures()
         throw std::runtime_error("Failed to query BLAS size.");
     }
 
+    m_blasOriginalBytes = bottomInfo.ResultDataMaxSizeInBytes;
+    m_blasCompactedBytes = bottomInfo.ResultDataMaxSizeInBytes;
     m_bottomLevelAs.scratch = CreateUavBuffer(bottomInfo.ScratchDataSizeInBytes, D3D12_RESOURCE_STATE_COMMON, L"BLAS Scratch");
-    m_bottomLevelAs.result = CreateUavBuffer(bottomInfo.ResultDataMaxSizeInBytes, D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE, L"BLAS");
+    m_bottomLevelAs.result = CreateUavBuffer(bottomInfo.ResultDataMaxSizeInBytes, D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE, L"BLAS Uncompacted");
 
     D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC bottomBuild = {};
     bottomBuild.Inputs = bottomInputs;
@@ -6229,6 +7571,88 @@ void D3D12PathTracingBackend::BuildAccelerationStructures()
     m_commandList->BuildRaytracingAccelerationStructure(&bottomBuild, 0, nullptr);
     auto bottomAsBarrier = CD3DX12_RESOURCE_BARRIER::UAV(m_bottomLevelAs.result.Get());
     m_commandList->ResourceBarrier(1, &bottomAsBarrier);
+
+    // Compacted size is only known after the GPU finishes the BLAS build.
+    // Submit this initialization prefix, read the 64-bit query, then continue
+    // recording compact-copy and TLAS work on a fresh command list.
+    ComPtr<ID3D12Resource> compactedSizeGpu = CreateUavBuffer(
+        sizeof(UINT64),
+        D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+        L"BLAS Compacted Size Query");
+    ComPtr<ID3D12Resource> compactedSizeReadback;
+    auto readbackHeapProps = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_READBACK);
+    auto compactedSizeDesc = CD3DX12_RESOURCE_DESC::Buffer(sizeof(UINT64));
+    ThrowIfFailed(m_device->CreateCommittedResource(
+        &readbackHeapProps,
+        D3D12_HEAP_FLAG_NONE,
+        &compactedSizeDesc,
+        D3D12_RESOURCE_STATE_COPY_DEST,
+        nullptr,
+        IID_PPV_ARGS(&compactedSizeReadback)));
+    compactedSizeReadback->SetName(L"BLAS Compacted Size Readback");
+
+    D3D12_RAYTRACING_ACCELERATION_STRUCTURE_POSTBUILD_INFO_DESC postBuildInfo = {};
+    postBuildInfo.DestBuffer = compactedSizeGpu->GetGPUVirtualAddress();
+    postBuildInfo.InfoType =
+        D3D12_RAYTRACING_ACCELERATION_STRUCTURE_POSTBUILD_INFO_COMPACTED_SIZE;
+    const D3D12_GPU_VIRTUAL_ADDRESS uncompactedBlasAddress =
+        m_bottomLevelAs.result->GetGPUVirtualAddress();
+    m_commandList->EmitRaytracingAccelerationStructurePostbuildInfo(
+        &postBuildInfo,
+        1u,
+        &uncompactedBlasAddress);
+    auto queryToCopy = CD3DX12_RESOURCE_BARRIER::Transition(
+        compactedSizeGpu.Get(),
+        D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+        D3D12_RESOURCE_STATE_COPY_SOURCE);
+    m_commandList->ResourceBarrier(1u, &queryToCopy);
+    m_commandList->CopyBufferRegion(
+        compactedSizeReadback.Get(),
+        0u,
+        compactedSizeGpu.Get(),
+        0u,
+        sizeof(UINT64));
+
+    ThrowIfFailed(m_commandList->Close());
+    ID3D12CommandList* buildCommandLists[] = { m_commandList.Get() };
+    m_commandQueue->ExecuteCommandLists(_countof(buildCommandLists), buildCommandLists);
+    WaitForPreviousFrame();
+
+    UINT64 compactedSize = 0u;
+    void* mappedSize = nullptr;
+    D3D12_RANGE readRange = { 0u, sizeof(UINT64) };
+    ThrowIfFailed(compactedSizeReadback->Map(0u, &readRange, &mappedSize));
+    memcpy(&compactedSize, mappedSize, sizeof(compactedSize));
+    D3D12_RANGE writtenRange = { 0u, 0u };
+    compactedSizeReadback->Unmap(0u, &writtenRange);
+
+    FrameContext& frameContext = m_frameContexts[m_frameIndex];
+    ThrowIfFailed(frameContext.commandAllocator->Reset());
+    ThrowIfFailed(m_commandList->Reset(frameContext.commandAllocator.Get(), nullptr));
+
+    if (compactedSize > 0u && compactedSize <= bottomInfo.ResultDataMaxSizeInBytes)
+    {
+        ComPtr<ID3D12Resource> uncompactedBlas = m_bottomLevelAs.result;
+        ComPtr<ID3D12Resource> compactedBlas = CreateUavBuffer(
+            compactedSize,
+            D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE,
+            L"BLAS Compacted");
+        m_commandList->CopyRaytracingAccelerationStructure(
+            compactedBlas->GetGPUVirtualAddress(),
+            uncompactedBlas->GetGPUVirtualAddress(),
+            D3D12_RAYTRACING_ACCELERATION_STRUCTURE_COPY_MODE_COMPACT);
+        auto compactedBarrier = CD3DX12_RESOURCE_BARRIER::UAV(compactedBlas.Get());
+        m_commandList->ResourceBarrier(1u, &compactedBarrier);
+        // Keep the source alive until the initialization submission containing
+        // the compact copy and dependent TLAS build has completed.
+        m_uploadBuffers.push_back(uncompactedBlas);
+        m_bottomLevelAs.result = compactedBlas;
+        m_blasCompactedBytes = compactedSize;
+    }
+    m_bottomLevelAs.scratch.Reset();
+
+    if (m_sceneLoadStage.load(std::memory_order_relaxed) == SceneLoadStage::BuildingBLAS)
+        m_sceneLoadStage.store(SceneLoadStage::BuildingTLAS, std::memory_order_relaxed);
 
     D3D12_RAYTRACING_INSTANCE_DESC instanceDesc = {};
     instanceDesc.Transform[0][0] = 1.0f;
@@ -6263,6 +7687,126 @@ void D3D12PathTracingBackend::BuildAccelerationStructures()
     m_commandList->ResourceBarrier(1, &topAsBarrier);
 }
 
+void D3D12PathTracingBackend::BuildInstancedAccelerationStructures()
+{
+    if (m_scene.meshes.empty() || m_scene.instances.empty())
+    {
+        throw std::runtime_error("Instanced acceleration-structure build requires meshes and instances.");
+    }
+    if (m_scene.instances.size() >= (1u << 24u))
+    {
+        throw std::runtime_error("Scene exceeds the DXR 24-bit instance limit.");
+    }
+
+    m_bottomLevelAs = {};
+    m_bottomLevelInstances.clear();
+    m_bottomLevelInstances.resize(m_scene.meshes.size());
+    m_blasOriginalBytes = 0;
+    m_blasCompactedBytes = 0;
+
+    for (size_t meshIndex = 0; meshIndex < m_scene.meshes.size(); ++meshIndex)
+    {
+        const Bistro::MeshRange& mesh = m_scene.meshes[meshIndex];
+        if (mesh.drawCount == 0 || mesh.drawOffset >= m_scene.draws.size() ||
+            static_cast<size_t>(mesh.drawOffset) + mesh.drawCount > m_scene.draws.size())
+        {
+            throw std::runtime_error("Imported mesh has an invalid geometry range.");
+        }
+        if (mesh.drawOffset >= (1u << 24u))
+        {
+            throw std::runtime_error("Scene exceeds the DXR 24-bit geometry-base limit.");
+        }
+
+        std::vector<D3D12_RAYTRACING_GEOMETRY_DESC> geometryDescs;
+        geometryDescs.reserve(mesh.drawCount);
+        for (uint32_t localGeometry = 0; localGeometry < mesh.drawCount; ++localGeometry)
+        {
+            const Bistro::DrawItem& draw = m_scene.draws[mesh.drawOffset + localGeometry];
+            D3D12_RAYTRACING_GEOMETRY_DESC desc{};
+            desc.Type = D3D12_RAYTRACING_GEOMETRY_TYPE_TRIANGLES;
+            desc.Triangles.VertexBuffer.StartAddress = m_vertexBuffer->GetGPUVirtualAddress();
+            desc.Triangles.VertexBuffer.StrideInBytes = sizeof(Bistro::Vertex);
+            desc.Triangles.VertexCount = static_cast<UINT>(m_scene.vertices.size());
+            desc.Triangles.VertexFormat = DXGI_FORMAT_R32G32B32_FLOAT;
+            desc.Triangles.IndexBuffer = m_indexBuffer->GetGPUVirtualAddress() + static_cast<UINT64>(draw.startIndex) * sizeof(uint32_t);
+            desc.Triangles.IndexCount = draw.indexCount;
+            desc.Triangles.IndexFormat = DXGI_FORMAT_R32_UINT;
+            const bool requiresAnyHit = draw.materialIndex < m_scene.materials.size() &&
+                (m_scene.materials[draw.materialIndex].alphaMasked ||
+                    m_scene.materials[draw.materialIndex].transmissionFactor > 0.0f);
+            desc.Flags = requiresAnyHit ? D3D12_RAYTRACING_GEOMETRY_FLAG_NONE : D3D12_RAYTRACING_GEOMETRY_FLAG_OPAQUE;
+            geometryDescs.push_back(desc);
+        }
+
+        D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS inputs{};
+        inputs.Type = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL;
+        inputs.DescsLayout = D3D12_ELEMENTS_LAYOUT_ARRAY;
+        inputs.NumDescs = static_cast<UINT>(geometryDescs.size());
+        inputs.pGeometryDescs = geometryDescs.data();
+        inputs.Flags = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_TRACE;
+        D3D12_RAYTRACING_ACCELERATION_STRUCTURE_PREBUILD_INFO info{};
+        m_device->GetRaytracingAccelerationStructurePrebuildInfo(&inputs, &info);
+        if (info.ResultDataMaxSizeInBytes == 0)
+        {
+            throw std::runtime_error("Failed to query instanced BLAS size.");
+        }
+        AccelerationStructureBuffers& buffers = m_bottomLevelInstances[meshIndex];
+        buffers.scratch = CreateUavBuffer(info.ScratchDataSizeInBytes, D3D12_RESOURCE_STATE_COMMON, L"PBRT BLAS Scratch");
+        buffers.result = CreateUavBuffer(info.ResultDataMaxSizeInBytes, D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE, L"PBRT BLAS");
+        D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC build{};
+        build.Inputs = inputs;
+        build.ScratchAccelerationStructureData = buffers.scratch->GetGPUVirtualAddress();
+        build.DestAccelerationStructureData = buffers.result->GetGPUVirtualAddress();
+        m_commandList->BuildRaytracingAccelerationStructure(&build, 0, nullptr);
+        auto barrier = CD3DX12_RESOURCE_BARRIER::UAV(buffers.result.Get());
+        m_commandList->ResourceBarrier(1, &barrier);
+        m_blasOriginalBytes += info.ResultDataMaxSizeInBytes;
+        m_blasCompactedBytes += info.ResultDataMaxSizeInBytes;
+    }
+
+    if (m_sceneLoadStage.load(std::memory_order_relaxed) == SceneLoadStage::BuildingBLAS)
+        m_sceneLoadStage.store(SceneLoadStage::BuildingTLAS, std::memory_order_relaxed);
+
+    std::vector<D3D12_RAYTRACING_INSTANCE_DESC> instanceDescs(m_scene.instances.size());
+    for (size_t instanceIndex = 0; instanceIndex < m_scene.instances.size(); ++instanceIndex)
+    {
+        const Bistro::SceneInstance& instance = m_scene.instances[instanceIndex];
+        if (instance.meshIndex >= m_scene.meshes.size()) throw std::runtime_error("Scene instance references an invalid mesh.");
+        const Bistro::MeshRange& mesh = m_scene.meshes[instance.meshIndex];
+        D3D12_RAYTRACING_INSTANCE_DESC& desc = instanceDescs[instanceIndex];
+        XMFLOAT4X4 transposed;
+        XMStoreFloat4x4(&transposed, XMMatrixTranspose(XMLoadFloat4x4(&instance.transform)));
+        memcpy(desc.Transform, &transposed, sizeof(desc.Transform));
+        desc.InstanceID = mesh.drawOffset;
+        desc.InstanceMask = 0xff;
+        desc.InstanceContributionToHitGroupIndex = 0;
+        desc.AccelerationStructure = m_bottomLevelInstances[instance.meshIndex].result->GetGPUVirtualAddress();
+    }
+    m_topLevelAs.instanceDesc = CreateUploadBuffer(
+        instanceDescs.data(),
+        instanceDescs.size() * sizeof(D3D12_RAYTRACING_INSTANCE_DESC),
+        L"PBRT TLAS Instances");
+
+    D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS topInputs{};
+    topInputs.Type = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL;
+    topInputs.DescsLayout = D3D12_ELEMENTS_LAYOUT_ARRAY;
+    topInputs.NumDescs = static_cast<UINT>(instanceDescs.size());
+    topInputs.InstanceDescs = m_topLevelAs.instanceDesc->GetGPUVirtualAddress();
+    topInputs.Flags = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_TRACE;
+    D3D12_RAYTRACING_ACCELERATION_STRUCTURE_PREBUILD_INFO topInfo{};
+    m_device->GetRaytracingAccelerationStructurePrebuildInfo(&topInputs, &topInfo);
+    if (topInfo.ResultDataMaxSizeInBytes == 0) throw std::runtime_error("Failed to query instanced TLAS size.");
+    m_topLevelAs.scratch = CreateUavBuffer(topInfo.ScratchDataSizeInBytes, D3D12_RESOURCE_STATE_COMMON, L"PBRT TLAS Scratch");
+    m_topLevelAs.result = CreateUavBuffer(topInfo.ResultDataMaxSizeInBytes, D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE, L"PBRT TLAS");
+    D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC topBuild{};
+    topBuild.Inputs = topInputs;
+    topBuild.ScratchAccelerationStructureData = m_topLevelAs.scratch->GetGPUVirtualAddress();
+    topBuild.DestAccelerationStructureData = m_topLevelAs.result->GetGPUVirtualAddress();
+    m_commandList->BuildRaytracingAccelerationStructure(&topBuild, 0, nullptr);
+    auto topBarrier = CD3DX12_RESOURCE_BARRIER::UAV(m_topLevelAs.result.Get());
+    m_commandList->ResourceBarrier(1, &topBarrier);
+}
+
 void D3D12PathTracingBackend::CreateShaderTables()
 {
     const UINT shaderIdentifierSize = D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES;
@@ -6291,8 +7835,67 @@ void D3D12PathTracingBackend::CreateShaderTables()
     };
 
     createTable(L"RayGen Shader Table", { RayGenShaderName }, m_rayGenTable);
+    createTable(L"Primary Visibility RayGen Shader Table", { PrimaryRayGenShaderName }, m_primaryRayGenTable);
+    createTable(L"Compact Secondary RayGen Shader Table", { SecondaryRayGenShaderName }, m_secondaryRayGenTable);
     createTable(L"Miss Shader Table", { MissShaderName, ShadowMissShaderName }, m_missTable);
     createTable(L"HitGroup Shader Table", { HitGroupName, ShadowHitGroupName }, m_hitGroupTable);
+
+    m_dispatchRaysCommandSignature.Reset();
+    if (UsesCompactSecondaryWorkList())
+    {
+        D3D12_INDIRECT_ARGUMENT_DESC argument{};
+        argument.Type = D3D12_INDIRECT_ARGUMENT_TYPE_DISPATCH_RAYS;
+        D3D12_COMMAND_SIGNATURE_DESC signature{};
+        signature.ByteStride = sizeof(D3D12_DISPATCH_RAYS_DESC);
+        signature.NumArgumentDescs = 1u;
+        signature.pArgumentDescs = &argument;
+        ThrowIfFailed(m_device->CreateCommandSignature(
+            &signature,
+            nullptr,
+            IID_PPV_ARGS(&m_dispatchRaysCommandSignature)));
+
+        D3D12_DISPATCH_RAYS_DESC dispatchTemplate{};
+        dispatchTemplate.RayGenerationShaderRecord.StartAddress =
+            m_secondaryRayGenTable.resource->GetGPUVirtualAddress();
+        dispatchTemplate.RayGenerationShaderRecord.SizeInBytes =
+            m_secondaryRayGenTable.recordSize;
+        dispatchTemplate.MissShaderTable.StartAddress =
+            m_missTable.resource->GetGPUVirtualAddress();
+        dispatchTemplate.MissShaderTable.SizeInBytes =
+            m_missTable.recordSize * m_missTable.recordCount;
+        dispatchTemplate.MissShaderTable.StrideInBytes =
+            m_missTable.recordSize;
+        dispatchTemplate.HitGroupTable.StartAddress =
+            m_hitGroupTable.resource->GetGPUVirtualAddress();
+        dispatchTemplate.HitGroupTable.SizeInBytes =
+            m_hitGroupTable.recordSize * m_hitGroupTable.recordCount;
+        dispatchTemplate.HitGroupTable.StrideInBytes =
+            m_hitGroupTable.recordSize;
+        dispatchTemplate.Width = 1u;
+        dispatchTemplate.Height = 1u;
+        dispatchTemplate.Depth = 1u;
+        ComPtr<ID3D12Resource> templateUpload = CreateUploadBuffer(
+            &dispatchTemplate,
+            sizeof(dispatchTemplate),
+            L"Compact DispatchRays Argument Template");
+        auto toCopyDest = CD3DX12_RESOURCE_BARRIER::Transition(
+            m_secondaryIndirectArgs.Get(),
+            D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+            D3D12_RESOURCE_STATE_COPY_DEST);
+        m_commandList->ResourceBarrier(1u, &toCopyDest);
+        m_commandList->CopyBufferRegion(
+            m_secondaryIndirectArgs.Get(),
+            0u,
+            templateUpload.Get(),
+            0u,
+            sizeof(dispatchTemplate));
+        auto toUav = CD3DX12_RESOURCE_BARRIER::Transition(
+            m_secondaryIndirectArgs.Get(),
+            D3D12_RESOURCE_STATE_COPY_DEST,
+            D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        m_commandList->ResourceBarrier(1u, &toUav);
+        m_uploadBuffers.push_back(templateUpload);
+    }
 }
 
 void D3D12PathTracingBackend::OnUpdate()
@@ -6317,6 +7920,8 @@ void D3D12PathTracingBackend::OnUpdate()
         Resize(m_pendingResizeWidth, m_pendingResizeHeight);
     }
 
+    PollAsyncSceneLoad();
+
     if (!m_pendingProjectPath.empty())
     {
         const std::wstring path = std::move(m_pendingProjectPath);
@@ -6337,17 +7942,8 @@ void D3D12PathTracingBackend::OnUpdate()
     {
         const std::wstring path = std::move(m_pendingScenePath);
         m_pendingScenePath.clear();
-        std::string diagnostics;
         LogDiagnostic(L"Pending scene load: " + path);
-        if (!LoadScenePath(path, diagnostics))
-        {
-            m_sceneDiagnostics = diagnostics;
-            LogDiagnostic("Pending scene load failed: " + diagnostics);
-        }
-        else
-        {
-            LogDiagnostic("Pending scene load succeeded: " + diagnostics);
-        }
+        BeginAsyncSceneLoad(path);
     }
     if (!m_pendingEnvironmentPath.empty())
     {
@@ -6449,7 +8045,7 @@ void D3D12PathTracingBackend::UpdateConstantBuffer(float)
 
     const float aspectRatio = static_cast<float>(m_width) / static_cast<float>(m_height);
     XMMATRIX view = m_camera.GetViewMatrix();
-    XMMATRIX projection = XMMatrixPerspectiveFovLH(XMConvertToRadians(60.0f), aspectRatio, 0.1f, 10000.0f);
+    XMMATRIX projection = XMMatrixPerspectiveFovLH(XMConvertToRadians(m_cameraFovDegrees), aspectRatio, 0.1f, 10000.0f);
     XMMATRIX viewProjection = view * projection;
     XMMATRIX inverseViewProjection = XMMatrixInverse(nullptr, viewProjection);
     const XMFLOAT4X4 previousNrdViewToClip = m_nrdViewToClip;
@@ -6471,6 +8067,7 @@ void D3D12PathTracingBackend::UpdateConstantBuffer(float)
     const float framePreviousCameraPitch = m_previousCameraMotionPitch;
     UpdateCameraMotionState();
     UpdateRayBudget();
+    UpdateDynamicResolution();
 
     // HasAccumulationStateChanged consumes m_resetAccumulationRequested.
     // Calling the public ResetAccumulation() here would set that request again
@@ -6524,7 +8121,11 @@ void D3D12PathTracingBackend::UpdateConstantBuffer(float)
     constants.skyZenithColor = XMFLOAT4(m_skyZenithColor[0], m_skyZenithColor[1], m_skyZenithColor[2], 0.0f);
     constants.skyGroundColor = XMFLOAT4(m_skyGroundColor[0], m_skyGroundColor[1], m_skyGroundColor[2], 0.0f);
     constants.skyOptions = XMFLOAT4(m_sunIntensity, m_sunAngularRadius, m_skyGroundBlend, m_skyEnabled ? 1.0f : 0.0f);
-    constants.rayOptions = XMFLOAT4(m_rayTMin, m_rayTMax, static_cast<float>(m_width), static_cast<float>(m_height));
+    constants.rayOptions = XMFLOAT4(
+        m_rayTMin,
+        m_rayTMax,
+        static_cast<float>(m_renderWidth),
+        static_cast<float>(m_renderHeight));
     // Keep the submitted-frame serial as an integer in the shared ABI. A float
     // loses odd/even precision after 2^24 submissions and would otherwise pin
     // temporal ping-pong selection to one side during long-running sessions.
@@ -6538,7 +8139,8 @@ void D3D12PathTracingBackend::UpdateConstantBuffer(float)
         m_rtxdiAvailable && m_qualitySettings.restirBackend == rb::RestirBackend::Rtxdi && UsesRestirDI(m_mode);
     constants.pathOptions = XMFLOAT4(static_cast<float>(m_maxPathBounces), static_cast<float>(m_minPathBounces), static_cast<float>(m_restirCandidateSamples), useRestir ? 1.0f : 0.0f);
     constants.restirOptions = XMFLOAT4(m_restirTemporalReuse ? 1.0f : 0.0f, static_cast<float>(m_restirSpatialReusePasses), static_cast<float>(m_restirSpatialRadius), m_restirMClamp);
-    const bool combinedRestir = m_mode == PathTracingMode::ReSTIRCombined;
+    const bool combinedRestir = m_mode == PathTracingMode::ReSTIRCombined ||
+        m_mode == PathTracingMode::ReSTIRPTCombined;
     constants.restirDiOptions = XMFLOAT4(
         (combinedRestir ? m_restirDiTemporalReuse : m_restirTemporalReuse) ? 1.0f : 0.0f,
         static_cast<float>(combinedRestir ? m_restirDiSpatialReusePasses : m_restirSpatialReusePasses),
@@ -6546,10 +8148,13 @@ void D3D12PathTracingBackend::UpdateConstantBuffer(float)
         combinedRestir ? m_restirDiMClamp : m_restirMClamp);
     constants.lightOptions = XMFLOAT4(static_cast<float>(m_activeLightCount), m_emissiveLightsEnabled ? m_emissiveLightIntensity : 0.0f, m_proceduralLightsEnabled ? m_proceduralLightIntensity : 0.0f, static_cast<float>(m_environmentDescriptorIndex));
     constants.environmentOptions = XMFLOAT4(
-        m_environmentMapEnabled ? 1.0f : 0.0f,
+        m_environmentMapEnabled ? (m_environmentEqualAreaMapping ? 2.0f : 1.0f) : 0.0f,
         m_environmentIntensity,
         m_environmentRotation,
         static_cast<float>(static_cast<uint32_t>(m_validHistoryDomains)));
+    constants.environmentLightToWorld = m_environmentLightToWorld;
+    constants.environmentWorldToLight = m_environmentWorldToLight;
+    constants.environmentTint = XMFLOAT4(m_environmentTint.x, m_environmentTint.y, m_environmentTint.z, 1.0f);
     constants.denoiseOptions = XMFLOAT4(ShouldRunInternalDenoiser() ? 1.0f : 0.0f, static_cast<float>(m_denoiserSpatialIterations), m_denoiserNormalSigma, m_denoiserDepthSigma);
     const float taaSettleProgress = std::clamp(
         static_cast<float>(m_framesSinceCameraMotion) /
@@ -6565,7 +8170,7 @@ void D3D12PathTracingBackend::UpdateConstantBuffer(float)
     constants.reconstructionOptions = XMFLOAT4(m_realtimeReconstruction ? 1.0f : 0.0f, static_cast<float>(m_reconstructionMaxHistoryFrames), m_temporalAlphaMin, m_temporalAlphaMax);
     constants.validationOptions = XMFLOAT4(m_validationNormalDotThreshold, m_validationDepthRelativeThreshold, m_validationAlbedoThreshold, m_validationRoughnessThreshold);
     constants.atrousOptions = XMFLOAT4(static_cast<float>(m_atrousPassCount), m_atrousDiffuseStrength, m_atrousSpecularStrength, m_atrousVarianceScale);
-    const bool finalTaaActive = m_qualitySettings.finalTaa &&
+    const bool finalTaaActive = (m_qualitySettings.finalTaa || UsesTemporalUpscale()) &&
         m_qualitySettings.qualityProfile != rb::QualityProfile::ReferenceStill;
     // Internal mode classifies from its explicit moments; external denoisers
     // classify after the first path sample against immutable HDR TAA history.
@@ -6601,8 +8206,8 @@ void D3D12PathTracingBackend::UpdateConstantBuffer(float)
         static_cast<float>(m_selectedMaterial),
         static_cast<float>(m_samplingSeed & 0xffffu),
         static_cast<float>(m_samplingSeed >> 16u));
-    const float cameraRayConeSpread = 2.0f * std::tan(XMConvertToRadians(60.0f) * 0.5f) /
-        static_cast<float>((std::max)(m_height, 1u));
+    const float cameraRayConeSpread = 2.0f * std::tan(XMConvertToRadians(m_cameraFovDegrees) * 0.5f) /
+        static_cast<float>((std::max)(m_renderHeight, 1u));
     const bool denoiserRequestedForFrame = m_denoiserEnabled || m_debugViewMode >= 16;
     const bool denoiserConsumesSplitSignals = denoiserRequestedForFrame &&
         (ShouldRunInternalDenoiser() || (IsNrdSelected() && m_nrdBackendRuntime.CanEvaluate()));
@@ -6612,11 +8217,60 @@ void D3D12PathTracingBackend::UpdateConstantBuffer(float)
         (m_benchmarkHarness && lookdevpt::benchmark::IncludesQuality(m_benchmarkOptions.benchmarkKind)) ? 1.0f : 0.0f,
         denoiserConsumesSplitSignals ? 1.0f : 0.0f);
     m_fuseNrdFinalTaaForFrame = ShouldFuseNrdFinalTaa();
+    const bool dlssEvaluationPlanned =
+        m_qualitySettings.qualityProfile != rb::QualityProfile::ReferenceStill &&
+        m_denoiserEnabled &&
+        m_debugViewMode == 0 &&
+        IsDlssSelected() &&
+        m_dlssBackendRuntime.CanEvaluateRayReconstruction() &&
+        m_dlssPreparePipeline;
     constants.postProcessOptions = XMFLOAT4(
         m_fuseNrdFinalTaaForFrame ? 1.0f : 0.0f,
-        0.0f,
+        dlssEvaluationPlanned ? 1.0f : 0.0f,
+        UsesCompactSecondaryWorkList()
+            ? (UsesRestirDI(m_mode) ? 2.0f : 1.0f)
+            : 0.0f,
+        0.0f);
+    float areaLightPower = 0.0f;
+    for (uint32_t lightIndex = 0; lightIndex < m_activeLightCount; ++lightIndex)
+    {
+        const Bistro::RtLight& light = m_lights[lightIndex];
+        const float radianceLuminance =
+            0.2126f * light.radianceCdf.x +
+            0.7152f * light.radianceCdf.y +
+            0.0722f * light.radianceCdf.z;
+        const bool emissiveTriangle = light.edge0Type.w < 0.5f;
+        const float liveMultiplier = emissiveTriangle
+            ? (m_emissiveLightsEnabled ? m_emissiveLightIntensity : 0.0f)
+            : (m_proceduralLightsEnabled ? m_proceduralLightIntensity : 0.0f);
+        areaLightPower += (std::max)(light.positionArea.w * radianceLuminance * liveMultiplier, 0.0f);
+    }
+    // Preserve global power importance while reserving enough probability for
+    // Sun/HDRI when hundreds of locally sparse emissive triangles dominate the
+    // scene-wide area-light sum.
+    constants.unifiedLightOptions = XMFLOAT4(
+        areaLightPower,
+        0.20f,
         0.0f,
         0.0f);
+    constants.renderOutputOptions = XMFLOAT4(
+        static_cast<float>(m_renderWidth),
+        static_cast<float>(m_renderHeight),
+        static_cast<float>(m_width),
+        static_cast<float>(m_height));
+    const XMMATRIX previousInverseViewProjection = m_hasPreviousViewProjection
+        ? XMMatrixInverse(nullptr, XMLoadFloat4x4(&previousViewProjection))
+        : inverseViewProjection;
+    XMStoreFloat4x4(
+        &constants.previousInverseViewProjection,
+        previousInverseViewProjection);
+    constants.previousCameraPosition = m_hasPreviousViewProjection
+        ? XMFLOAT4(
+            framePreviousCameraMotionState.x,
+            framePreviousCameraMotionState.y,
+            framePreviousCameraMotionState.z,
+            1.0f)
+        : constants.cameraPosition;
     FrameContext& frameContext = m_frameContexts[m_frameIndex];
     memcpy(frameContext.mappedSceneConstants, &constants, sizeof(constants));
 
@@ -6771,24 +8425,38 @@ void D3D12PathTracingBackend::StageBenchmarkFrameForSubmission(
         throw std::runtime_error("Benchmark frame context was reused before its metrics completed.");
     }
 
-    const double primaryRays = static_cast<double>(m_width) * static_cast<double>(m_height) *
+    const double primaryRays = static_cast<double>(m_renderWidth) * static_cast<double>(m_renderHeight) *
         static_cast<double>((std::max)(m_giSamplesPerFrame, 1));
     const bool targetAdapter = m_adapterDescription.find(L"RTX 4070") != std::wstring::npos;
     const bool targetScene = m_scenePath.find(L"BistroExterior") != std::wstring::npos ||
         m_scenePath.find(L"BistroInterior") != std::wstring::npos;
     const bool interactiveProfile = m_qualitySettings.qualityProfile == rb::QualityProfile::InteractiveGame;
     const bool beautyView = m_debugViewMode == 0;
-    const bool finalTaaActive = m_qualitySettings.finalTaa &&
+    const bool finalTaaActive = (m_qualitySettings.finalTaa || UsesTemporalUpscale()) &&
         m_qualitySettings.qualityProfile != rb::QualityProfile::ReferenceStill && m_finalTaaPipeline;
     const bool requestedNrdReblur = m_denoiseBackend == DenoiseBackend::NrdReblur;
     const bool activeNrdReblur = requestedNrdReblur && m_denoiserEnabled && m_nrdBackendRuntime.CanEvaluate();
+    const DlssStatus& dlssStatus = m_dlssBackendRuntime.Status();
+    const bool requestedDlssRr = IsDlssSelected() && m_denoiserEnabled;
     const bool requestedRtxdi = m_qualitySettings.restirBackend == rb::RestirBackend::Rtxdi &&
         m_mode == PathTracingMode::ReSTIRCombined;
     // The target benchmark mode requests both DI and GI. Keep the combined
     // gate false until RTXDI ReSTIR PT/GI is also evaluation-ready; DI-only
     // integration must not be misreported as the completed combined backend.
+    const RtxdiStatus& rtxdiStatus = m_rtxdiBackendRuntime.Status();
     const bool activeRtxdi = requestedRtxdi && m_rtxdiAvailable &&
-        m_rtxdiBackendRuntime.Status().giEvaluationReady;
+        rtxdiStatus.diEvaluationReady && rtxdiStatus.giEvaluationReady &&
+        m_rtxdiDiCandidatePipeline && m_rtxdiDiSpatialPipeline &&
+        m_rtxdiGiInitialPipeline && m_rtxdiGiFusedPipeline;
+    const bool requestedRtxdiPt =
+        m_qualitySettings.restirBackend == rb::RestirBackend::Rtxdi &&
+        UsesRestirPT(m_mode);
+    const bool activeRtxdiPt = requestedRtxdiPt && m_rtxdiAvailable &&
+        rtxdiStatus.ptEvaluationReady &&
+        m_rtxdiPtInitialPipeline && m_rtxdiPtFusedPipeline &&
+        (!UsesRestirDI(m_mode) ||
+            (rtxdiStatus.diEvaluationReady &&
+             m_rtxdiDiCandidatePipeline && m_rtxdiDiSpatialPipeline));
     const rb::RayBudgetSettings& configuredBudget = m_qualitySettings.rayBudget;
     frameContext.benchmarkFrameIndex = m_benchmarkFrameIndex;
     frameContext.benchmarkMetrics =
@@ -6810,6 +8478,10 @@ void D3D12PathTracingBackend::StageBenchmarkFrameForSubmission(
         { "gpu_restir_spatial_ms", -1.0 },
         { "gpu_restir_shade_ms", -1.0 },
         { "gpu_restir_publish_ms", -1.0 },
+        { "gpu_restir_gi_initial_ms", -1.0 },
+        { "gpu_restir_gi_fused_ms", -1.0 },
+        { "gpu_restir_pt_initial_ms", -1.0 },
+        { "gpu_restir_pt_fused_ms", -1.0 },
         { "gpu_denoise_ms", -1.0 },
         { "gpu_denoise_prepare_ms", -1.0 },
         { "gpu_denoise_core_ms", -1.0 },
@@ -6838,8 +8510,37 @@ void D3D12PathTracingBackend::StageBenchmarkFrameForSubmission(
         { "history_valid", m_denoiseHistoryValid && !m_resetDenoiseHistoryRequested ? 1.0 : 0.0 },
         { "accumulated_samples", static_cast<double>(m_accumulatedFrames) },
         { "frame_history_mib", static_cast<double>(m_frameHistoryResourceBytes) / (1024.0 * 1024.0) },
+        { "vram_frame_history_peak_mib", static_cast<double>(m_frameHistoryResourceBytes) / (1024.0 * 1024.0) },
+        { "vram_restir_alias_heap_mib",
+            static_cast<double>(m_restirAliasHeapSize * m_restirAliasHeaps.size()) / (1024.0 * 1024.0) },
+        { "compacted_blas_bytes", static_cast<double>(m_blasCompactedBytes) },
+        { "blas_compaction_ratio", m_blasOriginalBytes > 0u
+            ? static_cast<double>(m_blasCompactedBytes) / static_cast<double>(m_blasOriginalBytes)
+            : 1.0 },
         { "render_width", static_cast<double>(m_renderWidth) },
         { "render_height", static_cast<double>(m_renderHeight) },
+        { "output_width", static_cast<double>(m_width) },
+        { "output_height", static_cast<double>(m_height) },
+        { "render_scale", static_cast<double>(m_activeRenderScale) },
+        { "dynamic_resolution_active",
+            m_qualitySettings.resolutionMode == rb::ResolutionMode::Dynamic ? 1.0 : 0.0 },
+        { "taau_active", UsesTemporalUpscale() ? 1.0 : 0.0 },
+        { "primary_visibility_separate", UsesCompactSecondaryWorkList() ? 1.0 : 0.0 },
+        { "compact_secondary_worklist", UsesCompactSecondaryWorkList() ? 1.0 : 0.0 },
+        { "secondary_execute_indirect",
+            UsesCompactSecondaryWorkList() && m_dispatchRaysCommandSignature ? 1.0 : 0.0 },
+        { "secondary_task_capacity", static_cast<double>(m_secondaryTaskCapacity) },
+        { "requested_dlss_rr", requestedDlssRr ? 1.0 : 0.0 },
+        { "dlss_runtime_available", dlssStatus.runtimeAvailable ? 1.0 : 0.0 },
+        { "dlss_initialized", dlssStatus.initialized ? 1.0 : 0.0 },
+        { "dlss_device_registered", dlssStatus.deviceRegistered ? 1.0 : 0.0 },
+        { "dlss_application_identity_configured", dlssStatus.applicationIdentityConfigured ? 1.0 : 0.0 },
+        { "dlss_feature_supported", dlssStatus.featureSupported ? 1.0 : 0.0 },
+        { "dlss_evaluation_ready", dlssStatus.evaluationReady ? 1.0 : 0.0 },
+        { "active_dlss_rr", requestedDlssRr && dlssStatus.lastEvaluationSucceeded ? 1.0 : 0.0 },
+        { "dlss_successful_evaluations", static_cast<double>(dlssStatus.successfulEvaluations) },
+        { "dlss_failed_evaluations", static_cast<double>(dlssStatus.failedEvaluations) },
+        { "dlss_last_result_code", static_cast<double>(dlssStatus.lastResultCode) },
         { "target_adapter_rtx_4070", targetAdapter ? 1.0 : 0.0 },
         { "target_scene_bistro", targetScene ? 1.0 : 0.0 },
         { "quality_profile_interactive", interactiveProfile ? 1.0 : 0.0 },
@@ -6849,6 +8550,8 @@ void D3D12PathTracingBackend::StageBenchmarkFrameForSubmission(
         { "active_denoiser_nrd_reblur", activeNrdReblur ? 1.0 : 0.0 },
         { "requested_restir_rtxdi_combined", requestedRtxdi ? 1.0 : 0.0 },
         { "active_restir_rtxdi_combined", activeRtxdi ? 1.0 : 0.0 },
+        { "requested_restir_rtxdi_pt", requestedRtxdiPt ? 1.0 : 0.0 },
+        { "active_restir_rtxdi_pt", activeRtxdiPt ? 1.0 : 0.0 },
         { "budget_moving_spp", static_cast<double>(configuredBudget.movingSpp) },
         { "budget_moving_bounces", static_cast<double>(configuredBudget.movingBounces) },
         { "budget_static_base_spp", static_cast<double>(configuredBudget.staticBaseSpp) },
@@ -6872,6 +8575,13 @@ void D3D12PathTracingBackend::StageBenchmarkFrameForSubmission(
         { "contribution_clamped_energy", 0.0 },
         { "contribution_clamped_samples", 0.0 },
         { "non_finite_pixels", 0.0 },
+        { "primary_rays_actual", 0.0 },
+        { "secondary_rays_actual", 0.0 },
+        { "shadow_rays_actual", 0.0 },
+        { "di_visibility_rays_actual", 0.0 },
+        { "gi_visibility_rays_actual", 0.0 },
+        { "pt_visibility_rays_actual", 0.0 },
+        { "anyhit_invocations_actual", 0.0 },
     };
     frameContext.benchmarkMetrics["cpu_benchmark_aggregate_ms"] =
         std::chrono::duration<double, std::milli>(
@@ -6895,6 +8605,10 @@ void D3D12PathTracingBackend::CompleteBenchmarkFrame(FrameContext& frameContext,
     metrics["gpu_restir_spatial_ms"] = timing.restirSpatialMs;
     metrics["gpu_restir_shade_ms"] = timing.restirShadeMs;
     metrics["gpu_restir_publish_ms"] = timing.restirPublishMs;
+    metrics["gpu_restir_gi_initial_ms"] = timing.restirGiInitialMs;
+    metrics["gpu_restir_gi_fused_ms"] = timing.restirGiFusedMs;
+    metrics["gpu_restir_pt_initial_ms"] = timing.restirPtInitialMs;
+    metrics["gpu_restir_pt_fused_ms"] = timing.restirPtFusedMs;
     metrics["gpu_denoise_ms"] = timing.denoiseMs;
     metrics["gpu_denoise_prepare_ms"] = timing.denoisePrepareMs;
     metrics["gpu_denoise_core_ms"] = timing.denoiseCoreMs;
@@ -6984,11 +8698,33 @@ void D3D12PathTracingBackend::PopulateCommandList()
     ID3D12DescriptorHeap* descriptorHeaps[] = { m_descriptorHeap.Get() };
     m_commandList->SetDescriptorHeaps(_countof(descriptorHeaps), descriptorHeaps);
     BeginGpuTimingFrame();
+    if (m_benchmarkHarness &&
+        lookdevpt::benchmark::IncludesQuality(m_benchmarkOptions.benchmarkKind))
+    {
+        const UINT clearValues[4] = {};
+        m_commandList->ClearUnorderedAccessViewUint(
+            GpuDescriptor(DescriptorQualityCounterUav),
+            CpuDescriptor(DescriptorQualityCounterUav),
+            m_qualityCounterBuffer.Get(),
+            clearValues,
+            0u,
+            nullptr);
+        auto clearBarrier =
+            CD3DX12_RESOURCE_BARRIER::UAV(m_qualityCounterBuffer.Get());
+        m_commandList->ResourceBarrier(1u, &clearBarrier);
+    }
     DispatchRays();
     WriteGpuTimestamp(GpuTimestampAfterPathTrace);
     RunRestirReusePass();
+    RunRestirGiPass();
+    RunRestirPtPass();
     RunDenoisePass();
     RunFinalTaaPass();
+    if (m_dlssFallbackRebuildAfterFrame)
+    {
+        RequestGpuResourceRefresh(PendingGpuResourceRefresh::FullScene);
+        m_dlssFallbackRebuildAfterFrame = false;
+    }
     WriteGpuTimestamp(GpuTimestampAfterFinalTaa);
     if (!m_benchmarkHarness ||
         lookdevpt::benchmark::IncludesQuality(m_benchmarkOptions.benchmarkKind))
@@ -7013,6 +8749,17 @@ void D3D12PathTracingBackend::PopulateCommandList()
 
 void D3D12PathTracingBackend::DispatchRays()
 {
+    if (UsesCompactSecondaryWorkList() &&
+        m_dispatchRaysCommandSignature &&
+        m_secondaryTaskCountPipeline &&
+        m_secondaryGroupScanPipeline &&
+        m_secondaryTaskScatterPipeline &&
+        m_secondaryResolvePipeline)
+    {
+        DispatchCompactSecondaryWork();
+        return;
+    }
+
     m_commandList->SetComputeRootSignature(m_globalRootSignature.Get());
     m_commandList->SetComputeRootDescriptorTable(RootOutputTable, CurrentOutputTableGpuDescriptor());
     m_commandList->SetComputeRootShaderResourceView(RootAccelerationStructure, m_topLevelAs.result->GetGPUVirtualAddress());
@@ -7030,15 +8777,15 @@ void D3D12PathTracingBackend::DispatchRays()
     dispatchDesc.HitGroupTable.StartAddress = m_hitGroupTable.resource->GetGPUVirtualAddress();
     dispatchDesc.HitGroupTable.SizeInBytes = m_hitGroupTable.recordSize * m_hitGroupTable.recordCount;
     dispatchDesc.HitGroupTable.StrideInBytes = m_hitGroupTable.recordSize;
-    dispatchDesc.Width = m_width;
-    dispatchDesc.Height = m_height;
+    dispatchDesc.Width = m_renderWidth;
+    dispatchDesc.Height = m_renderHeight;
     dispatchDesc.Depth = 1;
     m_commandList->DispatchRays(&dispatchDesc);
     const UINT currentGuideParity = CurrentSurfaceGuideParity();
     D3D12_RESOURCE_BARRIER uavBarriers[] =
     {
         CD3DX12_RESOURCE_BARRIER::UAV(m_PathtracingOutput.Get()),
-        CD3DX12_RESOURCE_BARRIER::UAV(m_accumulationOutput.Get()),
+        CD3DX12_RESOURCE_BARRIER::UAV(AccumulationResource(currentGuideParity)),
         CD3DX12_RESOURCE_BARRIER::UAV(SurfaceGuideAovResource(0u, currentGuideParity)),
         CD3DX12_RESOURCE_BARRIER::UAV(SurfaceGuideAovResource(1u, currentGuideParity)),
         CD3DX12_RESOURCE_BARRIER::UAV(SurfaceGuideAovResource(2u, currentGuideParity)),
@@ -7049,9 +8796,155 @@ void D3D12PathTracingBackend::DispatchRays()
         CD3DX12_RESOURCE_BARRIER::UAV(m_signalResidual.Get()),
         CD3DX12_RESOURCE_BARRIER::UAV(m_nrdDiffuseConfidence.Get()),
         CD3DX12_RESOURCE_BARRIER::UAV(m_nrdSpecularConfidence.Get()),
-        CD3DX12_RESOURCE_BARRIER::UAV(m_postDenoiseHdr.Get())
+        CD3DX12_RESOURCE_BARRIER::UAV(m_postDenoiseHdr.Get()),
+        CD3DX12_RESOURCE_BARRIER::UAV(m_primaryPositionCone.Get()),
+        CD3DX12_RESOURCE_BARRIER::UAV(m_primaryGeometricNormal.Get())
     };
     m_commandList->ResourceBarrier(_countof(uavBarriers), uavBarriers);
+}
+
+void D3D12PathTracingBackend::DispatchCompactSecondaryWork()
+{
+    auto bindGlobalState = [this]()
+    {
+        m_commandList->SetComputeRootSignature(m_globalRootSignature.Get());
+        m_commandList->SetComputeRootDescriptorTable(
+            RootOutputTable,
+            CurrentOutputTableGpuDescriptor());
+        m_commandList->SetComputeRootShaderResourceView(
+            RootAccelerationStructure,
+            m_topLevelAs.result->GetGPUVirtualAddress());
+        m_commandList->SetComputeRootConstantBufferView(
+            RootSceneConstants,
+            m_frameContexts[m_frameIndex].sceneConstantBuffer->GetGPUVirtualAddress());
+        m_commandList->SetComputeRootDescriptorTable(
+            RootSceneBuffers,
+            GpuDescriptor(DescriptorVertexBuffer));
+        m_commandList->SetComputeRootDescriptorTable(
+            RootTextureTable,
+            GpuDescriptor(DescriptorTextureBase));
+    };
+    bindGlobalState();
+    m_commandList->SetPipelineState1(m_stateObject.Get());
+
+    D3D12_DISPATCH_RAYS_DESC primaryDispatch{};
+    primaryDispatch.RayGenerationShaderRecord.StartAddress =
+        m_primaryRayGenTable.resource->GetGPUVirtualAddress();
+    primaryDispatch.RayGenerationShaderRecord.SizeInBytes =
+        m_primaryRayGenTable.recordSize;
+    primaryDispatch.MissShaderTable.StartAddress =
+        m_missTable.resource->GetGPUVirtualAddress();
+    primaryDispatch.MissShaderTable.SizeInBytes =
+        m_missTable.recordSize * m_missTable.recordCount;
+    primaryDispatch.MissShaderTable.StrideInBytes =
+        m_missTable.recordSize;
+    primaryDispatch.HitGroupTable.StartAddress =
+        m_hitGroupTable.resource->GetGPUVirtualAddress();
+    primaryDispatch.HitGroupTable.SizeInBytes =
+        m_hitGroupTable.recordSize * m_hitGroupTable.recordCount;
+    primaryDispatch.HitGroupTable.StrideInBytes =
+        m_hitGroupTable.recordSize;
+    primaryDispatch.Width = m_renderWidth;
+    primaryDispatch.Height = m_renderHeight;
+    primaryDispatch.Depth = 1u;
+    m_commandList->DispatchRays(&primaryDispatch);
+
+    const UINT currentGuideParity = CurrentSurfaceGuideParity();
+    D3D12_RESOURCE_BARRIER primaryBarriers[] =
+    {
+        CD3DX12_RESOURCE_BARRIER::UAV(m_PathtracingOutput.Get()),
+        CD3DX12_RESOURCE_BARRIER::UAV(SurfaceGuideAovResource(0u, currentGuideParity)),
+        CD3DX12_RESOURCE_BARRIER::UAV(SurfaceGuideAovResource(1u, currentGuideParity)),
+        CD3DX12_RESOURCE_BARRIER::UAV(SurfaceGuideAovResource(2u, currentGuideParity)),
+        CD3DX12_RESOURCE_BARRIER::UAV(SurfaceGuideIdentityResource(currentGuideParity)),
+        CD3DX12_RESOURCE_BARRIER::UAV(m_signalDirect.Get()),
+        CD3DX12_RESOURCE_BARRIER::UAV(m_signalIndirect.Get()),
+        CD3DX12_RESOURCE_BARRIER::UAV(m_signalResidual.Get()),
+        CD3DX12_RESOURCE_BARRIER::UAV(m_primaryPositionCone.Get()),
+        CD3DX12_RESOURCE_BARRIER::UAV(m_primaryGeometricNormal.Get()),
+        CD3DX12_RESOURCE_BARRIER::UAV(m_primaryIdentity.Get()),
+    };
+    m_commandList->ResourceBarrier(
+        _countof(primaryBarriers),
+        primaryBarriers);
+
+    bindGlobalState();
+    m_commandList->SetPipelineState(m_secondaryTaskCountPipeline.Get());
+    m_commandList->Dispatch(m_secondaryGroupCount, 1u, 1u);
+    D3D12_RESOURCE_BARRIER countBarriers[] =
+    {
+        CD3DX12_RESOURCE_BARRIER::UAV(m_secondaryTaskOffsets.Get()),
+        CD3DX12_RESOURCE_BARRIER::UAV(m_secondaryGroupOffsets.Get()),
+    };
+    m_commandList->ResourceBarrier(
+        _countof(countBarriers),
+        countBarriers);
+
+    m_commandList->SetPipelineState(m_secondaryGroupScanPipeline.Get());
+    m_commandList->Dispatch(1u, 1u, 1u);
+    D3D12_RESOURCE_BARRIER scanBarriers[] =
+    {
+        CD3DX12_RESOURCE_BARRIER::UAV(m_secondaryGroupOffsets.Get()),
+        CD3DX12_RESOURCE_BARRIER::UAV(m_secondaryTasks.Get()),
+        CD3DX12_RESOURCE_BARRIER::UAV(m_secondaryIndirectArgs.Get()),
+    };
+    m_commandList->ResourceBarrier(
+        _countof(scanBarriers),
+        scanBarriers);
+
+    m_commandList->SetPipelineState(m_secondaryTaskScatterPipeline.Get());
+    m_commandList->Dispatch(m_secondaryGroupCount, 1u, 1u);
+    auto taskBarrier =
+        CD3DX12_RESOURCE_BARRIER::UAV(m_secondaryTasks.Get());
+    m_commandList->ResourceBarrier(1u, &taskBarrier);
+
+    auto argsToIndirect = CD3DX12_RESOURCE_BARRIER::Transition(
+        m_secondaryIndirectArgs.Get(),
+        D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+        D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT);
+    m_commandList->ResourceBarrier(1u, &argsToIndirect);
+    bindGlobalState();
+    m_commandList->SetPipelineState1(m_stateObject.Get());
+    m_commandList->ExecuteIndirect(
+        m_dispatchRaysCommandSignature.Get(),
+        1u,
+        m_secondaryIndirectArgs.Get(),
+        0u,
+        nullptr,
+        0u);
+    auto argsToUav = CD3DX12_RESOURCE_BARRIER::Transition(
+        m_secondaryIndirectArgs.Get(),
+        D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT,
+        D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    D3D12_RESOURCE_BARRIER secondaryBarriers[] =
+    {
+        argsToUav,
+        CD3DX12_RESOURCE_BARRIER::UAV(m_secondaryResults.Get()),
+    };
+    m_commandList->ResourceBarrier(
+        _countof(secondaryBarriers),
+        secondaryBarriers);
+
+    bindGlobalState();
+    m_commandList->SetPipelineState(m_secondaryResolvePipeline.Get());
+    m_commandList->Dispatch(
+        (m_renderWidth + 7u) / 8u,
+        (m_renderHeight + 7u) / 8u,
+        1u);
+    D3D12_RESOURCE_BARRIER resolveBarriers[] =
+    {
+        CD3DX12_RESOURCE_BARRIER::UAV(m_PathtracingOutput.Get()),
+        CD3DX12_RESOURCE_BARRIER::UAV(AccumulationResource(currentGuideParity)),
+        CD3DX12_RESOURCE_BARRIER::UAV(m_signalDirect.Get()),
+        CD3DX12_RESOURCE_BARRIER::UAV(m_signalIndirect.Get()),
+        CD3DX12_RESOURCE_BARRIER::UAV(m_signalResidual.Get()),
+        CD3DX12_RESOURCE_BARRIER::UAV(m_nrdDiffuseConfidence.Get()),
+        CD3DX12_RESOURCE_BARRIER::UAV(m_nrdSpecularConfidence.Get()),
+        CD3DX12_RESOURCE_BARRIER::UAV(m_postDenoiseHdr.Get()),
+    };
+    m_commandList->ResourceBarrier(
+        _countof(resolveBarriers),
+        resolveBarriers);
 }
 
 void D3D12PathTracingBackend::RunRestirReusePass()
@@ -7075,15 +8968,33 @@ void D3D12PathTracingBackend::RunRestirReusePass()
     m_commandList->SetComputeRootConstantBufferView(RootSceneConstants, m_frameContexts[m_frameIndex].sceneConstantBuffer->GetGPUVirtualAddress());
     m_commandList->SetComputeRootDescriptorTable(RootSceneBuffers, GpuDescriptor(DescriptorVertexBuffer));
     m_commandList->SetComputeRootDescriptorTable(RootTextureTable, GpuDescriptor(DescriptorTextureBase));
-    const UINT dispatchX = (m_width + 7) / 8;
-    const UINT dispatchY = (m_height + 7) / 8;
+    const UINT dispatchX = (m_renderWidth + 7) / 8;
+    const UINT dispatchY = (m_renderHeight + 7) / 8;
+    const UINT currentParity = CurrentSurfaceGuideParity();
+    ID3D12Resource* spatialReservoir = currentParity == 0u
+        ? m_restirReservoirSpatial.Get()
+        : m_restirReservoirSpatialB.Get();
+    if (m_restirAliasHeapSize != 0u)
+    {
+        ID3D12Resource* currentIndirectReservoir = UsesRestirGI(m_mode)
+            ? (currentParity == 0u
+                ? m_restirGiReservoirA.Get()
+                : m_restirGiReservoirB.Get())
+            : (currentParity == 0u
+                ? m_restirPtReservoirA.Get()
+                : m_restirPtReservoirB.Get());
+        auto activateDiScratch = CD3DX12_RESOURCE_BARRIER::Aliasing(
+            currentIndirectReservoir,
+            spatialReservoir);
+        m_commandList->ResourceBarrier(1u, &activateDiScratch);
+    }
 
     // Pass A fuses candidate generation and temporal reuse. Local candidates
     // never touch memory; the immutable previous history A is read and the
     // combined reservoir is written once to scratch B.
     m_commandList->SetPipelineState(m_rtxdiDiCandidatePipeline.Get());
     m_commandList->Dispatch(dispatchX, dispatchY, 1);
-    auto passABarrier = CD3DX12_RESOURCE_BARRIER::UAV(m_restirReservoirSpatial.Get());
+    auto passABarrier = CD3DX12_RESOURCE_BARRIER::UAV(spatialReservoir);
     m_commandList->ResourceBarrier(1, &passABarrier);
     WriteGpuTimestamp(GpuTimestampAfterRestirCandidate);
     // Candidate and temporal retain their public metrics. Temporal is zero-ish
@@ -7114,7 +9025,7 @@ void D3D12PathTracingBackend::RunRestirReusePass()
         {
             CD3DX12_RESOURCE_BARRIER::UAV(m_restirReservoirCurrent.Get()),
             CD3DX12_RESOURCE_BARRIER::UAV(m_PathtracingOutput.Get()),
-            CD3DX12_RESOURCE_BARRIER::UAV(m_accumulationOutput.Get()),
+            CD3DX12_RESOURCE_BARRIER::UAV(AccumulationResource(currentParity)),
             CD3DX12_RESOURCE_BARRIER::UAV(m_signalDirect.Get()),
             CD3DX12_RESOURCE_BARRIER::UAV(m_signalIndirect.Get()),
             CD3DX12_RESOURCE_BARRIER::UAV(m_postDenoiseHdr.Get())
@@ -7127,6 +9038,145 @@ void D3D12PathTracingBackend::RunRestirReusePass()
     WriteGpuTimestamp(GpuTimestampAfterRestirShade);
     // History publication is the Pass-B UAV write itself; no copy/transition.
     WriteGpuTimestamp(GpuTimestampAfterRestirPublish);
+}
+
+void D3D12PathTracingBackend::RunRestirGiPass()
+{
+    if (m_pendingGpuResourceRefresh == PendingGpuResourceRefresh::FullScene ||
+        !m_rtxdiAvailable ||
+        m_qualitySettings.restirBackend != rb::RestirBackend::Rtxdi ||
+        !UsesRestirGI(m_mode) ||
+        m_qualitySettings.qualityProfile == rb::QualityProfile::ReferenceStill ||
+        !m_rtxdiGiInitialPipeline ||
+        !m_rtxdiGiFusedPipeline)
+    {
+        WriteGpuTimestamp(GpuTimestampAfterGiInitial);
+        WriteGpuTimestamp(GpuTimestampAfterGiFused);
+        return;
+    }
+
+    m_commandList->SetComputeRootSignature(m_globalRootSignature.Get());
+    m_commandList->SetComputeRootDescriptorTable(
+        RootOutputTable,
+        CurrentOutputTableGpuDescriptor());
+    m_commandList->SetComputeRootShaderResourceView(
+        RootAccelerationStructure,
+        m_topLevelAs.result->GetGPUVirtualAddress());
+    m_commandList->SetComputeRootConstantBufferView(
+        RootSceneConstants,
+        m_frameContexts[m_frameIndex].sceneConstantBuffer->GetGPUVirtualAddress());
+    m_commandList->SetComputeRootDescriptorTable(
+        RootSceneBuffers,
+        GpuDescriptor(DescriptorVertexBuffer));
+    m_commandList->SetComputeRootDescriptorTable(
+        RootTextureTable,
+        GpuDescriptor(DescriptorTextureBase));
+
+    const UINT dispatchX = (m_renderWidth + 7u) / 8u;
+    const UINT dispatchY = (m_renderHeight + 7u) / 8u;
+    ID3D12Resource* currentGiReservoir = CurrentSurfaceGuideParity() == 0u
+        ? m_restirGiReservoirA.Get()
+        : m_restirGiReservoirB.Get();
+    if (m_restirAliasHeapSize != 0u)
+    {
+        ID3D12Resource* currentDiScratch = CurrentSurfaceGuideParity() == 0u
+            ? m_restirReservoirSpatial.Get()
+            : m_restirReservoirSpatialB.Get();
+        auto activateGiReservoir = CD3DX12_RESOURCE_BARRIER::Aliasing(
+            currentDiScratch,
+            currentGiReservoir);
+        m_commandList->ResourceBarrier(1u, &activateGiReservoir);
+    }
+
+    m_commandList->SetPipelineState(m_rtxdiGiInitialPipeline.Get());
+    m_commandList->Dispatch(dispatchX, dispatchY, 1u);
+    auto initialBarrier = CD3DX12_RESOURCE_BARRIER::UAV(currentGiReservoir);
+    m_commandList->ResourceBarrier(1u, &initialBarrier);
+    WriteGpuTimestamp(GpuTimestampAfterGiInitial);
+
+    m_commandList->SetPipelineState(m_rtxdiGiFusedPipeline.Get());
+    m_commandList->Dispatch(dispatchX, dispatchY, 1u);
+    D3D12_RESOURCE_BARRIER fusedBarriers[] =
+    {
+        CD3DX12_RESOURCE_BARRIER::UAV(currentGiReservoir),
+        CD3DX12_RESOURCE_BARRIER::UAV(m_signalDirect.Get()),
+        CD3DX12_RESOURCE_BARRIER::UAV(m_signalIndirect.Get()),
+        CD3DX12_RESOURCE_BARRIER::UAV(m_PathtracingOutput.Get()),
+        CD3DX12_RESOURCE_BARRIER::UAV(AccumulationResource(CurrentSurfaceGuideParity())),
+        CD3DX12_RESOURCE_BARRIER::UAV(m_postDenoiseHdr.Get()),
+    };
+    m_commandList->ResourceBarrier(_countof(fusedBarriers), fusedBarriers);
+    WriteGpuTimestamp(GpuTimestampAfterGiFused);
+}
+
+void D3D12PathTracingBackend::RunRestirPtPass()
+{
+    if (m_pendingGpuResourceRefresh == PendingGpuResourceRefresh::FullScene ||
+        !m_rtxdiAvailable ||
+        m_qualitySettings.restirBackend != rb::RestirBackend::Rtxdi ||
+        !UsesRestirPT(m_mode) ||
+        m_qualitySettings.qualityProfile == rb::QualityProfile::ReferenceStill ||
+        !m_rtxdiPtInitialPipeline ||
+        !m_rtxdiPtFusedPipeline)
+    {
+        WriteGpuTimestamp(GpuTimestampAfterPtInitial);
+        WriteGpuTimestamp(GpuTimestampAfterPtFused);
+        return;
+    }
+
+    m_commandList->SetComputeRootSignature(m_globalRootSignature.Get());
+    m_commandList->SetComputeRootDescriptorTable(
+        RootOutputTable,
+        CurrentOutputTableGpuDescriptor());
+    m_commandList->SetComputeRootShaderResourceView(
+        RootAccelerationStructure,
+        m_topLevelAs.result->GetGPUVirtualAddress());
+    m_commandList->SetComputeRootConstantBufferView(
+        RootSceneConstants,
+        m_frameContexts[m_frameIndex].sceneConstantBuffer->GetGPUVirtualAddress());
+    m_commandList->SetComputeRootDescriptorTable(
+        RootSceneBuffers,
+        GpuDescriptor(DescriptorVertexBuffer));
+    m_commandList->SetComputeRootDescriptorTable(
+        RootTextureTable,
+        GpuDescriptor(DescriptorTextureBase));
+
+    const UINT parity = CurrentSurfaceGuideParity();
+    const UINT dispatchX = (m_renderWidth + 7u) / 8u;
+    const UINT dispatchY = (m_renderHeight + 7u) / 8u;
+    ID3D12Resource* currentPtReservoir = parity == 0u
+        ? m_restirPtReservoirA.Get()
+        : m_restirPtReservoirB.Get();
+    if (m_restirAliasHeapSize != 0u)
+    {
+        ID3D12Resource* currentDiScratch = parity == 0u
+            ? m_restirReservoirSpatial.Get()
+            : m_restirReservoirSpatialB.Get();
+        auto activatePtReservoir = CD3DX12_RESOURCE_BARRIER::Aliasing(
+            currentDiScratch,
+            currentPtReservoir);
+        m_commandList->ResourceBarrier(1u, &activatePtReservoir);
+    }
+
+    m_commandList->SetPipelineState(m_rtxdiPtInitialPipeline.Get());
+    m_commandList->Dispatch(dispatchX, dispatchY, 1u);
+    auto initialBarrier = CD3DX12_RESOURCE_BARRIER::UAV(currentPtReservoir);
+    m_commandList->ResourceBarrier(1u, &initialBarrier);
+    WriteGpuTimestamp(GpuTimestampAfterPtInitial);
+
+    m_commandList->SetPipelineState(m_rtxdiPtFusedPipeline.Get());
+    m_commandList->Dispatch(dispatchX, dispatchY, 1u);
+    D3D12_RESOURCE_BARRIER fusedBarriers[] =
+    {
+        CD3DX12_RESOURCE_BARRIER::UAV(currentPtReservoir),
+        CD3DX12_RESOURCE_BARRIER::UAV(m_signalDirect.Get()),
+        CD3DX12_RESOURCE_BARRIER::UAV(m_signalIndirect.Get()),
+        CD3DX12_RESOURCE_BARRIER::UAV(m_PathtracingOutput.Get()),
+        CD3DX12_RESOURCE_BARRIER::UAV(AccumulationResource(parity)),
+        CD3DX12_RESOURCE_BARRIER::UAV(m_postDenoiseHdr.Get()),
+    };
+    m_commandList->ResourceBarrier(_countof(fusedBarriers), fusedBarriers);
+    WriteGpuTimestamp(GpuTimestampAfterPtFused);
 }
 
 void D3D12PathTracingBackend::RunDenoisePass()
@@ -7161,6 +9211,14 @@ void D3D12PathTracingBackend::RunDenoisePass()
     // stale NRD outputs to FinalTaaCS; the toggle takes effect next submission.
     const bool denoiserRequested = m_fuseNrdFinalTaaForFrame ||
         m_denoiserEnabled || m_debugViewMode >= 16;
+    if (denoiserRequested &&
+        IsDlssSelected() &&
+        m_dlssBackendRuntime.CanEvaluateRayReconstruction() &&
+        m_dlssPreparePipeline)
+    {
+        (void)RunDlssRayReconstructionPass();
+        return;
+    }
     if (denoiserRequested && IsNrdSelected() && m_nrdBackendRuntime.CanEvaluate() && m_nrdPreparePipeline && m_nrdCompositePipeline)
     {
         if (RunNrdDenoisePass())
@@ -7190,8 +9248,8 @@ void D3D12PathTracingBackend::RunDenoisePass()
     m_commandList->SetComputeRootDescriptorTable(RootSceneBuffers, GpuDescriptor(DescriptorVertexBuffer));
     m_commandList->SetComputeRootDescriptorTable(RootTextureTable, GpuDescriptor(DescriptorTextureBase));
 
-    const UINT dispatchX = (m_width + 7) / 8;
-    const UINT dispatchY = (m_height + 7) / 8;
+    const UINT dispatchX = (m_renderWidth + 7) / 8;
+    const UINT dispatchY = (m_renderHeight + 7) / 8;
     m_commandList->SetPipelineState(m_denoiseTemporalPipeline.Get());
     m_commandList->Dispatch(dispatchX, dispatchY, 1);
     D3D12_RESOURCE_BARRIER temporalBarriers[] =
@@ -7252,7 +9310,8 @@ bool D3D12PathTracingBackend::ShouldFuseNrdFinalTaa() const
         lookdevpt::benchmark::IncludesQuality(m_benchmarkOptions.benchmarkKind);
     return m_pendingGpuResourceRefresh != PendingGpuResourceRefresh::FullScene &&
         m_qualitySettings.qualityProfile != rb::QualityProfile::ReferenceStill &&
-        m_qualitySettings.finalTaa && m_denoiserEnabled && m_debugViewMode == 0 &&
+        (m_qualitySettings.finalTaa || UsesTemporalUpscale()) &&
+        m_denoiserEnabled && m_debugViewMode == 0 &&
         IsNrdSelected() && m_nrdBackendRuntime.CanEvaluate() &&
         m_nrdPreparePipeline && m_finalTaaPipeline && !qualityDiagnosticsEnabled;
 }
@@ -7276,8 +9335,8 @@ bool D3D12PathTracingBackend::RunNrdDenoisePass()
     m_commandList->SetComputeRootDescriptorTable(RootSceneBuffers, GpuDescriptor(DescriptorVertexBuffer));
     m_commandList->SetComputeRootDescriptorTable(RootTextureTable, GpuDescriptor(DescriptorTextureBase));
 
-    const UINT dispatchX = (m_width + 7) / 8;
-    const UINT dispatchY = (m_height + 7) / 8;
+    const UINT dispatchX = (m_renderWidth + 7) / 8;
+    const UINT dispatchY = (m_renderHeight + 7) / 8;
     m_commandList->SetPipelineState(m_nrdPreparePipeline.Get());
     m_commandList->Dispatch(dispatchX, dispatchY, 1);
     // NrdBackend transitions every prepared external input from UAV to SRV
@@ -7352,10 +9411,113 @@ bool D3D12PathTracingBackend::RunNrdDenoisePass()
     return true;
 }
 
+bool D3D12PathTracingBackend::RunDlssRayReconstructionPass()
+{
+    const auto writeInactiveTail = [this]()
+    {
+        WriteGpuTimestamp(GpuTimestampAfterDenoiseCore);
+        WriteGpuTimestamp(GpuTimestampAfterDenoiseComposite);
+    };
+    if (!m_dlssPreparePipeline ||
+        !m_dlssBackendRuntime.CanEvaluateRayReconstruction())
+    {
+        WriteGpuTimestamp(GpuTimestampAfterDenoisePrepare);
+        writeInactiveTail();
+        return false;
+    }
+
+    ID3D12DescriptorHeap* descriptorHeaps[] = { m_descriptorHeap.Get() };
+    m_commandList->SetDescriptorHeaps(_countof(descriptorHeaps), descriptorHeaps);
+    m_commandList->SetComputeRootSignature(m_globalRootSignature.Get());
+    m_commandList->SetComputeRootDescriptorTable(
+        RootOutputTable,
+        CurrentOutputTableGpuDescriptor());
+    m_commandList->SetComputeRootConstantBufferView(
+        RootSceneConstants,
+        m_frameContexts[m_frameIndex].sceneConstantBuffer->GetGPUVirtualAddress());
+    m_commandList->SetPipelineState(m_dlssPreparePipeline.Get());
+    m_commandList->Dispatch(
+        (m_renderWidth + 7u) / 8u,
+        (m_renderHeight + 7u) / 8u,
+        1u);
+    D3D12_RESOURCE_BARRIER guideBarriers[] =
+    {
+        CD3DX12_RESOURCE_BARRIER::UAV(m_postDenoiseHdr.Get()),
+        CD3DX12_RESOURCE_BARRIER::UAV(m_dlssDepth.Get()),
+        CD3DX12_RESOURCE_BARRIER::UAV(m_dlssMotion.Get()),
+        CD3DX12_RESOURCE_BARRIER::UAV(m_dlssNormalRoughness.Get()),
+        CD3DX12_RESOURCE_BARRIER::UAV(m_dlssAlbedo.Get()),
+        CD3DX12_RESOURCE_BARRIER::UAV(m_dlssSpecularAlbedo.Get()),
+        CD3DX12_RESOURCE_BARRIER::UAV(m_dlssExposure.Get()),
+    };
+    m_commandList->ResourceBarrier(_countof(guideBarriers), guideBarriers);
+    WriteGpuTimestamp(GpuTimestampAfterDenoisePrepare);
+
+    DlssEvaluationDesc desc{};
+    desc.commandList = m_commandList.Get();
+    desc.color = m_postDenoiseHdr.Get();
+    desc.output =
+        FinalResolvedHdrResource(CurrentSurfaceGuideParity());
+    desc.linearDepth = m_dlssDepth.Get();
+    desc.motion = m_dlssMotion.Get();
+    desc.normalRoughness = m_dlssNormalRoughness.Get();
+    desc.albedo = m_dlssAlbedo.Get();
+    desc.specularAlbedo = m_dlssSpecularAlbedo.Get();
+    desc.exposure = m_dlssExposure.Get();
+    desc.renderWidth = m_renderWidth;
+    desc.renderHeight = m_renderHeight;
+    desc.outputWidth = m_width;
+    desc.outputHeight = m_height;
+    desc.frameIndex = m_frameCounter;
+    desc.jitter = m_currentJitter;
+    desc.cameraPosition = m_camera.GetPosition();
+    desc.viewToClip = m_nrdViewToClip;
+    desc.previousViewToClip = m_nrdViewToClipPrev;
+    desc.worldToView = m_nrdWorldToView;
+    desc.previousWorldToView = m_nrdWorldToViewPrev;
+    desc.reset = m_frameState.cameraCut ||
+        !rb::HasAny(m_validHistoryDomains, rb::HistoryDomain::Lighting);
+
+    const bool evaluated =
+        m_dlssBackendRuntime.EvaluateRayReconstruction(desc);
+    WriteGpuTimestamp(GpuTimestampAfterDenoiseCore);
+    m_commandList->SetDescriptorHeaps(_countof(descriptorHeaps), descriptorHeaps);
+    if (!evaluated)
+    {
+        // FinalTaaCS was told that DLSS would produce the frame. Switch that
+        // mapped constant back before submission so it overwrites any partial
+        // plugin output with the native raw-HDR TAAU result from this frame.
+        auto* constants = reinterpret_cast<SceneConstantBuffer*>(
+            m_frameContexts[m_frameIndex].mappedSceneConstants);
+        if (constants)
+        {
+            constants->postProcessOptions.y = 0.0f;
+        }
+        if (m_dlssBackendRuntime.ConsumeFallbackRebuildRequest())
+        {
+            m_dlssFallbackRebuildAfterFrame = true;
+            LogDiagnostic(
+                "DLSS-RR evaluation failed; queued native internal fallback resource rebuild.");
+        }
+        WriteGpuTimestamp(GpuTimestampAfterDenoiseComposite);
+        return false;
+    }
+
+    auto outputBarrier = CD3DX12_RESOURCE_BARRIER::UAV(
+        FinalResolvedHdrResource(CurrentSurfaceGuideParity()));
+    m_commandList->ResourceBarrier(1u, &outputBarrier);
+    WriteGpuTimestamp(GpuTimestampAfterDenoiseComposite);
+    return true;
+}
+
 void D3D12PathTracingBackend::RunFinalTaaPass()
 {
     if (m_pendingGpuResourceRefresh == PendingGpuResourceRefresh::FullScene ||
-        !m_finalTaaPipeline || !m_qualitySettings.finalTaa ||
+        !m_finalTaaPipeline ||
+        (!m_qualitySettings.finalTaa &&
+            !UsesTemporalUpscale() &&
+            !(IsDlssSelected() &&
+                m_dlssBackendRuntime.CanEvaluateRayReconstruction())) ||
         m_qualitySettings.qualityProfile == rb::QualityProfile::ReferenceStill)
     {
         return;
@@ -7372,14 +9534,12 @@ void D3D12PathTracingBackend::RunFinalTaaPass()
     m_commandList->SetPipelineState(m_finalTaaPipeline.Get());
     m_commandList->Dispatch((m_width + 7) / 8, (m_height + 7) / 8, 1);
 
-    ID3D12Resource* currentTaaHistory = (m_frameCounter & 1u) == 0u
-        ? m_taaHistoryB.Get()
-        : m_taaHistoryA.Get();
+    ID3D12Resource* currentTaaHistory =
+        FinalResolvedHdrResource(CurrentSurfaceGuideParity());
     D3D12_RESOURCE_BARRIER barriers[] =
     {
         CD3DX12_RESOURCE_BARRIER::UAV(m_PathtracingOutput.Get()),
         CD3DX12_RESOURCE_BARRIER::UAV(currentTaaHistory),
-        CD3DX12_RESOURCE_BARRIER::UAV(m_finalResolvedHdr.Get()),
     };
     m_commandList->ResourceBarrier(_countof(barriers), barriers);
 }
@@ -7404,7 +9564,7 @@ void D3D12PathTracingBackend::RunQualityCounterPass()
         CD3DX12_RESOURCE_BARRIER::UAV(SurfaceGuideAovResource(1u, currentGuideParity)),
         CD3DX12_RESOURCE_BARRIER::UAV(SurfaceGuideAovResource(2u, currentGuideParity)),
         CD3DX12_RESOURCE_BARRIER::UAV(m_postDenoiseHdr.Get()),
-        CD3DX12_RESOURCE_BARRIER::UAV(m_finalResolvedHdr.Get()),
+        CD3DX12_RESOURCE_BARRIER::UAV(FinalResolvedHdrResource(currentGuideParity)),
     };
     m_commandList->ResourceBarrier(_countof(inputBarriers), inputBarriers);
 
@@ -7549,6 +9709,10 @@ void D3D12PathTracingBackend::ReadbackGpuTimingQueries(UINT frameIndex)
             const UINT64 afterRestirSpatial = timestamps[GpuTimestampAfterRestirSpatial];
             const UINT64 afterRestirShade = timestamps[GpuTimestampAfterRestirShade];
             const UINT64 afterRestirPublish = timestamps[GpuTimestampAfterRestirPublish];
+            const UINT64 afterGiInitial = timestamps[GpuTimestampAfterGiInitial];
+            const UINT64 afterGiFused = timestamps[GpuTimestampAfterGiFused];
+            const UINT64 afterPtInitial = timestamps[GpuTimestampAfterPtInitial];
+            const UINT64 afterPtFused = timestamps[GpuTimestampAfterPtFused];
             const UINT64 afterDenoisePrepare = timestamps[GpuTimestampAfterDenoisePrepare];
             const UINT64 afterDenoiseCore = timestamps[GpuTimestampAfterDenoiseCore];
             const UINT64 afterDenoiseComposite = timestamps[GpuTimestampAfterDenoiseComposite];
@@ -7566,7 +9730,11 @@ void D3D12PathTracingBackend::ReadbackGpuTimingQueries(UINT frameIndex)
                 afterRestirSpatial >= afterRestirTemporal &&
                 afterRestirShade >= afterRestirSpatial &&
                 afterRestirPublish >= afterRestirShade &&
-                afterDenoisePrepare >= afterRestirPublish &&
+                afterGiInitial >= afterRestirPublish &&
+                afterGiFused >= afterGiInitial &&
+                afterPtInitial >= afterGiFused &&
+                afterPtFused >= afterPtInitial &&
+                afterDenoisePrepare >= afterPtFused &&
                 afterDenoiseCore >= afterDenoisePrepare &&
                 afterDenoiseComposite >= afterDenoiseCore &&
                 afterFinalTaa >= afterDenoiseComposite &&
@@ -7582,8 +9750,12 @@ void D3D12PathTracingBackend::ReadbackGpuTimingQueries(UINT frameIndex)
                 timing.restirSpatialMs = static_cast<double>(afterRestirSpatial - afterRestirTemporal) * tickToMs;
                 timing.restirShadeMs = static_cast<double>(afterRestirShade - afterRestirSpatial) * tickToMs;
                 timing.restirPublishMs = static_cast<double>(afterRestirPublish - afterRestirShade) * tickToMs;
-                timing.restirMs = static_cast<double>(afterRestirPublish - afterPathTrace) * tickToMs;
-                timing.denoisePrepareMs = static_cast<double>(afterDenoisePrepare - afterRestirPublish) * tickToMs;
+                timing.restirGiInitialMs = static_cast<double>(afterGiInitial - afterRestirPublish) * tickToMs;
+                timing.restirGiFusedMs = static_cast<double>(afterGiFused - afterGiInitial) * tickToMs;
+                timing.restirPtInitialMs = static_cast<double>(afterPtInitial - afterGiFused) * tickToMs;
+                timing.restirPtFusedMs = static_cast<double>(afterPtFused - afterPtInitial) * tickToMs;
+                timing.restirMs = static_cast<double>(afterPtFused - afterPathTrace) * tickToMs;
+                timing.denoisePrepareMs = static_cast<double>(afterDenoisePrepare - afterPtFused) * tickToMs;
                 timing.denoiseCoreMs = static_cast<double>(afterDenoiseCore - afterDenoisePrepare) * tickToMs;
                 timing.denoiseCompositeMs = static_cast<double>(afterDenoiseComposite - afterDenoiseCore) * tickToMs;
                 timing.finalTaaMs = static_cast<double>(afterFinalTaa - afterDenoiseComposite) * tickToMs;
@@ -7591,7 +9763,7 @@ void D3D12PathTracingBackend::ReadbackGpuTimingQueries(UINT frameIndex)
                 timing.historyPublishMs = static_cast<double>(afterHistoryPublish - afterQualityCounters) * tickToMs;
                 // Preserve the legacy aggregate: denoiser, final TAA,
                 // diagnostics and guide publication are all included.
-                timing.denoiseMs = static_cast<double>(afterHistoryPublish - afterRestirPublish) * tickToMs;
+                timing.denoiseMs = static_cast<double>(afterHistoryPublish - afterPtFused) * tickToMs;
                 timing.copyMs = static_cast<double>(afterCopy - afterHistoryPublish) * tickToMs;
                 timing.uiMs = static_cast<double>(frameEnd - afterCopy) * tickToMs;
                 timing.pipelineMs = static_cast<double>(frameEnd - frameBegin) * tickToMs;
@@ -7646,6 +9818,10 @@ void D3D12PathTracingBackend::ReadbackGpuTimingQueries(UINT frameIndex)
             m_gpuRestirSpatialMs = timing.restirSpatialMs;
             m_gpuRestirShadeMs = timing.restirShadeMs;
             m_gpuRestirPublishMs = timing.restirPublishMs;
+            m_gpuRestirGiInitialMs = timing.restirGiInitialMs;
+            m_gpuRestirGiFusedMs = timing.restirGiFusedMs;
+            m_gpuRestirPtInitialMs = timing.restirPtInitialMs;
+            m_gpuRestirPtFusedMs = timing.restirPtFusedMs;
             m_gpuDenoiseMs = timing.denoiseMs;
             m_gpuDenoisePrepareMs = timing.denoisePrepareMs;
             m_gpuDenoiseCoreMs = timing.denoiseCoreMs;
@@ -7755,6 +9931,15 @@ void D3D12PathTracingBackend::ParseCommandLineArgs(WCHAR* argv[], int argc)
             const wchar_t* prefix = argument.starts_with(L"--mcp-token") ? L"--mcp-token" : argument.starts_with(L"/mcp-token") ? L"/mcp-token" : L"-mcp-token";
             m_startupMcpToken = WideToUtf8(consumePathArgument(i, prefix));
         }
+        else if (matchesPathArgument(argument, L"--mcp-auth") || matchesPathArgument(argument, L"-mcp-auth") || matchesPathArgument(argument, L"/mcp-auth"))
+        {
+            const wchar_t* prefix = argument.starts_with(L"--mcp-auth") ? L"--mcp-auth" : argument.starts_with(L"/mcp-auth") ? L"/mcp-auth" : L"-mcp-auth";
+            m_startupMcpAuthenticationMode =
+                mcp::AuthenticationModeFromName(
+                    WideToUtf8(consumePathArgument(i, prefix)),
+                    mcp::AuthenticationMode::BearerToken);
+            m_hasStartupMcpAuthenticationMode = true;
+        }
         else if (matchesPathArgument(argument, L"--mcp-access") || matchesPathArgument(argument, L"-mcp-access") || matchesPathArgument(argument, L"/mcp-access"))
         {
             const wchar_t* prefix = argument.starts_with(L"--mcp-access") ? L"--mcp-access" : argument.starts_with(L"/mcp-access") ? L"/mcp-access" : L"-mcp-access";
@@ -7766,6 +9951,8 @@ void D3D12PathTracingBackend::ParseCommandLineArgs(WCHAR* argv[], int argc)
 
 void D3D12PathTracingBackend::OnDestroy()
 {
+    m_sceneLoadCancelRequested.store(true, std::memory_order_relaxed);
+    if (m_sceneLoadFuture.valid()) m_sceneLoadFuture.wait();
     StopMcpServer();
     m_mcpDispatcher.CancelAll("Application is shutting down.");
     WaitForPreviousFrame();
@@ -7869,7 +10056,8 @@ void D3D12PathTracingBackend::ResetLight()
 
 void D3D12PathTracingBackend::ResetCameraView()
 {
-    m_camera.Reset(m_defaultCameraPosition, m_defaultCameraYaw, m_defaultCameraPitch);
+    m_camera.Reset(m_defaultCameraPosition, m_defaultCameraYaw, m_defaultCameraPitch, m_defaultCameraRoll);
+    m_cameraFovDegrees = m_defaultCameraFovDegrees;
 }
 
 void D3D12PathTracingBackend::ResetCameraSpeeds()
@@ -8011,6 +10199,9 @@ void D3D12PathTracingBackend::ApplyQualitySettingsToRenderer()
         m_qualitySettings.secondaryShadingRate == rb::SecondaryShadingRate::AdaptiveHalf
         ? 0.5f
         : 1.0f;
+    m_dynamicResolutionOverBudgetFrames = 0;
+    m_dynamicResolutionUnderBudgetFrames = 0;
+    ApplyConfiguredRenderScale(true);
 
     switch (m_qualitySettings.qualityProfile)
     {
@@ -8288,8 +10479,17 @@ std::string D3D12PathTracingBackend::BuildDlssStatusJson() const
     out << "\"runtimeAvailable\":" << (status.runtimeAvailable ? "true" : "false") << ",";
     out << "\"initialized\":" << (status.initialized ? "true" : "false") << ",";
     out << "\"deviceRegistered\":" << (status.deviceRegistered ? "true" : "false") << ",";
+    out << "\"applicationIdentityConfigured\":"
+        << (status.applicationIdentityConfigured ? "true" : "false") << ",";
     out << "\"featureSupported\":" << (status.featureSupported ? "true" : "false") << ",";
     out << "\"evaluationReady\":" << (status.evaluationReady ? "true" : "false") << ",";
+    out << "\"lastEvaluationSucceeded\":"
+        << (status.lastEvaluationSucceeded ? "true" : "false") << ",";
+    out << "\"fallbackRebuildRequested\":"
+        << (status.fallbackRebuildRequested ? "true" : "false") << ",";
+    out << "\"successfulEvaluations\":" << status.successfulEvaluations << ",";
+    out << "\"failedEvaluations\":" << status.failedEvaluations << ",";
+    out << "\"lastResultCode\":" << status.lastResultCode << ",";
     out << "\"historyResetRequested\":" << (status.historyResetRequested ? "true" : "false") << ",";
     out << "\"mode\":\"" << DlssModeName(m_dlssMode) << "\",";
     out << "\"modeLabel\":\"" << DlssModeDisplayName(m_dlssMode) << "\",";
@@ -8298,6 +10498,7 @@ std::string D3D12PathTracingBackend::BuildDlssStatusJson() const
     out << "\"outputResolution\":{\"width\":" << m_width << ",\"height\":" << m_height << "},";
     out << "\"runtimePath\":\"" << cld::EscapeJson(WideToUtf8(status.runtimePath)) << "\",";
     out << "\"lastError\":\"" << cld::EscapeJson(status.lastError) << "\",";
+    out << "\"lastFailureStage\":\"" << cld::EscapeJson(status.lastFailureStage) << "\",";
     out << "\"fallbackReason\":\"" << cld::EscapeJson(status.fallbackReason) << "\"";
     out << "}";
     return out.str();
@@ -8341,11 +10542,13 @@ void D3D12PathTracingBackend::UpdateCameraMotionState()
     const XMFLOAT3 cameraPosition = m_camera.GetPosition();
     const float yaw = m_camera.GetYawRadians();
     const float pitch = m_camera.GetPitchRadians();
+    const float roll = m_camera.GetRollRadians();
 
     if (!m_cameraMotionTrackingInitialized)
     {
         m_previousCameraMotionState = XMFLOAT4(cameraPosition.x, cameraPosition.y, cameraPosition.z, yaw);
         m_previousCameraMotionPitch = pitch;
+        m_previousCameraMotionRollFov = XMFLOAT2(roll, m_cameraFovDegrees);
         m_cameraMotionAmount = 0.0f;
         m_framesSinceCameraMotion = 4;
         m_cameraMotionTrackingInitialized = true;
@@ -8358,7 +10561,9 @@ void D3D12PathTracingBackend::UpdateCameraMotionState()
     const float positionDelta = std::sqrt(dx * dx + dy * dy + dz * dz);
     const float yawDelta = std::remainder(yaw - m_previousCameraMotionState.w, XM_2PI);
     const float pitchDelta = pitch - m_previousCameraMotionPitch;
-    const float angleDelta = std::abs(yawDelta) + std::abs(pitchDelta);
+    const float rollDelta = std::remainder(roll - m_previousCameraMotionRollFov.x, XM_2PI);
+    const float fovDelta = XMConvertToRadians(m_cameraFovDegrees - m_previousCameraMotionRollFov.y);
+    const float angleDelta = std::abs(yawDelta) + std::abs(pitchDelta) + std::abs(rollDelta) + std::abs(fovDelta);
     m_cameraMotionAmount = std::clamp(positionDelta * 0.20f + angleDelta * 2.0f, 0.0f, 1.0f);
     if (m_cameraMotionAmount > 0.001f)
     {
@@ -8392,6 +10597,7 @@ void D3D12PathTracingBackend::UpdateCameraMotionState()
 
     m_previousCameraMotionState = XMFLOAT4(cameraPosition.x, cameraPosition.y, cameraPosition.z, yaw);
     m_previousCameraMotionPitch = pitch;
+    m_previousCameraMotionRollFov = XMFLOAT2(roll, m_cameraFovDegrees);
     m_cameraMotionTrackingInitialized = true;
 }
 
@@ -8400,13 +10606,15 @@ bool D3D12PathTracingBackend::HasAccumulationStateChanged()
     XMFLOAT3 cameraPosition = m_camera.GetPosition();
     XMFLOAT4 cameraAndYaw(cameraPosition.x, cameraPosition.y, cameraPosition.z, m_camera.GetYawRadians());
     const float cameraPitch = m_camera.GetPitchRadians();
+    const XMFLOAT2 cameraRollFov(m_camera.GetRollRadians(), m_cameraFovDegrees);
     XMFLOAT4 lighting(m_lightDirection[0], m_lightDirection[1], m_lightDirection[2], m_lightIntensity + static_cast<float>(m_debugViewMode) + (m_shadowEnabled ? 1.0f : 0.0f) + (m_skyNeeEnabled ? 2.0f : 0.0f));
     XMFLOAT4 giOptions(static_cast<float>(m_giSamplesPerFrame), m_giRadianceClamp, m_giTemporalClampScale, m_giTemporalClampMin);
     const bool useRestir = m_qualitySettings.qualityProfile != rb::QualityProfile::ReferenceStill &&
         m_rtxdiAvailable && m_qualitySettings.restirBackend == rb::RestirBackend::Rtxdi && UsesRestirDI(m_mode);
     XMFLOAT4 pathOptions(static_cast<float>(m_maxPathBounces), static_cast<float>(m_minPathBounces), static_cast<float>(m_restirCandidateSamples), useRestir ? 1.0f : 0.0f);
     XMFLOAT4 restirOptions(m_restirTemporalReuse ? 1.0f : 0.0f, static_cast<float>(m_restirSpatialReusePasses), static_cast<float>(m_restirSpatialRadius), m_restirMClamp);
-    const bool combinedRestir = m_mode == PathTracingMode::ReSTIRCombined;
+    const bool combinedRestir = m_mode == PathTracingMode::ReSTIRCombined ||
+        m_mode == PathTracingMode::ReSTIRPTCombined;
     XMFLOAT4 restirDiOptions(
         (combinedRestir ? m_restirDiTemporalReuse : m_restirTemporalReuse) ? 1.0f : 0.0f,
         static_cast<float>(combinedRestir ? m_restirDiSpatialReusePasses : m_restirSpatialReusePasses),
@@ -8429,6 +10637,7 @@ bool D3D12PathTracingBackend::HasAccumulationStateChanged()
         m_resetAccumulationRequested ||
         memcmp(&cameraAndYaw, &m_lastCameraAndYaw, sizeof(XMFLOAT4)) != 0 ||
         cameraPitch != m_lastCameraPitch ||
+        memcmp(&cameraRollFov, &m_lastCameraRollFov, sizeof(XMFLOAT2)) != 0 ||
         memcmp(&lighting, &m_lastLighting, sizeof(XMFLOAT4)) != 0 ||
         memcmp(&giOptions, &m_lastGiOptions, sizeof(XMFLOAT4)) != 0 ||
         memcmp(&pathOptions, &m_lastPathOptions, sizeof(XMFLOAT4)) != 0 ||
@@ -8439,6 +10648,7 @@ bool D3D12PathTracingBackend::HasAccumulationStateChanged()
         memcmp(&viewOptions, &m_lastViewOptions, sizeof(XMFLOAT4)) != 0;
     m_lastCameraAndYaw = cameraAndYaw;
     m_lastCameraPitch = cameraPitch;
+    m_lastCameraRollFov = cameraRollFov;
     m_lastLighting = lighting;
     m_lastGiOptions = giOptions;
     m_lastPathOptions = pathOptions;
@@ -8508,6 +10718,30 @@ UINT D3D12PathTracingBackend::LastSubmittedSurfaceGuideParity() const
     return m_frameCounter == 0u ? CurrentSurfaceGuideParity() : ((m_frameCounter - 1u) & 1u);
 }
 
+ID3D12Resource* D3D12PathTracingBackend::AccumulationResource(UINT parity) const
+{
+    if (!m_accumulationAliasesTaaHistory)
+    {
+        return m_accumulationOutput.Get();
+    }
+    return (parity & 1u) != 0u ? m_taaHistoryA.Get() : m_taaHistoryB.Get();
+}
+
+ID3D12Resource* D3D12PathTracingBackend::FinalResolvedHdrResource(UINT parity) const
+{
+    const bool finalTaaResourceSet =
+        m_qualitySettings.qualityProfile != rb::QualityProfile::ReferenceStill &&
+        (m_qualitySettings.finalTaa ||
+            UsesTemporalUpscale() ||
+            (IsDlssSelected() &&
+                m_dlssBackendRuntime.CanEvaluateRayReconstruction()));
+    if (finalTaaResourceSet)
+    {
+        return (parity & 1u) != 0u ? m_taaHistoryA.Get() : m_taaHistoryB.Get();
+    }
+    return m_finalResolvedHdr.Get();
+}
+
 ID3D12Resource* D3D12PathTracingBackend::SurfaceGuideAovResource(UINT plane, UINT parity) const
 {
     const bool setB = (parity & 1u) != 0u;
@@ -8560,6 +10794,14 @@ std::wstring D3D12PathTracingBackend::ShaderFileName() const
     if (m_mode == PathTracingMode::ReSTIRCombined)
     {
         return L"PathTracingReSTIRCombined.lib.cso";
+    }
+    if (m_mode == PathTracingMode::ReSTIRPT)
+    {
+        return L"PathTracingReSTIRPT.lib.cso";
+    }
+    if (m_mode == PathTracingMode::ReSTIRPTCombined)
+    {
+        return L"PathTracingReSTIRPTCombined.lib.cso";
     }
     return L"PathTracing.lib.cso";
 }

@@ -47,6 +47,11 @@ int main()
     const rb::QualitySettings oldProject = Parse("{}");
     Require(oldProject.secondaryShadingRate == rb::SecondaryShadingRate::Auto,
         "old Interactive project did not retain the auto default");
+    Require(oldProject.resolutionMode == rb::ResolutionMode::Native &&
+        oldProject.fixedRenderScale == 1.0f,
+        "old project did not retain native resolution");
+    Require(oldProject.sharpenStrength == 0.0f,
+        "old project did not retain the noise-safe sharpening default");
 
     const rb::QualitySettings interactive = Parse(
         R"({"qualityProfile":"interactive_game","secondaryShadingRate":"adaptive_half"})");
@@ -74,8 +79,22 @@ int main()
     const std::string serialized = rb::QualitySettingsToJson(interactive);
     const rb::QualitySettings roundTrip = Parse(serialized);
     Require(roundTrip.qualityProfile == interactive.qualityProfile &&
-        roundTrip.secondaryShadingRate == interactive.secondaryShadingRate,
-        "secondary shading rate did not survive JSON round-trip");
+        roundTrip.secondaryShadingRate == interactive.secondaryShadingRate &&
+        roundTrip.resolutionMode == interactive.resolutionMode &&
+        roundTrip.fixedRenderScale == interactive.fixedRenderScale,
+        "quality settings did not survive JSON round-trip");
+
+    const rb::QualitySettings dynamic = Parse(
+        R"({"resolutionMode":"dynamic","fixedRenderScale":0.75,"minRenderScale":0.5,"maxRenderScale":1.0})");
+    Require(dynamic.resolutionMode == rb::ResolutionMode::Dynamic &&
+        dynamic.fixedRenderScale == 0.75f && dynamic.minRenderScale == 0.5f,
+        "dynamic resolution settings were not parsed");
+    Require(rb::QuantizeRenderScale(0.71f) == 0.6875f,
+        "render scale was not quantized to a 1/16 step");
+    const rb::RenderExtent scaledExtent = rb::ResolveRenderExtent(1920u, 1080u, 0.75f);
+    Require(scaledExtent.width == 1440u && scaledExtent.height == 810u &&
+        scaledExtent.scale == 0.75f,
+        "fixed render extent did not preserve output aspect and scale");
 
     bool rejectedInvalid = false;
     try

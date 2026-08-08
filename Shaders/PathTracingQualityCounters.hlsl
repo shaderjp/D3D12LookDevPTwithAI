@@ -376,6 +376,9 @@ void QualityCountersCS(
 
     if (groupIndex == 0u)
     {
+        uint tileCountX = (dimensions.x + 15u) / 16u;
+        uint tileIndex = groupId.y * tileCountX + groupId.x;
+        QualityCounterTileV1 traced = g_qualityCounters[tileIndex];
         QualityCounterTileV1 tile;
         tile.surfaceHistoryTested = s_surfaceHistoryTested[0];
         tile.surfaceHistoryAccepted = s_surfaceHistoryAccepted[0];
@@ -393,7 +396,14 @@ void QualityCountersCS(
         tile.contributionOutputEnergy = s_contributionOutputEnergy[0];
         tile.contributionClampedEnergy = s_contributionClampedEnergy[0];
         tile.nonFinitePixels = s_nonFinitePixels[0];
-        uint tileCountX = (dimensions.x + 15u) / 16u;
-        g_qualityCounters[groupId.y * tileCountX + groupId.x] = tile;
+        tile.primaryRays = traced.primaryRays;
+        tile.secondaryRays = traced.secondaryRays;
+        tile.shadowRays = traced.shadowRays;
+        tile.diVisibilityRays = traced.diVisibilityRays;
+        tile.giVisibilityRays = traced.giVisibilityRays;
+        tile.ptVisibilityRays = traced.ptVisibilityRays;
+        tile.anyHitInvocations = traced.anyHitInvocations;
+        tile.reserved = 0u;
+        g_qualityCounters[tileIndex] = tile;
     }
 }

@@ -109,6 +109,9 @@
     <ClCompile Include="Source\PathTracingScene.cpp">
       <Filter>Source Files\Rendering</Filter>
     </ClCompile>
+    <ClCompile Include="Source\PbrtSceneImporter.cpp">
+      <Filter>Source Files\Rendering</Filter>
+    </ClCompile>
     <ClCompile Include="Source\RtxdiBackend.cpp">
       <Filter>Source Files\Rendering</Filter>
     </ClCompile>
@@ -118,6 +121,40 @@
     <ClCompile Include="Source\TextureLoader.cpp">
       <Filter>Source Files\Rendering</Filter>
     </ClCompile>
+    <ClCompile Include="Source\TinyExrLoader.cpp">
+      <Filter>Source Files\Rendering</Filter>
+    </ClCompile>
+    <ClCompile Include="ThirdParty\tinyexr\deps\zstd\tinyexr_zstd.c"><Filter>Source Files\Rendering</Filter></ClCompile>
+    <ClCompile Include="ThirdParty\tinyexr\src\exr_attr.c"><Filter>Source Files\Rendering</Filter></ClCompile>
+    <ClCompile Include="ThirdParty\tinyexr\src\exr_b44.c"><Filter>Source Files\Rendering</Filter></ClCompile>
+    <ClCompile Include="ThirdParty\tinyexr\src\exr_codec.c"><Filter>Source Files\Rendering</Filter></ClCompile>
+    <ClCompile Include="ThirdParty\tinyexr\src\exr_color.c"><Filter>Source Files\Rendering</Filter></ClCompile>
+    <ClCompile Include="ThirdParty\tinyexr\src\exr_convert.c"><Filter>Source Files\Rendering</Filter></ClCompile>
+    <ClCompile Include="ThirdParty\tinyexr\src\exr_core.c"><Filter>Source Files\Rendering</Filter></ClCompile>
+    <ClCompile Include="ThirdParty\tinyexr\src\exr_cpu.c"><Filter>Source Files\Rendering</Filter></ClCompile>
+    <ClCompile Include="ThirdParty\tinyexr\src\exr_deep.c"><Filter>Source Files\Rendering</Filter></ClCompile>
+    <ClCompile Include="ThirdParty\tinyexr\src\exr_deflate.c"><Filter>Source Files\Rendering</Filter></ClCompile>
+    <ClCompile Include="ThirdParty\tinyexr\src\exr_fpnge.c"><Filter>Source Files\Rendering</Filter></ClCompile>
+    <ClCompile Include="ThirdParty\tinyexr\src\exr_half.c"><Filter>Source Files\Rendering</Filter></ClCompile>
+    <ClCompile Include="ThirdParty\tinyexr\src\exr_jph.c"><Filter>Source Files\Rendering</Filter></ClCompile>
+    <ClCompile Include="ThirdParty\tinyexr\src\exr_jph_simd.c"><Filter>Source Files\Rendering</Filter></ClCompile>
+    <ClCompile Include="ThirdParty\tinyexr\src\exr_jph_simd_neon.c"><Filter>Source Files\Rendering</Filter></ClCompile>
+    <ClCompile Include="ThirdParty\tinyexr\src\exr_libdeflate.c"><Filter>Source Files\Rendering</Filter></ClCompile>
+    <ClCompile Include="ThirdParty\tinyexr\src\exr_mip.c"><Filter>Source Files\Rendering</Filter></ClCompile>
+    <ClCompile Include="ThirdParty\tinyexr\src\exr_piz.c"><Filter>Source Files\Rendering</Filter></ClCompile>
+    <ClCompile Include="ThirdParty\tinyexr\src\exr_pxr24.c"><Filter>Source Files\Rendering</Filter></ClCompile>
+    <ClCompile Include="ThirdParty\tinyexr\src\exr_reader.c"><Filter>Source Files\Rendering</Filter></ClCompile>
+    <ClCompile Include="ThirdParty\tinyexr\src\exr_resize.c"><Filter>Source Files\Rendering</Filter></ClCompile>
+    <ClCompile Include="ThirdParty\tinyexr\src\exr_rle.c"><Filter>Source Files\Rendering</Filter></ClCompile>
+    <ClCompile Include="ThirdParty\tinyexr\src\exr_simd_neon.c"><Filter>Source Files\Rendering</Filter></ClCompile>
+    <ClCompile Include="ThirdParty\tinyexr\src\exr_simd_x86.c"><Filter>Source Files\Rendering</Filter></ClCompile>
+    <ClCompile Include="ThirdParty\tinyexr\src\exr_thread.c"><Filter>Source Files\Rendering</Filter></ClCompile>
+    <ClCompile Include="ThirdParty\tinyexr\src\exr_tonemap.c"><Filter>Source Files\Rendering</Filter></ClCompile>
+    <ClCompile Include="ThirdParty\tinyexr\src\exr_util_simd_neon.c"><Filter>Source Files\Rendering</Filter></ClCompile>
+    <ClCompile Include="ThirdParty\tinyexr\src\exr_util_simd_x86.c"><Filter>Source Files\Rendering</Filter></ClCompile>
+    <ClCompile Include="ThirdParty\tinyexr\src\exr_writer.c"><Filter>Source Files\Rendering</Filter></ClCompile>
+    <ClCompile Include="ThirdParty\tinyexr\src\exr_zip.c"><Filter>Source Files\Rendering</Filter></ClCompile>
+    <ClCompile Include="ThirdParty\tinyexr\src\exr_zstd.c"><Filter>Source Files\Rendering</Filter></ClCompile>
     <ClCompile Include="Source\McpDispatcher.cpp">
       <Filter>Source Files\Services</Filter>
     </ClCompile>
@@ -192,6 +229,9 @@
     <ClInclude Include="Source\PathTracingScene.h">
       <Filter>Header Files\Rendering</Filter>
     </ClInclude>
+    <ClInclude Include="Source\PbrtSceneImporter.h">
+      <Filter>Header Files\Rendering</Filter>
+    </ClInclude>
     <ClInclude Include="Source\QualitySettings.h">
       <Filter>Header Files\Rendering</Filter>
     </ClInclude>
@@ -208,6 +248,12 @@
       <Filter>Header Files\Rendering</Filter>
     </ClInclude>
     <ClInclude Include="Source\TextureLoader.h">
+      <Filter>Header Files\Rendering</Filter>
+    </ClInclude>
+    <ClInclude Include="Source\TinyExrLoader.h">
+      <Filter>Header Files\Rendering</Filter>
+    </ClInclude>
+    <ClInclude Include="Source\TransientResourceAllocator.h">
       <Filter>Header Files\Rendering</Filter>
     </ClInclude>
     <ClInclude Include="Source\McpDispatcher.h">
@@ -292,16 +338,37 @@
     <None Include="Shaders\PathTracingReSTIRCombined.hlsl">
       <Filter>Shaders\ReSTIR</Filter>
     </None>
+    <None Include="Shaders\PathTracingReSTIRPT.hlsl">
+      <Filter>Shaders\ReSTIR</Filter>
+    </None>
+    <None Include="Shaders\PathTracingReSTIRPTCombined.hlsl">
+      <Filter>Shaders\ReSTIR</Filter>
+    </None>
     <None Include="Shaders\ReSTIRResolve.hlsl">
       <Filter>Shaders\ReSTIR</Filter>
     </None>
     <None Include="Shaders\PathTracingDenoise.hlsl">
       <Filter>Shaders\Denoising</Filter>
     </None>
+    <None Include="Shaders\PathTracingDlss.hlsl">
+      <Filter>Shaders\Denoising</Filter>
+    </None>
     <None Include="Shaders\PathTracingNrd.hlsl">
       <Filter>Shaders\Denoising</Filter>
     </None>
+    <None Include="Shaders\PathTracingSecondaryWork.hlsl">
+      <Filter>Shaders\Path Tracing</Filter>
+    </None>
     <None Include="BuildThirdParty.ps1">
+      <Filter>Build Scripts</Filter>
+    </None>
+    <None Include="CMake\RtxdiRuntime\CMakeLists.txt">
+      <Filter>Build Scripts</Filter>
+    </None>
+    <None Include="config\LocalMCPChatClient.mcp.json">
+      <Filter>Build Scripts</Filter>
+    </None>
+    <None Include="Scripts\TestLocalMcpChatClientIntegration.ps1">
       <Filter>Build Scripts</Filter>
     </None>
     <None Include="Scripts\TestMcpServerHttp.ps1">

@@ -177,6 +177,7 @@ if (Test-Path -LiteralPath $sdk26100 -PathType Container) {
 $submoduleFix = "Run: git submodule update --init --recursive --depth 1"
 Test-File -RelativePath "ThirdParty/assimp/include/assimp/Importer.hpp" -Check "Submodule assimp" -Fix $submoduleFix
 Test-File -RelativePath "ThirdParty/DirectXTex/DirectXTex/DirectXTex.h" -Check "Submodule DirectXTex" -Fix $submoduleFix
+Test-File -RelativePath "ThirdParty/tinyexr/include/exr.h" -Check "Submodule TinyEXR v3" -Fix $submoduleFix
 Test-File -RelativePath "ThirdParty/Streamline/include/sl.h" -Check "Optional DLSS Streamline submodule" -Fix $submoduleFix -WarnOnly:(!$CheckDLSS)
 Test-File -RelativePath "ThirdParty/DLSS/include/nvsdk_ngx.h" -Check "Optional DLSS SDK submodule" -Fix $submoduleFix -WarnOnly:(!$CheckDLSS)
 Test-File -RelativePath "ThirdParty/DLSS/lib/Windows_x86_64/rel/nvngx_dlss.dll" -Check "Optional DLSS SR runtime" -Fix "Initialize ThirdParty/DLSS or build with /p:EnableDLSS=false." -WarnOnly:(!$CheckDLSS)
@@ -188,6 +189,17 @@ Test-AnyFile -RelativePaths @(
 ) -Check "Optional NRD static library" -Fix "Build once with EnableNRD=true, or build with /p:EnableNRD=false to skip NRD." -WarnOnly:(!$CheckNRD)
 Test-File -RelativePath "ThirdParty/RTXDI/Libraries/Rtxdi/Include/Rtxdi/RtxdiParameters.h" -Check "Optional RTXDI v3 runtime headers" -Fix $submoduleFix -WarnOnly:(!$CheckRTXDI)
 Test-File -RelativePath "ThirdParty/RTXDI/Libraries/Rtxdi/Source/ReSTIRDI.cpp" -Check "Optional RTXDI v3 runtime sources" -Fix $submoduleFix -WarnOnly:(!$CheckRTXDI)
+
+$tinyExrRoot = Join-Path $Root "ThirdParty\tinyexr"
+$expectedTinyExrCommit = "1b106618644dbf8a0935c2348ba51a2d863dd7c2"
+if ($git -and (Test-Path -LiteralPath $tinyExrRoot -PathType Container)) {
+    $actualTinyExrCommit = [string](& $git.Source -C $tinyExrRoot rev-parse HEAD 2>$null | Select-Object -First 1)
+    if ($actualTinyExrCommit.Trim() -ieq $expectedTinyExrCommit) {
+        Add-Result -Status "OK" -Check "TinyEXR pinned revision" -Message "TinyEXR commit $expectedTinyExrCommit is checked out."
+    } else {
+        Add-Result -Status "FAIL" -Check "TinyEXR pinned revision" -Message "TinyEXR is not at the required commit." -Fix "Run: git submodule update --init --recursive ThirdParty/tinyexr"
+    }
+}
 
 $rtxdiRoot = Join-Path $Root "ThirdParty\RTXDI"
 $expectedRtxdiCommit = "274141af082050c9d0ad6e01a2e591d0d66b7955"

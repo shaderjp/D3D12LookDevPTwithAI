@@ -9,7 +9,7 @@ namespace Bistro
     class FpsCamera
     {
     public:
-        void Reset(const DirectX::XMFLOAT3& position, float yawRadians, float pitchRadians);
+        void Reset(const DirectX::XMFLOAT3& position, float yawRadians, float pitchRadians, float rollRadians = 0.0f);
         void SetActive(bool active);
         void SetKeyDown(UINT virtualKey, bool down);
         void OnPointerButton(bool rightButtonDown, float x, float y);
@@ -31,6 +31,7 @@ namespace Bistro
         bool GetGamepadInvertY() const;
         float GetYawRadians() const;
         float GetPitchRadians() const;
+        float GetRollRadians() const;
 
         DirectX::XMMATRIX GetViewMatrix() const;
         DirectX::XMFLOAT3 GetPosition() const;
@@ -39,6 +40,7 @@ namespace Bistro
         DirectX::XMFLOAT3 m_position = DirectX::XMFLOAT3(-16.32f, 4.66f, -10.41f);
         float m_yaw = DirectX::XMConvertToRadians(18.1f);
         float m_pitch = DirectX::XMConvertToRadians(2.8f);
+        float m_roll = 0.0f;
         float m_baseMoveSpeed = 17.0f;
         float m_fastMoveSpeed = 58.2f;
         float m_gamepadLookSpeed = 2.5f;

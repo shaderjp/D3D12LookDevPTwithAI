@@ -167,6 +167,7 @@
     <ClCompile Include="Source\DXSample.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="Source\FpsCamera.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="Source\McpDispatcher.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="Source\McpReviewAnalysis.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="Source\McpServer.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="Source\NrdBackend.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="Source\PathTracingScene.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
@@ -225,6 +226,9 @@
     <ClCompile Include="Tests\McpServerHttpTests.cpp">
       <ExcludedFromBuild>true</ExcludedFromBuild>
     </ClCompile>
+    <ClCompile Include="Tests\McpReviewAnalysisTests.cpp">
+      <ExcludedFromBuild>true</ExcludedFromBuild>
+    </ClCompile>
     <ClCompile Include="$(GeneratedFilesDir)module.g.cpp" />
   </ItemGroup>
   <ItemGroup>
@@ -237,6 +241,7 @@
     <ClInclude Include="Source\EditorTypes.h" />
     <ClInclude Include="Source\FpsCamera.h" />
     <ClInclude Include="Source\McpDispatcher.h" />
+    <ClInclude Include="Source\McpReviewAnalysis.h" />
     <ClInclude Include="Source\McpServer.h" />
     <ClInclude Include="Source\NrdBackend.h" />
     <ClInclude Include="Source\PathTracingScene.h" />
@@ -272,7 +277,9 @@
     <None Include="config\LocalMCPChatClient.mcp.json" />
     <None Include="Scripts\TestLocalMcpChatClientIntegration.ps1" />
     <None Include="Scripts\TestMcpServerHttp.ps1" />
+    <None Include="Scripts\TestMcpReviewAnalysis.ps1" />
     <None Include="Shaders\PathTracingABI.hlsli" />
+    <None Include="Shaders\PathTracingDebugViews.hlsli" />
     <None Include="Shaders\PathTracingSampling.hlsli" />
     <None Include="Shaders\PathTracingSceneConstants.hlsli" />
     <None Include="Shaders\PathTracing.hlsl" />
@@ -338,7 +345,7 @@
   <Target Name="WriteShaderBuildConfiguration" BeforeTargets="CompileShaders">
     <WriteLinesToFile File="$(IntDir)ShaderBuildConfiguration.txt" Lines="NRD=$(D3D12LookDevPtWithNrd);RTXDI=$(D3D12LookDevPtWithRtxdi)" Overwrite="true" WriteOnlyWhenDifferent="true" />
   </Target>
-  <Target Name="CompileShaders" BeforeTargets="ClCompile" Inputs="$(IntDir)ShaderBuildConfiguration.txt;Shaders\PathTracingSceneConstants.hlsli;Shaders\PathTracingSampling.hlsli;Shaders\PathTracingQualityCounters.hlsli;Shaders\PathTracingABI.hlsli;Shaders\PathTracing.hlsl;Shaders\PathTracingReSTIR.hlsl;Shaders\PathTracingReSTIRDI.hlsl;Shaders\PathTracingReSTIRCombined.hlsl;Shaders\PathTracingReSTIRPT.hlsl;Shaders\PathTracingReSTIRPTCombined.hlsl;Shaders\ReSTIRResolve.hlsl;Shaders\PathTracingDenoise.hlsl;Shaders\PathTracingDlss.hlsl;Shaders\PathTracingNrd.hlsl;Shaders\PathTracingTaa.hlsl;Shaders\PathTracingQualityCounters.hlsl;Shaders\PathTracingSecondaryWork.hlsl" Outputs="$(CompiledShaderDir)PathTracing.lib.cso;$(CompiledShaderDir)PathTracingReSTIR.lib.cso;$(CompiledShaderDir)PathTracingReSTIRDI.lib.cso;$(CompiledShaderDir)PathTracingReSTIRCombined.lib.cso;$(CompiledShaderDir)PathTracingReSTIRPT.lib.cso;$(CompiledShaderDir)PathTracingReSTIRPTCombined.lib.cso;$(CompiledShaderDir)RtxdiDiCandidate.cso;$(CompiledShaderDir)RtxdiDiTemporal.cso;$(CompiledShaderDir)RtxdiDiSpatial.cso;$(CompiledShaderDir)RtxdiDiShade.cso;$(CompiledShaderDir)RtxdiGiInitial.cso;$(CompiledShaderDir)RtxdiGiFused.cso;$(CompiledShaderDir)RtxdiPtInitial.cso;$(CompiledShaderDir)RtxdiPtFused.cso;$(CompiledShaderDir)PathTracingDenoiseTemporal.cso;$(CompiledShaderDir)PathTracingDenoiseAtrous0.cso;$(CompiledShaderDir)PathTracingDenoiseAtrous1.cso;$(CompiledShaderDir)PathTracingDenoiseAtrous2.cso;$(CompiledShaderDir)PathTracingDenoiseAtrous3.cso;$(CompiledShaderDir)PathTracingDenoiseAtrous4.cso;$(CompiledShaderDir)PathTracingDenoiseComposite.cso;$(CompiledShaderDir)PathTracingDlssPrepare.cso;$(CompiledShaderDir)PathTracingNrdPrepare.cso;$(CompiledShaderDir)PathTracingNrdComposite.cso;$(CompiledShaderDir)PathTracingFinalTaa.cso;$(CompiledShaderDir)PathTracingQualityCounters.cso;$(CompiledShaderDir)SecondaryTaskCount.cso;$(CompiledShaderDir)SecondaryGroupScan.cso;$(CompiledShaderDir)SecondaryTaskScatter.cso;$(CompiledShaderDir)SecondaryResolve.cso">
+  <Target Name="CompileShaders" BeforeTargets="ClCompile" Inputs="$(IntDir)ShaderBuildConfiguration.txt;Shaders\PathTracingSceneConstants.hlsli;Shaders\PathTracingSampling.hlsli;Shaders\PathTracingQualityCounters.hlsli;Shaders\PathTracingDebugViews.hlsli;Shaders\PathTracingABI.hlsli;Shaders\PathTracing.hlsl;Shaders\PathTracingReSTIR.hlsl;Shaders\PathTracingReSTIRDI.hlsl;Shaders\PathTracingReSTIRCombined.hlsl;Shaders\PathTracingReSTIRPT.hlsl;Shaders\PathTracingReSTIRPTCombined.hlsl;Shaders\ReSTIRResolve.hlsl;Shaders\PathTracingDenoise.hlsl;Shaders\PathTracingDlss.hlsl;Shaders\PathTracingNrd.hlsl;Shaders\PathTracingTaa.hlsl;Shaders\PathTracingQualityCounters.hlsl;Shaders\PathTracingSecondaryWork.hlsl" Outputs="$(CompiledShaderDir)PathTracing.lib.cso;$(CompiledShaderDir)PathTracingReSTIR.lib.cso;$(CompiledShaderDir)PathTracingReSTIRDI.lib.cso;$(CompiledShaderDir)PathTracingReSTIRCombined.lib.cso;$(CompiledShaderDir)PathTracingReSTIRPT.lib.cso;$(CompiledShaderDir)PathTracingReSTIRPTCombined.lib.cso;$(CompiledShaderDir)RtxdiDiCandidate.cso;$(CompiledShaderDir)RtxdiDiTemporal.cso;$(CompiledShaderDir)RtxdiDiSpatial.cso;$(CompiledShaderDir)RtxdiDiShade.cso;$(CompiledShaderDir)RtxdiGiInitial.cso;$(CompiledShaderDir)RtxdiGiFused.cso;$(CompiledShaderDir)RtxdiPtInitial.cso;$(CompiledShaderDir)RtxdiPtFused.cso;$(CompiledShaderDir)PathTracingDenoiseTemporal.cso;$(CompiledShaderDir)PathTracingDenoiseAtrous0.cso;$(CompiledShaderDir)PathTracingDenoiseAtrous1.cso;$(CompiledShaderDir)PathTracingDenoiseAtrous2.cso;$(CompiledShaderDir)PathTracingDenoiseAtrous3.cso;$(CompiledShaderDir)PathTracingDenoiseAtrous4.cso;$(CompiledShaderDir)PathTracingDenoiseComposite.cso;$(CompiledShaderDir)PathTracingDlssPrepare.cso;$(CompiledShaderDir)PathTracingNrdPrepare.cso;$(CompiledShaderDir)PathTracingNrdComposite.cso;$(CompiledShaderDir)PathTracingFinalTaa.cso;$(CompiledShaderDir)PathTracingQualityCounters.cso;$(CompiledShaderDir)SecondaryTaskCount.cso;$(CompiledShaderDir)SecondaryGroupScan.cso;$(CompiledShaderDir)SecondaryTaskScatter.cso;$(CompiledShaderDir)SecondaryResolve.cso">
     <MakeDir Directories="$(CompiledShaderDir)" />
     <Error Condition="!Exists('$(DxcExe)')" Text="DXC was not found at $(DxcExe). Restore NuGet packages first." />
     <PropertyGroup>

@@ -307,8 +307,11 @@ int main()
     HttpResponse toolsResponse = Exchange(port, ChunkedRequest(
         token, toolsList, { 3, 11, 2 }, sessionHeaders, {}, { "X-Test-Trailer: accepted" }));
     Require(toolsResponse.status == 200, "chunked tools/list did not return 200");
-    Require(CountOccurrences(toolsResponse.body, "\"name\":\"lookdevpt.") == 36,
-        "tools/list did not return all 36 tools");
+    Require(CountOccurrences(toolsResponse.body, "\"name\":\"lookdevpt.") == 42,
+        "tools/list did not return all 42 tools");
+    Require(toolsResponse.body.find("lookdevpt.audit_scene") != std::string::npos &&
+        toolsResponse.body.find("lookdevpt.start_review") != std::string::npos,
+        "tools/list omitted automatic review tools");
 
     const std::string toolCall =
         R"json({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"lookdevpt.get_stats","arguments":{}}})json";

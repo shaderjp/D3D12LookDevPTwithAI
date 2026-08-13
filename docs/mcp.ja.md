@@ -228,6 +228,10 @@ Read tools:
 - `lookdevpt.list_render_modes`: render mode の label と action value を返します。
 - `lookdevpt.get_diagnostics`: scene / project / capture / MCP diagnostics を返します。
 - `lookdevpt.capture_viewport`: 現在の final/debug viewport を PNG として取得し、inline `image/png` と `lookdevpt://captures/latest.png` を返します。
+- `lookdevpt.audit_scene`: scene 構造、geometry、material、texture、lighting、RTXDI / NRD / DLSS fallback を、安定した問題 code を持つ cache 済み診断として返します。
+- `lookdevpt.probe_surfaces`: normalized 座標または output pixel 座標を最大 16 点指定し、通常の render target や temporal history に書き込まず正確な surface probe を実行します。
+- `lookdevpt.compare_captures`: 同一解像度の 2 capture を linear-sRGB RMSE / PSNR、luminance SSIM、最大差分、変更 pixel 率、fingerprint、heatmap で比較します。
+- `lookdevpt.start_review`、`lookdevpt.get_review`、`lookdevpt.cancel_review`: 非同期の `quick`、`material`、`lighting`、`temporal` review を 1 件ずつ実行・制御します。review は `read_only` mode でも利用でき、camera、debug view、accumulation、temporal history、project dirty state を変更しません。
 
 Validation / capture workflow tools:
 
@@ -280,16 +284,25 @@ tool result は主に `structuredContent` を使います。互換用に text su
 - `lookdevpt://render-modes`: render mode と `set_path_tracing.mode` の value。
 - `lookdevpt://project`: 現在の project path と dirty flag。
 - `lookdevpt://scene/summary`: scene counts、bounds、lights、asset paths。
+- `lookdevpt://scene/audit`: cache 済みの scene / renderer fallback 監査。
 - `lookdevpt://actions/schema`: action 名と JSON input schema。
 - `lookdevpt://captures/index`: memory 上の capture history。
 - `lookdevpt://captures/latest.png`: 最新の PNG capture。
 - `lookdevpt://captures/{id}.png`: `capture_viewport` または `capture_debug_pack` の PNG。
+- `lookdevpt://reviews/index`: review history と active review id。
+- `lookdevpt://reviews/{id}`: review state、progress、audit、capture、optional comparison。
+- `lookdevpt://comparisons/{id}`: comparison metric と scene / camera fingerprint の一致状態。
+- `lookdevpt://comparisons/{id}/heatmap.png`: PNG difference heatmap。
+- `lookdevpt://probes/latest`: 最新の surface probe 結果。
 
 Resource templates:
 
 - `lookdevpt://captures/{id}.png`
 - `lookdevpt://materials/{index}`
 - `lookdevpt://materials/{index}/textures`
+- `lookdevpt://reviews/{id}`
+- `lookdevpt://comparisons/{id}`
+- `lookdevpt://comparisons/{id}/heatmap.png`
 
 Prompts:
 
@@ -297,6 +310,10 @@ Prompts:
 - `lookdevpt.tune_denoise`: validation を通して安定した denoise 設定を提案・適用します。
 - `lookdevpt.setup_camera_shot`: scene bounds と state を使って camera shot を作ります。
 - `lookdevpt.capture_debug_review`: debug pack を capture し、見える問題を要約します。
+- `lookdevpt.review_scene`: 非破壊の audit / review / probe workflow を実行します。
+- `lookdevpt.review_change`: baseline capture と比較し、fingerprint 不一致を画像差分とは分けて説明します。
+
+review capture は asynchronous GPU fence を使い、1 frame につき 1 capture を投入します。PNG 変換は worker 上で実行します。capture / heatmap artifact は memory 内に限定し、最大 24 images または 128 MiB の LRU とし、実行中 review の artifact は pin されます。
 
 ## State、Stats、Benchmark metric
 

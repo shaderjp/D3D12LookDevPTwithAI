@@ -73,6 +73,7 @@ namespace
     const wchar_t* RayGenShaderName = L"RayGen";
     const wchar_t* PrimaryRayGenShaderName = L"PrimaryRayGen";
     const wchar_t* SecondaryRayGenShaderName = L"SecondaryRayGen";
+    const wchar_t* ReviewProbeRayGenShaderName = L"ReviewProbeRayGen";
     const wchar_t* MissShaderName = L"Miss";
     const wchar_t* ShadowMissShaderName = L"ShadowMiss";
     const wchar_t* ClosestHitShaderName = L"ClosestHit";
@@ -855,6 +856,92 @@ namespace
         return output;
     }
 
+    bool Base64Decode(const std::string& input, std::vector<uint8_t>& output)
+    {
+        static constexpr int8_t Invalid = -1;
+        std::array<int8_t, 256> table{};
+        table.fill(Invalid);
+        const char* alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        for (int i = 0; i < 64; ++i)
+        {
+            table[static_cast<uint8_t>(alphabet[i])] = static_cast<int8_t>(i);
+        }
+        output.clear();
+        output.reserve(input.size() * 3u / 4u);
+        uint32_t accumulator = 0;
+        int bits = 0;
+        for (const unsigned char character : input)
+        {
+            if (character == '=') break;
+            const int8_t value = table[character];
+            if (value == Invalid) return false;
+            accumulator = (accumulator << 6u) | static_cast<uint32_t>(value);
+            bits += 6;
+            if (bits >= 8)
+            {
+                bits -= 8;
+                output.push_back(static_cast<uint8_t>((accumulator >> bits) & 0xffu));
+            }
+        }
+        return true;
+    }
+
+    bool DecodePngRgba8(const std::string& base64Png, lookdevpt::review::Rgba8Image& output)
+    {
+        std::vector<uint8_t> bytes;
+        if (!Base64Decode(base64Png, bytes) || bytes.empty()) return false;
+        DirectX::ScratchImage source;
+        DirectX::TexMetadata metadata{};
+        if (FAILED(DirectX::LoadFromWICMemory(bytes.data(), bytes.size(), DirectX::WIC_FLAGS_NONE, &metadata, source)))
+        {
+            return false;
+        }
+        DirectX::ScratchImage converted;
+        const DirectX::Image* image = source.GetImage(0, 0, 0);
+        if (!image) return false;
+        if (image->format != DXGI_FORMAT_R8G8B8A8_UNORM)
+        {
+            if (FAILED(DirectX::Convert(*image, DXGI_FORMAT_R8G8B8A8_UNORM, DirectX::TEX_FILTER_DEFAULT, 0.0f, converted)))
+            {
+                return false;
+            }
+            image = converted.GetImage(0, 0, 0);
+        }
+        if (!image || image->width > UINT32_MAX || image->height > UINT32_MAX) return false;
+        output.width = static_cast<uint32_t>(image->width);
+        output.height = static_cast<uint32_t>(image->height);
+        output.pixels.resize(image->width * image->height * 4u);
+        for (size_t row = 0; row < image->height; ++row)
+        {
+            memcpy(output.pixels.data() + row * image->width * 4u,
+                image->pixels + row * image->rowPitch, image->width * 4u);
+        }
+        return true;
+    }
+
+    bool EncodePngRgba8(const lookdevpt::review::Rgba8Image& image, std::string& base64Png)
+    {
+        if (image.width == 0 || image.height == 0 ||
+            image.pixels.size() != static_cast<size_t>(image.width) * image.height * 4u)
+        {
+            return false;
+        }
+        DirectX::Image source{};
+        source.width = image.width;
+        source.height = image.height;
+        source.format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        source.rowPitch = static_cast<size_t>(image.width) * 4u;
+        source.slicePitch = image.pixels.size();
+        source.pixels = const_cast<uint8_t*>(image.pixels.data());
+        DirectX::Blob blob;
+        if (FAILED(DirectX::SaveToWICMemory(source, DirectX::WIC_FLAGS_NONE, GUID_ContainerFormatPng, blob)))
+        {
+            return false;
+        }
+        base64Png = Base64Encode(blob.GetConstBufferPointer(), blob.GetBufferSize());
+        return true;
+    }
+
     std::wstring UserSettingsDirectory()
     {
         std::array<wchar_t, 32768> appData = {};
@@ -1328,6 +1415,17 @@ void D3D12PathTracingBackend::LoadPipeline()
         IID_PPV_ARGS(&m_commandList)));
     ThrowIfFailed(m_commandList->Close());
 
+    ThrowIfFailed(m_device->CreateCommandAllocator(
+        D3D12_COMMAND_LIST_TYPE_DIRECT,
+        IID_PPV_ARGS(&m_mcpReviewCommandAllocator)));
+    ThrowIfFailed(m_device->CreateCommandList(
+        0,
+        D3D12_COMMAND_LIST_TYPE_DIRECT,
+        m_mcpReviewCommandAllocator.Get(),
+        nullptr,
+        IID_PPV_ARGS(&m_mcpReviewCommandList)));
+    ThrowIfFailed(m_mcpReviewCommandList->Close());
+
     ThrowIfFailed(m_device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&m_fence)));
     m_fenceValue = 1;
     m_fenceEvent = CreateEvent(nullptr, FALSE, FALSE, nullptr);
@@ -1540,6 +1638,8 @@ void D3D12PathTracingBackend::LoadAssets()
 {
     LogDiagnostic("LoadAssets: creating preview scene.");
     m_scene = MakePreviewScene();
+    m_mcpSceneAuditSummary = lookdevpt::review::AnalyzeScene(m_scene);
+    m_mcpSceneAuditFresh = true;
     if (m_scene.draws.empty())
     {
         throw std::runtime_error("Preview scene did not produce Path Tracing geometries.");
@@ -1870,6 +1970,7 @@ bool D3D12PathTracingBackend::CommitImportedScene(
     const auto previousSourceMaterials = m_sourceMaterials;
     const auto previousTextureOverrides = m_textureOverrideEnabled;
     const auto previousMaterialUsage = m_materialUsage;
+    const auto previousSceneAuditSummary = m_mcpSceneAuditSummary;
 
     try
     {
@@ -1878,6 +1979,8 @@ bool D3D12PathTracingBackend::CommitImportedScene(
         LogDiagnostic("LoadScenePath: converting scene.");
         m_scene = ConvertImportedScene(imported.scene);
         InvalidateHistory(rb::FrameChangeMask::Geometry);
+        m_mcpSceneAuditSummary = lookdevpt::review::AnalyzeScene(m_scene);
+        m_mcpSceneAuditFresh = true;
         m_scenePath = path;
         m_sceneDiagnostics = imported.diagnostics;
         InitializeMaterialLookDevState(true);
@@ -1994,6 +2097,8 @@ bool D3D12PathTracingBackend::CommitImportedScene(
         m_sourceMaterials = previousSourceMaterials;
         m_textureOverrideEnabled = previousTextureOverrides;
         m_materialUsage = previousMaterialUsage;
+        m_mcpSceneAuditSummary = previousSceneAuditSummary;
+        m_mcpSceneAuditFresh = true;
         try
         {
             CreateGpuResourcesForCurrentScene();
@@ -4040,6 +4145,10 @@ mcp::ToolResult D3D12PathTracingBackend::CallMcpTool(const std::string& name, co
         std::lock_guard<std::mutex> lock(m_mcpSnapshotMutex);
         return MakeMcpJsonToolResult(true, "Diagnostics returned.", m_mcpDiagnosticsJson);
     }
+    if (auto reviewTool = CallMcpReviewTool(name, arguments, timeoutMs))
+    {
+        return *reviewTool;
+    }
     if (name == "lookdevpt.capture_viewport")
     {
         return SubmitMcpCommandTool(name, "__capture_viewport", arguments, false, timeoutMs);
@@ -4119,6 +4228,145 @@ mcp::ToolResult D3D12PathTracingBackend::CallMcpTool(const std::string& name, co
     }
 
     return MakeMcpJsonToolResult(false, "Unknown MCP tool.", "{\"ok\":false,\"diagnostics\":\"Unknown MCP tool.\"}");
+}
+
+std::optional<mcp::ToolResult> D3D12PathTracingBackend::CallMcpReviewTool(
+    const std::string& name,
+    const cld::JsonValue& arguments,
+    int timeoutMs)
+{
+    if (name == "lookdevpt.audit_scene")
+    {
+        std::lock_guard<std::mutex> lock(m_mcpSnapshotMutex);
+        return MakeMcpJsonToolResult(true, "Scene audit returned.", m_mcpAuditJson);
+    }
+    if (name == "lookdevpt.probe_surfaces")
+    {
+        return SubmitMcpCommandTool(name, "__probe_surfaces", arguments, false, timeoutMs);
+    }
+    if (name == "lookdevpt.compare_captures")
+    {
+        auto parseId = [&](const char* member) -> uint64_t
+        {
+            const cld::JsonValue* value = cld::FindMember(arguments, member);
+            if (!value) return 0;
+            if (value->type == cld::JsonValue::Type::Number && value->number > 0.0)
+                return static_cast<uint64_t>(value->number);
+            if (value->type != cld::JsonValue::Type::String) return 0;
+            char* end = nullptr;
+            const uint64_t parsed = std::strtoull(value->string.c_str(), &end, 10);
+            return end && *end == '\0' ? parsed : 0;
+        };
+        const uint64_t beforeId = parseId("beforeCaptureId");
+        const uint64_t afterId = parseId("afterCaptureId");
+        std::string comparisonJson;
+        std::string comparisonUri;
+        {
+            std::lock_guard<std::mutex> lock(m_mcpSnapshotMutex);
+            auto findCapture = [&](uint64_t id) -> const McpCapture*
+            {
+                for (const auto& capture : m_mcpCaptures) if (capture.id == id) return &capture;
+                return nullptr;
+            };
+            const McpCapture* before = findCapture(beforeId);
+            const McpCapture* after = findCapture(afterId);
+            if (!before || !after)
+                return MakeMcpJsonToolResult(false, "Capture id was not found.",
+                    "{\"ok\":false,\"code\":\"capture_not_found\",\"diagnostics\":\"Capture id was not found.\"}");
+            lookdevpt::review::ComparisonMetrics metrics;
+            lookdevpt::review::Rgba8Image heatmap;
+            std::string diagnostics;
+            if (!lookdevpt::review::CompareImages(before->rgba, after->rgba, metrics, heatmap, diagnostics))
+            {
+                const std::string code = diagnostics == "resolution_mismatch" ? diagnostics : "comparison_failed";
+                return MakeMcpJsonToolResult(false, diagnostics,
+                    "{\"ok\":false,\"code\":\"" + code + "\",\"diagnostics\":\"" + cld::EscapeJson(diagnostics) + "\"}");
+            }
+            McpComparison comparison;
+            comparison.id = m_nextMcpComparisonId++;
+            comparison.beforeCaptureId = beforeId;
+            comparison.afterCaptureId = afterId;
+            const std::string id = std::to_string(comparison.id);
+            comparison.json = lookdevpt::review::BuildComparisonJson(id, std::to_string(beforeId),
+                std::to_string(afterId), metrics, before->sceneFingerprint == after->sceneFingerprint,
+                before->cameraFingerprint == after->cameraFingerprint);
+            EncodePngRgba8(heatmap, comparison.heatmapBase64);
+            comparison.artifactBytes = comparison.heatmapBase64.size() * 3u / 4u;
+            comparison.accessSerial = m_mcpArtifactAccessSerial++;
+            comparisonJson = comparison.json;
+            comparisonUri = "lookdevpt://comparisons/" + id;
+            m_mcpComparisons.push_back(std::move(comparison));
+            EnforceMcpArtifactBudget();
+        }
+        m_mcpServer.PublishResourceUpdates({ comparisonUri, comparisonUri + "/heatmap.png" });
+        return MakeMcpJsonToolResult(true, "Captures compared.", comparisonJson);
+    }
+    if (name == "lookdevpt.start_review")
+    {
+        const std::string preset = cld::JsonStringOr(arguments, "preset", "quick");
+        std::vector<int> views;
+        if (preset == "quick") views = { 0, 1, 2, 4, 32, 33, 40 };
+        else if (preset == "material") views = { 0, 1, 2, 3, 4, 5, 6, 7 };
+        else if (preset == "lighting") views = { 0, 32, 33, 12, 8, 9, 34, 23 };
+        else if (preset == "temporal") views = { 0, 19, 20, 21, 35, 36, 46, 40 };
+        else return MakeMcpJsonToolResult(false, "Unknown review preset.",
+            "{\"ok\":false,\"code\":\"invalid_preset\",\"diagnostics\":\"Unknown review preset.\"}");
+        const uint64_t settleFrames = static_cast<uint64_t>(std::clamp(
+            static_cast<int>(cld::JsonNumberOr(arguments, "settleFrames", 8.0)), 0, 600));
+        const int timeoutSeconds = std::clamp(
+            static_cast<int>(cld::JsonNumberOr(arguments, "timeoutSeconds", 120.0)), 1, 600);
+        uint64_t baseline = 0;
+        if (const cld::JsonValue* value = cld::FindMember(arguments, "baselineCaptureId"))
+        {
+            if (value->type == cld::JsonValue::Type::String) baseline = std::strtoull(value->string.c_str(), nullptr, 10);
+            else if (value->type == cld::JsonValue::Type::Number) baseline = static_cast<uint64_t>(value->number);
+        }
+        uint64_t id = 0;
+        {
+            std::lock_guard<std::mutex> lock(m_mcpSnapshotMutex);
+            if (m_activeMcpReviewId != 0)
+                return MakeMcpJsonToolResult(false, "A review is already running.",
+                    "{\"ok\":false,\"code\":\"review_busy\",\"currentReviewId\":\"" +
+                    std::to_string(m_activeMcpReviewId) + "\"}");
+            auto baselineIterator = std::find_if(m_mcpCaptures.begin(), m_mcpCaptures.end(),
+                [&](const McpCapture& capture) { return capture.id == baseline; });
+            if (baseline != 0 && baselineIterator == m_mcpCaptures.end())
+                return MakeMcpJsonToolResult(false, "Baseline capture was not found.",
+                    "{\"ok\":false,\"code\":\"capture_not_found\",\"diagnostics\":\"Baseline capture was not found.\"}");
+            McpReview review;
+            review.id = m_nextMcpReviewId++;
+            review.preset = preset;
+            review.views = std::move(views);
+            review.baselineCaptureId = baseline;
+            review.settleUntilFrame = settleFrames;
+            review.deadline = std::chrono::steady_clock::now() + std::chrono::seconds(timeoutSeconds);
+            review.auditJson = m_mcpAuditJson;
+            if (baseline != 0) ++baselineIterator->pinCount;
+            id = review.id;
+            m_activeMcpReviewId = id;
+            m_mcpReviews.push_back(std::move(review));
+            while (m_mcpReviews.size() > 32u) m_mcpReviews.pop_front();
+        }
+        const std::string idText = std::to_string(id);
+        m_mcpServer.PublishResourceUpdates({ "lookdevpt://reviews/index", "lookdevpt://reviews/" + idText });
+        return MakeMcpJsonToolResult(true, "Review queued.",
+            "{\"ok\":true,\"reviewId\":\"" + idText + "\",\"state\":\"queued\",\"resource\":\"lookdevpt://reviews/" + idText + "\"}");
+    }
+    if (name == "lookdevpt.get_review" || name == "lookdevpt.cancel_review")
+    {
+        const uint64_t id = std::strtoull(cld::JsonStringOr(arguments, "reviewId").c_str(), nullptr, 10);
+        std::lock_guard<std::mutex> lock(m_mcpSnapshotMutex);
+        auto iterator = std::find_if(m_mcpReviews.begin(), m_mcpReviews.end(),
+            [&](const McpReview& review) { return review.id == id; });
+        if (iterator == m_mcpReviews.end()) return MakeMcpJsonToolResult(false, "Review id was not found.",
+            "{\"ok\":false,\"code\":\"review_not_found\"}");
+        if (name == "lookdevpt.cancel_review" && m_activeMcpReviewId == id) iterator->cancelRequested = true;
+        const std::string json = BuildMcpReviewJson(id);
+        return MakeMcpJsonToolResult(!iterator->artifactEvicted,
+            iterator->artifactEvicted ? "A review artifact was evicted." :
+                (name == "lookdevpt.cancel_review" ? "Review cancellation requested." : "Review returned."), json);
+    }
+    return std::nullopt;
 }
 
 mcp::ResourceResult D3D12PathTracingBackend::ReadMcpResource(const std::string& uri)
@@ -4273,6 +4521,74 @@ mcp::ResourceResult D3D12PathTracingBackend::ReadMcpResource(const std::string& 
         result.text = m_mcpSceneSummaryJson;
         return result;
     }
+    if (uri == "lookdevpt://scene/audit")
+    {
+        result.ok = true;
+        result.mimeType = "application/json";
+        result.text = m_mcpAuditJson;
+        return result;
+    }
+    if (uri == "lookdevpt://probes/latest")
+    {
+        result.ok = true;
+        result.mimeType = "application/json";
+        result.text = m_mcpLatestProbesJson;
+        return result;
+    }
+    if (uri == "lookdevpt://reviews/index")
+    {
+        result.ok = true;
+        result.mimeType = "application/json";
+        result.text = BuildMcpReviewIndexJson();
+        return result;
+    }
+    constexpr const char* reviewPrefix = "lookdevpt://reviews/";
+    if (uri.rfind(reviewPrefix, 0) == 0)
+    {
+        const uint64_t id = std::strtoull(uri.c_str() + std::char_traits<char>::length(reviewPrefix), nullptr, 10);
+        const auto iterator = std::find_if(m_mcpReviews.begin(), m_mcpReviews.end(),
+            [&](const McpReview& review) { return review.id == id; });
+        if (iterator == m_mcpReviews.end())
+        {
+            result.error = "Review id was not found.";
+            return result;
+        }
+        result.ok = !iterator->artifactEvicted;
+        result.mimeType = "application/json";
+        result.text = BuildMcpReviewJson(id);
+        if (iterator->artifactEvicted) result.error = "artifact_evicted";
+        return result;
+    }
+    constexpr const char* comparisonPrefix = "lookdevpt://comparisons/";
+    if (uri.rfind(comparisonPrefix, 0) == 0)
+    {
+        std::string suffix = uri.substr(std::char_traits<char>::length(comparisonPrefix));
+        constexpr const char* heatmapSuffix = "/heatmap.png";
+        const bool heatmap = suffix.size() > std::char_traits<char>::length(heatmapSuffix) &&
+            suffix.compare(suffix.size() - std::char_traits<char>::length(heatmapSuffix),
+                std::char_traits<char>::length(heatmapSuffix), heatmapSuffix) == 0;
+        if (heatmap) suffix.resize(suffix.size() - std::char_traits<char>::length(heatmapSuffix));
+        const uint64_t id = std::strtoull(suffix.c_str(), nullptr, 10);
+        const auto iterator = std::find_if(m_mcpComparisons.begin(), m_mcpComparisons.end(),
+            [&](const McpComparison& comparison) { return comparison.id == id; });
+        if (iterator == m_mcpComparisons.end())
+        {
+            result.error = "Comparison id was not found.";
+            return result;
+        }
+        result.ok = true;
+        if (heatmap)
+        {
+            result.mimeType = "image/png";
+            result.blob = iterator->heatmapBase64;
+        }
+        else
+        {
+            result.mimeType = "application/json";
+            result.text = iterator->json;
+        }
+        return result;
+    }
     if (uri == "lookdevpt://captures/index")
     {
         result.ok = true;
@@ -4414,6 +4730,31 @@ void D3D12PathTracingBackend::StartMcpServer()
 void D3D12PathTracingBackend::StopMcpServer()
 {
     m_mcpDispatcher.CancelAll("MCP server stopped.");
+    {
+        std::lock_guard<std::mutex> lock(m_mcpSnapshotMutex);
+        if (m_activeMcpReviewId != 0)
+        {
+            for (auto& review : m_mcpReviews)
+            {
+                if (review.id == m_activeMcpReviewId)
+                {
+                    review.state = "failed";
+                    review.stage = "failed";
+                    review.errorCode = "server_stopped";
+                    review.diagnostics = "MCP server stopped during review.";
+                    for (const uint64_t id : review.captureIds)
+                        for (auto& capture : m_mcpCaptures)
+                            if (capture.id == id && capture.pinCount != 0u) --capture.pinCount;
+                    if (review.baselineCaptureId != 0)
+                        for (auto& capture : m_mcpCaptures)
+                            if (capture.id == review.baselineCaptureId && capture.pinCount != 0u) --capture.pinCount;
+                    break;
+                }
+            }
+            m_activeMcpReviewId = 0;
+            EnforceMcpArtifactBudget();
+        }
+    }
     if (m_mcpServer.IsRunning())
     {
         m_mcpServer.Stop();
@@ -4447,7 +4788,11 @@ mcp::CommandResult D3D12PathTracingBackend::ExecuteMcpCommand(const mcp::Command
 
             uint64_t captureId = 0;
             {
-                captureId = StoreMcpCapture(base64Png, m_debugViewMode, DebugViewLabels[std::clamp(m_debugViewMode, 0, static_cast<int>(_countof(DebugViewLabels)) - 1)]);
+                const std::string requestedLabel = cld::JsonStringOr(request.params, "label");
+                const std::string label = requestedLabel.empty()
+                    ? DebugViewLabels[std::clamp(m_debugViewMode, 0, static_cast<int>(_countof(DebugViewLabels)) - 1)]
+                    : requestedLabel.substr(0, 128);
+                captureId = StoreMcpCapture(base64Png, m_debugViewMode, label);
                 std::lock_guard<std::mutex> lock(m_mcpSnapshotMutex);
                 m_mcpLatestCaptureBase64 = std::move(base64Png);
                 m_mcpLastCaptureDiagnostics = diagnostics;
@@ -4466,6 +4811,162 @@ mcp::CommandResult D3D12PathTracingBackend::ExecuteMcpCommand(const mcp::Command
                     std::to_string(captureId) + ".png\",\"name\":\"capture_" + std::to_string(captureId) + "\",\"mimeType\":\"image/png\"}]";
             }
             return captureResult;
+        }
+
+        if (request.actionMethod == "__probe_surfaces")
+        {
+            const cld::JsonValue* points = cld::FindMember(request.params, "points");
+            if (!points || points->type != cld::JsonValue::Type::Array || points->array.empty() || points->array.size() > 16u)
+                return finish(false, "probe_surfaces requires 1 to 16 points.",
+                    "{\"ok\":false,\"code\":\"invalid_points\",\"diagnostics\":\"probe_surfaces requires 1 to 16 points.\"}");
+            const std::string coordinateSpace = cld::JsonStringOr(request.params, "coordinateSpace", "normalized");
+            if (coordinateSpace != "normalized" && coordinateSpace != "output_pixels")
+                return finish(false, "Unknown probe coordinate space.",
+                    "{\"ok\":false,\"code\":\"invalid_coordinate_space\"}");
+            std::vector<XMFLOAT2> normalized;
+            normalized.reserve(points->array.size());
+            std::array<uint32_t, 16u * 64u> records{};
+            for (size_t i = 0; i < points->array.size(); ++i)
+            {
+                const cld::JsonValue& point = points->array[i];
+                if (point.type != cld::JsonValue::Type::Object)
+                    return finish(false, "Each probe point must be an object.", "{\"ok\":false,\"code\":\"invalid_point\"}");
+                float x = static_cast<float>(cld::JsonNumberOr(point, "x", std::numeric_limits<double>::quiet_NaN()));
+                float y = static_cast<float>(cld::JsonNumberOr(point, "y", std::numeric_limits<double>::quiet_NaN()));
+                if (!std::isfinite(x) || !std::isfinite(y))
+                    return finish(false, "Probe coordinates must be finite.", "{\"ok\":false,\"code\":\"invalid_point\"}");
+                if (coordinateSpace == "output_pixels")
+                {
+                    x = m_width > 1u ? x / static_cast<float>(m_width) : 0.0f;
+                    y = m_height > 1u ? y / static_cast<float>(m_height) : 0.0f;
+                }
+                if (x < 0.0f || x > 1.0f || y < 0.0f || y > 1.0f)
+                    return finish(false, "Probe coordinates are outside the viewport.", "{\"ok\":false,\"code\":\"point_out_of_range\"}");
+                normalized.emplace_back(x, y);
+                memcpy(&records[i * 64u + 0u], &x, sizeof(float));
+                memcpy(&records[i * 64u + 1u], &y, sizeof(float));
+            }
+            if (!m_reviewProbeBuffer || !m_reviewProbeRayGenTable.resource || !m_topLevelAs.result)
+                return finish(false, "Surface probe GPU path is not ready.", "{\"ok\":false,\"code\":\"probe_not_ready\"}");
+
+            WaitForPreviousFrame();
+            ComPtr<ID3D12Resource> upload = CreateUploadBuffer(records.data(), sizeof(records), L"MCP Review Probe Upload");
+            ComPtr<ID3D12Resource> readback;
+            const CD3DX12_HEAP_PROPERTIES readbackHeap(D3D12_HEAP_TYPE_READBACK);
+            const CD3DX12_RESOURCE_DESC readbackDesc = CD3DX12_RESOURCE_DESC::Buffer(sizeof(records));
+            ThrowIfFailed(m_device->CreateCommittedResource(&readbackHeap, D3D12_HEAP_FLAG_NONE, &readbackDesc,
+                D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&readback)));
+            FrameContext& frame = m_frameContexts[m_frameIndex];
+            ThrowIfFailed(frame.commandAllocator->Reset());
+            ThrowIfFailed(m_commandList->Reset(frame.commandAllocator.Get(), nullptr));
+            auto toCopy = CD3DX12_RESOURCE_BARRIER::Transition(m_reviewProbeBuffer.Get(),
+                D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_DEST);
+            m_commandList->ResourceBarrier(1, &toCopy);
+            m_commandList->CopyBufferRegion(m_reviewProbeBuffer.Get(), 0, upload.Get(), 0, sizeof(records));
+            auto toUav = CD3DX12_RESOURCE_BARRIER::Transition(m_reviewProbeBuffer.Get(),
+                D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+            m_commandList->ResourceBarrier(1, &toUav);
+            ID3D12DescriptorHeap* heaps[] = { m_descriptorHeap.Get() };
+            m_commandList->SetDescriptorHeaps(1, heaps);
+            m_commandList->SetPipelineState1(m_stateObject.Get());
+            m_commandList->SetComputeRootSignature(m_globalRootSignature.Get());
+            const UINT guideParity = LastSubmittedSurfaceGuideParity();
+            m_commandList->SetComputeRootDescriptorTable(RootOutputTable,
+                GpuDescriptor(guideParity == 0u ? static_cast<UINT>(DescriptorOutputUav) : m_alternateOutputTableBase));
+            m_commandList->SetComputeRootShaderResourceView(RootAccelerationStructure, m_topLevelAs.result->GetGPUVirtualAddress());
+            const UINT constantFrame = (m_frameIndex + FrameCount - 1u) % FrameCount;
+            m_commandList->SetComputeRootConstantBufferView(RootSceneConstants,
+                m_frameContexts[constantFrame].sceneConstantBuffer->GetGPUVirtualAddress());
+            m_commandList->SetComputeRootDescriptorTable(RootSceneBuffers, GpuDescriptor(DescriptorVertexBuffer));
+            m_commandList->SetComputeRootDescriptorTable(RootTextureTable, GpuDescriptor(DescriptorTextureBase));
+            D3D12_DISPATCH_RAYS_DESC dispatch{};
+            dispatch.RayGenerationShaderRecord.StartAddress = m_reviewProbeRayGenTable.resource->GetGPUVirtualAddress();
+            dispatch.RayGenerationShaderRecord.SizeInBytes = m_reviewProbeRayGenTable.recordSize;
+            dispatch.MissShaderTable.StartAddress = m_missTable.resource->GetGPUVirtualAddress();
+            dispatch.MissShaderTable.SizeInBytes = m_missTable.recordSize * m_missTable.recordCount;
+            dispatch.MissShaderTable.StrideInBytes = m_missTable.recordSize;
+            dispatch.HitGroupTable.StartAddress = m_hitGroupTable.resource->GetGPUVirtualAddress();
+            dispatch.HitGroupTable.SizeInBytes = m_hitGroupTable.recordSize * m_hitGroupTable.recordCount;
+            dispatch.HitGroupTable.StrideInBytes = m_hitGroupTable.recordSize;
+            dispatch.Width = static_cast<UINT>(normalized.size());
+            dispatch.Height = 1u;
+            dispatch.Depth = 1u;
+            m_commandList->DispatchRays(&dispatch);
+            auto probeBarrier = CD3DX12_RESOURCE_BARRIER::UAV(m_reviewProbeBuffer.Get());
+            m_commandList->ResourceBarrier(1, &probeBarrier);
+            auto toReadback = CD3DX12_RESOURCE_BARRIER::Transition(m_reviewProbeBuffer.Get(),
+                D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_SOURCE);
+            m_commandList->ResourceBarrier(1, &toReadback);
+            m_commandList->CopyBufferRegion(readback.Get(), 0, m_reviewProbeBuffer.Get(), 0, sizeof(records));
+            auto restoreUav = CD3DX12_RESOURCE_BARRIER::Transition(m_reviewProbeBuffer.Get(),
+                D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+            m_commandList->ResourceBarrier(1, &restoreUav);
+            ThrowIfFailed(m_commandList->Close());
+            ID3D12CommandList* lists[] = { m_commandList.Get() };
+            m_commandQueue->ExecuteCommandLists(1, lists);
+            WaitForPreviousFrame();
+            void* mapped = nullptr;
+            const D3D12_RANGE range{ 0, sizeof(records) };
+            ThrowIfFailed(readback->Map(0, &range, &mapped));
+            memcpy(records.data(), mapped, sizeof(records));
+            readback->Unmap(0, nullptr);
+            auto readFloat = [&](size_t record, size_t byteOffset)
+            {
+                float value = 0.0f;
+                const uint32_t bits = records[record * 64u + byteOffset / 4u];
+                memcpy(&value, &bits, sizeof(value));
+                return value;
+            };
+            auto appendFloat3 = [&](std::ostringstream& json, size_t record, size_t offset)
+            {
+                json << '[' << readFloat(record, offset) << ',' << readFloat(record, offset + 4u) << ','
+                    << readFloat(record, offset + 8u) << ']';
+            };
+            std::ostringstream json;
+            json << "{\"ok\":true,\"coordinateSpace\":\"" << coordinateSpace << "\",\"sceneFingerprint\":\""
+                << cld::EscapeJson(SceneFingerprint()) << "\",\"cameraFingerprint\":\""
+                << cld::EscapeJson(CameraFingerprint()) << "\",\"probes\":[";
+            for (size_t i = 0; i < normalized.size(); ++i)
+            {
+                if (i != 0) json << ',';
+                const size_t base = i * 64u;
+                const bool hit = records[base + 3u] != 0u;
+                const uint32_t outputX = std::min(static_cast<uint32_t>(normalized[i].x * m_width), m_width - 1u);
+                const uint32_t outputY = std::min(static_cast<uint32_t>(normalized[i].y * m_height), m_height - 1u);
+                json << "{\"index\":" << i << ",\"normalized\":[" << normalized[i].x << ',' << normalized[i].y
+                    << "],\"outputPixel\":[" << outputX << ',' << outputY << "],\"renderPixel\":["
+                    << records[base + 4u] << ',' << records[base + 5u] << "],\"hit\":" << (hit ? "true" : "false");
+                if (hit)
+                {
+                    json << ",\"instanceId\":" << records[base + 8u] << ",\"geometryId\":" << records[base + 9u]
+                        << ",\"primitiveId\":" << records[base + 10u] << ",\"materialId\":" << records[base + 11u]
+                        << ",\"hitDistance\":" << readFloat(i, 48u) << ",\"depth\":" << readFloat(i, 52u)
+                        << ",\"worldPosition\":";
+                    appendFloat3(json, i, 56u);
+                    json << ",\"geometricNormal\":"; appendFloat3(json, i, 68u);
+                    json << ",\"shadingNormal\":"; appendFloat3(json, i, 80u);
+                    json << ",\"uv\":[" << readFloat(i, 92u) << ',' << readFloat(i, 96u) << "]"
+                        << ",\"baseColor\":"; appendFloat3(json, i, 100u);
+                    json << ",\"roughness\":" << readFloat(i, 112u) << ",\"metallic\":" << readFloat(i, 116u)
+                        << ",\"emissive\":"; appendFloat3(json, i, 120u);
+                    json << ",\"ao\":" << readFloat(i, 132u) << ",\"directRadiance\":"; appendFloat3(json, i, 136u);
+                    json << ",\"indirectRadiance\":"; appendFloat3(json, i, 148u);
+                    json << ",\"radiance\":"; appendFloat3(json, i, 160u);
+                    json << ",\"historyConfidence\":" << readFloat(i, 180u);
+                }
+                else
+                {
+                    json << ",\"radiance\":"; appendFloat3(json, i, 160u);
+                }
+                json << '}';
+            }
+            json << "]}";
+            {
+                std::lock_guard<std::mutex> lock(m_mcpSnapshotMutex);
+                m_mcpLatestProbesJson = json.str();
+            }
+            m_mcpServer.PublishResourceUpdates({ "lookdevpt://probes/latest" });
+            return finish(true, "Surface probes completed without changing renderer state.", json.str());
         }
 
         if (request.actionMethod == "__reset_accumulation")
@@ -4860,6 +5361,8 @@ void D3D12PathTracingBackend::UpdateMcpSnapshots()
     {
         return;
     }
+
+    RefreshMcpAuditCache();
 
     const auto now = std::chrono::steady_clock::now();
     const bool force = !m_mcpStaticSnapshotsValid;
@@ -5368,7 +5871,13 @@ std::string D3D12PathTracingBackend::BuildMcpCaptureIndexJson() const
         const McpCapture& capture = m_mcpCaptures[i];
         out << "{\"id\":" << capture.id << ",\"debugView\":" << capture.debugView
             << ",\"label\":\"" << cld::EscapeJson(capture.label)
-            << "\",\"uri\":\"lookdevpt://captures/" << capture.id << ".png\",\"mimeType\":\"image/png\"}";
+            << "\",\"width\":" << capture.rgba.width << ",\"height\":" << capture.rgba.height
+            << ",\"fingerprints\":{\"scene\":\"" << cld::EscapeJson(capture.sceneFingerprint)
+            << "\",\"camera\":\"" << cld::EscapeJson(capture.cameraFingerprint)
+            << "\",\"material\":\"" << cld::EscapeJson(capture.materialFingerprint)
+            << "\",\"lighting\":\"" << cld::EscapeJson(capture.lightingFingerprint)
+            << "\",\"backend\":\"" << cld::EscapeJson(capture.backendFingerprint)
+            << "\"},\"uri\":\"lookdevpt://captures/" << capture.id << ".png\",\"mimeType\":\"image/png\"}";
     }
     out << "]}";
     return out.str();
@@ -5384,11 +5893,18 @@ uint64_t D3D12PathTracingBackend::StoreMcpCapture(std::string base64Png, int deb
         capture.debugView = debugView;
         capture.label = label;
         capture.base64Png = std::move(base64Png);
+        DecodePngRgba8(capture.base64Png, capture.rgba);
+        capture.sceneFingerprint = SceneFingerprint();
+        capture.cameraFingerprint = CameraFingerprint();
+        capture.materialFingerprint = std::to_string(m_frameState.revisions.material);
+        capture.lightingFingerprint = std::to_string(m_frameState.revisions.light) + "-" +
+            std::to_string(m_frameState.revisions.hdri);
+        capture.backendFingerprint = std::to_string(m_frameState.revisions.backend) + "-" +
+            std::to_string(m_frameState.revisions.qualityProfile);
+        capture.artifactBytes = capture.base64Png.size() * 3u / 4u + capture.rgba.pixels.size();
+        capture.accessSerial = m_mcpArtifactAccessSerial++;
         m_mcpCaptures.push_back(std::move(capture));
-        while (m_mcpCaptures.size() > 8)
-        {
-            m_mcpCaptures.pop_front();
-        }
+        EnforceMcpArtifactBudget();
         id = m_mcpCaptures.back().id;
     }
     m_mcpServer.PublishResourceUpdates({ "lookdevpt://captures/index" });
@@ -5637,6 +6153,732 @@ bool D3D12PathTracingBackend::CaptureViewportPng(
     {
         diagnostics = ex.what();
         return false;
+    }
+}
+
+std::string D3D12PathTracingBackend::SceneFingerprint() const
+{
+    std::ostringstream value;
+    value << std::hex << m_frameState.revisions.scene << '-' << m_frameState.revisions.geometry;
+    return value.str();
+}
+
+std::string D3D12PathTracingBackend::CameraFingerprint() const
+{
+    const XMFLOAT3 position = m_camera.GetPosition();
+    std::ostringstream value;
+    value << std::hexfloat << position.x << ',' << position.y << ',' << position.z << ','
+        << m_camera.GetYawRadians() << ',' << m_camera.GetPitchRadians() << ','
+        << m_camera.GetRollRadians() << ',' << m_cameraFovDegrees;
+    return value.str();
+}
+
+void D3D12PathTracingBackend::EnforceMcpArtifactBudget()
+{
+    constexpr size_t MaximumImageCount = 24u;
+    constexpr size_t MaximumArtifactBytes = 128u * 1024u * 1024u;
+    auto usage = [&]()
+    {
+        size_t images = m_mcpCaptures.size() + m_mcpComparisons.size();
+        size_t bytes = 0;
+        for (const auto& capture : m_mcpCaptures) bytes += capture.artifactBytes;
+        for (const auto& comparison : m_mcpComparisons) bytes += comparison.artifactBytes;
+        return std::pair(images, bytes);
+    };
+    for (;;)
+    {
+        const auto [images, bytes] = usage();
+        if (images <= MaximumImageCount && bytes <= MaximumArtifactBytes) break;
+        auto captureCandidate = m_mcpCaptures.end();
+        for (auto iterator = m_mcpCaptures.begin(); iterator != m_mcpCaptures.end(); ++iterator)
+        {
+            if (iterator->pinCount == 0u && (captureCandidate == m_mcpCaptures.end() ||
+                iterator->accessSerial < captureCandidate->accessSerial))
+            {
+                captureCandidate = iterator;
+            }
+        }
+        auto comparisonCandidate = m_mcpComparisons.end();
+        for (auto iterator = m_mcpComparisons.begin(); iterator != m_mcpComparisons.end(); ++iterator)
+        {
+            if (comparisonCandidate == m_mcpComparisons.end() ||
+                iterator->accessSerial < comparisonCandidate->accessSerial)
+            {
+                comparisonCandidate = iterator;
+            }
+        }
+        const bool evictCapture = captureCandidate != m_mcpCaptures.end() &&
+            (comparisonCandidate == m_mcpComparisons.end() ||
+                captureCandidate->accessSerial <= comparisonCandidate->accessSerial);
+        if (!evictCapture && comparisonCandidate == m_mcpComparisons.end()) break;
+        if (evictCapture)
+        {
+            const uint64_t evictedId = captureCandidate->id;
+            for (auto& review : m_mcpReviews)
+            {
+                if (std::find(review.captureIds.begin(), review.captureIds.end(), evictedId) != review.captureIds.end() ||
+                    review.baselineCaptureId == evictedId)
+                {
+                    review.artifactEvicted = true;
+                }
+            }
+            m_mcpCaptures.erase(captureCandidate);
+        }
+        else
+        {
+            const uint64_t evictedId = comparisonCandidate->id;
+            for (auto& review : m_mcpReviews)
+            {
+                if (review.comparisonId == evictedId) review.artifactEvicted = true;
+            }
+            m_mcpComparisons.erase(comparisonCandidate);
+        }
+    }
+}
+
+void D3D12PathTracingBackend::RefreshMcpAuditCache()
+{
+    const rb::FrameRevisions& revisions = m_frameState.revisions;
+    const bool changed = m_mcpAuditJson == "{}" ||
+        revisions.scene != m_mcpAuditRevisions.scene ||
+        revisions.geometry != m_mcpAuditRevisions.geometry ||
+        revisions.material != m_mcpAuditRevisions.material ||
+        revisions.light != m_mcpAuditRevisions.light ||
+        revisions.hdri != m_mcpAuditRevisions.hdri ||
+        revisions.backend != m_mcpAuditRevisions.backend ||
+        revisions.qualityProfile != m_mcpAuditRevisions.qualityProfile;
+    if (!changed) return;
+
+    if (!m_mcpSceneAuditFresh && (revisions.scene != m_mcpAuditRevisions.scene ||
+        revisions.geometry != m_mcpAuditRevisions.geometry ||
+        revisions.material != m_mcpAuditRevisions.material || m_mcpAuditJson == "{}"))
+    {
+        m_mcpSceneAuditSummary = lookdevpt::review::AnalyzeScene(m_scene);
+    }
+    lookdevpt::review::AuditRuntimeState runtime;
+    runtime.sceneRevision = revisions.scene;
+    runtime.geometryRevision = revisions.geometry;
+    runtime.materialRevision = revisions.material;
+    runtime.lightRevision = revisions.light;
+    runtime.hdriRevision = revisions.hdri;
+    runtime.backendRevision = revisions.backend;
+    runtime.profileRevision = revisions.qualityProfile;
+    runtime.activeLightCount = m_activeLightCount;
+    runtime.environmentEnabled = m_environmentMapEnabled;
+    runtime.environmentAvailable = !m_environmentTexturePath.empty();
+    const RtxdiStatus& rtxdi = m_rtxdiBackendRuntime.Status();
+    runtime.rtxdiRequested = m_qualitySettings.restirBackend == rb::RestirBackend::Rtxdi;
+    runtime.rtxdiAvailable = rtxdi.evaluationReady;
+    runtime.nrdRequested = IsNrdSelected();
+    runtime.nrdAvailable = m_nrdBackendRuntime.Status().evaluationReady;
+    runtime.dlssRequested = IsDlssSelected();
+    runtime.dlssAvailable = m_dlssBackendRuntime.Status().evaluationReady;
+    const lookdevpt::review::AuditReport report =
+        lookdevpt::review::BuildAuditReport(m_mcpSceneAuditSummary, runtime);
+    const std::string json = lookdevpt::review::BuildAuditJson(report);
+    {
+        std::lock_guard<std::mutex> lock(m_mcpSnapshotMutex);
+        m_mcpAuditJson = json;
+        m_mcpAuditInfoCount = report.infoCount;
+        m_mcpAuditWarningCount = report.warningCount;
+        m_mcpAuditErrorCount = report.errorCount;
+        m_mcpAuditRevisions = revisions;
+        m_mcpSceneAuditFresh = false;
+    }
+    m_mcpServer.PublishResourceUpdates({ "lookdevpt://scene/audit" });
+}
+
+std::string D3D12PathTracingBackend::BuildMcpReviewIndexJson() const
+{
+    std::ostringstream json;
+    json << "{\"activeReviewId\":";
+    if (m_activeMcpReviewId == 0) json << "null"; else json << "\"" << m_activeMcpReviewId << "\"";
+    json << ",\"reviews\":[";
+    for (size_t i = 0; i < m_mcpReviews.size(); ++i)
+    {
+        if (i != 0) json << ',';
+        const McpReview& review = m_mcpReviews[i];
+        json << "{\"id\":\"" << review.id << "\",\"preset\":\"" << cld::EscapeJson(review.preset)
+            << "\",\"state\":\"" << review.state << "\",\"progress\":" << review.progress
+            << ",\"resource\":\"lookdevpt://reviews/" << review.id << "\"}";
+    }
+    json << "]}";
+    return json.str();
+}
+
+std::string D3D12PathTracingBackend::BuildMcpReviewJson(uint64_t id) const
+{
+    const auto iterator = std::find_if(m_mcpReviews.begin(), m_mcpReviews.end(),
+        [&](const McpReview& review) { return review.id == id; });
+    if (iterator == m_mcpReviews.end()) return "{\"ok\":false,\"code\":\"review_not_found\"}";
+    const McpReview& review = *iterator;
+    std::ostringstream json;
+    json << "{\"ok\":" << (review.artifactEvicted ? "false" : "true") << ",\"id\":\"" << review.id
+        << "\",\"preset\":\"" << cld::EscapeJson(review.preset) << "\",\"state\":\"" << review.state
+        << "\",\"stage\":\"" << cld::EscapeJson(review.stage) << "\",\"progress\":" << review.progress;
+    if (review.artifactEvicted) json << ",\"code\":\"artifact_evicted\"";
+    else if (!review.errorCode.empty()) json << ",\"code\":\"" << cld::EscapeJson(review.errorCode) << "\"";
+    json << ",\"diagnostics\":\"" << cld::EscapeJson(review.diagnostics) << "\",\"audit\":"
+        << (review.auditJson.empty() ? "{}" : review.auditJson) << ",\"captures\":[";
+    for (size_t i = 0; i < review.captureIds.size(); ++i)
+    {
+        if (i != 0) json << ',';
+        json << "{\"id\":\"" << review.captureIds[i] << "\",\"debugView\":" << review.views[i]
+            << ",\"label\":\"" << cld::EscapeJson(DebugViewLabels[review.views[i]])
+            << "\",\"resource\":\"lookdevpt://captures/" << review.captureIds[i] << ".png\"}";
+    }
+    json << ']';
+    if (review.comparisonId != 0)
+    {
+        json << ",\"comparison\":\"lookdevpt://comparisons/" << review.comparisonId << "\"";
+    }
+    json << '}';
+    return json.str();
+}
+
+void D3D12PathTracingBackend::ProcessMcpReview()
+{
+    PollMcpReviewCapture();
+    uint64_t activeId = 0;
+    int viewToCapture = -1;
+    {
+        std::lock_guard<std::mutex> lock(m_mcpSnapshotMutex);
+        activeId = m_activeMcpReviewId;
+        if (activeId == 0) return;
+        auto iterator = std::find_if(m_mcpReviews.begin(), m_mcpReviews.end(),
+            [&](const McpReview& review) { return review.id == activeId; });
+        if (iterator == m_mcpReviews.end())
+        {
+            m_activeMcpReviewId = 0;
+            return;
+        }
+        McpReview& review = *iterator;
+        auto finish = [&](const char* state, const char* stage, const char* code, const char* diagnostics)
+        {
+            review.state = state;
+            review.stage = stage;
+            review.errorCode = code;
+            review.diagnostics = diagnostics;
+            review.progress = strcmp(state, "completed") == 0 ? 1.0 : review.progress;
+            for (const uint64_t captureId : review.captureIds)
+            {
+                for (auto& capture : m_mcpCaptures)
+                    if (capture.id == captureId && capture.pinCount != 0u) --capture.pinCount;
+            }
+            if (review.baselineCaptureId != 0)
+            {
+                for (auto& capture : m_mcpCaptures)
+                    if (capture.id == review.baselineCaptureId && capture.pinCount != 0u) --capture.pinCount;
+            }
+            m_activeMcpReviewId = 0;
+            EnforceMcpArtifactBudget();
+        };
+        if (review.cancelRequested)
+        {
+            finish("cancelled", "cancelled", "", "Review cancelled.");
+        }
+        else if (std::chrono::steady_clock::now() >= review.deadline)
+        {
+            finish("failed", "failed", "review_timeout", "Review timed out.");
+        }
+        else if (review.state == "queued")
+        {
+            review.startFrame = m_frameState.frameNumber;
+            review.settleUntilFrame = review.startFrame + review.settleUntilFrame;
+            review.state = "waiting";
+            review.stage = "waiting_for_scene_and_settle";
+            review.progress = 0.05;
+        }
+        else if (review.state == "waiting")
+        {
+            const SceneLoadStage loadStage = m_sceneLoadStage.load(std::memory_order_relaxed);
+            if (loadStage == SceneLoadStage::Failed || loadStage == SceneLoadStage::Cancelled)
+            {
+                finish("failed", "failed", "scene_load_failed", "Scene loading failed or was cancelled.");
+            }
+            else if ((loadStage == SceneLoadStage::Idle || loadStage == SceneLoadStage::Completed) &&
+                m_frameState.frameNumber >= review.settleUntilFrame)
+            {
+                review.state = "capturing";
+                review.stage = "capturing";
+                review.progress = 0.1;
+            }
+        }
+        else if (review.state == "capturing")
+        {
+            if (m_pendingMcpReviewReadback)
+            {
+                review.stage = "waiting_for_gpu_readback";
+            }
+            else if (m_mcpReviewCaptureFuture.valid())
+            {
+                review.stage = "encoding_capture";
+            }
+            else if (review.nextView < review.views.size()) viewToCapture = review.views[review.nextView];
+            else
+            {
+                review.state = "analyzing";
+                review.stage = "analyzing";
+                review.progress = 0.9;
+            }
+        }
+        else if (review.state == "analyzing")
+        {
+            if (review.baselineCaptureId != 0 && !review.captureIds.empty())
+            {
+                McpCapture* before = nullptr;
+                McpCapture* after = nullptr;
+                for (auto& capture : m_mcpCaptures)
+                {
+                    if (capture.id == review.baselineCaptureId) before = &capture;
+                    if (capture.id == review.captureIds.front()) after = &capture;
+                }
+                if (!before || !after)
+                {
+                    review.artifactEvicted = true;
+                    finish("failed", "failed", "artifact_evicted", "A review artifact was evicted.");
+                }
+                else
+                {
+                    lookdevpt::review::ComparisonMetrics metrics;
+                    lookdevpt::review::Rgba8Image heatmap;
+                    std::string comparisonDiagnostics;
+                    if (!lookdevpt::review::CompareImages(before->rgba, after->rgba, metrics, heatmap, comparisonDiagnostics))
+                    {
+                        finish("failed", "failed", comparisonDiagnostics.c_str(), comparisonDiagnostics.c_str());
+                    }
+                    else
+                    {
+                        McpComparison comparison;
+                        comparison.id = m_nextMcpComparisonId++;
+                        comparison.beforeCaptureId = before->id;
+                        comparison.afterCaptureId = after->id;
+                        comparison.json = lookdevpt::review::BuildComparisonJson(std::to_string(comparison.id),
+                            std::to_string(before->id), std::to_string(after->id), metrics,
+                            before->sceneFingerprint == after->sceneFingerprint,
+                            before->cameraFingerprint == after->cameraFingerprint);
+                        EncodePngRgba8(heatmap, comparison.heatmapBase64);
+                        comparison.artifactBytes = comparison.heatmapBase64.size() * 3u / 4u;
+                        comparison.accessSerial = m_mcpArtifactAccessSerial++;
+                        review.comparisonId = comparison.id;
+                        m_mcpComparisons.push_back(std::move(comparison));
+                    }
+                }
+            }
+            if (m_activeMcpReviewId != 0)
+                finish("completed", "completed", "", "Review completed without changing renderer state.");
+        }
+    }
+
+    if (viewToCapture >= 0)
+    {
+        std::string diagnostics;
+        const bool captured = BeginMcpReviewCapture(activeId, viewToCapture, diagnostics);
+        std::lock_guard<std::mutex> lock(m_mcpSnapshotMutex);
+        auto iterator = std::find_if(m_mcpReviews.begin(), m_mcpReviews.end(),
+            [&](const McpReview& review) { return review.id == activeId; });
+        if (iterator != m_mcpReviews.end() && m_activeMcpReviewId == activeId)
+        {
+            McpReview& review = *iterator;
+            if (!captured)
+            {
+                review.state = "failed";
+                review.stage = "failed";
+                review.errorCode = "capture_failed";
+                review.diagnostics = diagnostics;
+                for (const uint64_t captureId : review.captureIds)
+                    for (auto& capture : m_mcpCaptures)
+                        if (capture.id == captureId && capture.pinCount != 0u) --capture.pinCount;
+                if (review.baselineCaptureId != 0)
+                    for (auto& capture : m_mcpCaptures)
+                        if (capture.id == review.baselineCaptureId && capture.pinCount != 0u) --capture.pinCount;
+                m_activeMcpReviewId = 0;
+            }
+            else
+            {
+                review.stage = "waiting_for_gpu_readback";
+            }
+        }
+    }
+    const std::string reviewUri = "lookdevpt://reviews/" + std::to_string(activeId);
+    m_mcpServer.PublishResourceUpdates({ "lookdevpt://reviews/index", reviewUri,
+        "lookdevpt://captures/index" });
+}
+
+bool D3D12PathTracingBackend::BeginMcpReviewCapture(
+    uint64_t reviewId,
+    int debugView,
+    std::string& diagnostics)
+{
+    ID3D12Resource* source = m_PathtracingOutput.Get();
+    McpReviewVisualization visualization = McpReviewVisualization::Color;
+    switch (debugView)
+    {
+    case 1: source = SurfaceGuideAovResource(1u, LastSubmittedSurfaceGuideParity()); break;
+    case 2: case 3: case 41:
+        source = SurfaceGuideAovResource(0u, LastSubmittedSurfaceGuideParity());
+        visualization = McpReviewVisualization::Normal;
+        break;
+    case 4: case 42:
+        source = SurfaceGuideAovResource(1u, LastSubmittedSurfaceGuideParity());
+        visualization = McpReviewVisualization::ScalarW;
+        break;
+    case 5:
+        source = m_signalResidual.Get();
+        visualization = McpReviewVisualization::ScalarW;
+        break;
+    case 6: case 12: case 34:
+        source = m_signalResidual.Get();
+        visualization = McpReviewVisualization::Radiance;
+        break;
+    case 7: case 43:
+        source = SurfaceGuideAovResource(2u, LastSubmittedSurfaceGuideParity());
+        visualization = McpReviewVisualization::ScalarW;
+        break;
+    case 8: case 32:
+        source = m_signalDirect.Get();
+        visualization = McpReviewVisualization::Radiance;
+        break;
+    case 9: case 22: case 33:
+        source = m_signalIndirect.Get();
+        visualization = McpReviewVisualization::Radiance;
+        break;
+    case 19:
+        source = (LastSubmittedSurfaceGuideParity() == 0u
+            ? m_reconstructionHistoryMoments.Get() : m_reconstructionHistoryMomentsB.Get());
+        visualization = McpReviewVisualization::Variance;
+        break;
+    case 20: case 44:
+        source = SurfaceGuideAovResource(2u, LastSubmittedSurfaceGuideParity());
+        visualization = McpReviewVisualization::Motion;
+        break;
+    case 21: case 38: case 46:
+        source = (LastSubmittedSurfaceGuideParity() == 0u
+            ? m_reconstructionHistoryLength.Get() : m_reconstructionHistoryLengthB.Get());
+        visualization = McpReviewVisualization::ScalarZ;
+        break;
+    case 23: case 36:
+        source = m_postDenoiseHdr.Get();
+        visualization = McpReviewVisualization::Radiance;
+        break;
+    case 35:
+        source = m_accumulationOutput.Get();
+        visualization = McpReviewVisualization::Radiance;
+        break;
+    case 37:
+        source = FinalResolvedHdrResource(LastSubmittedSurfaceGuideParity());
+        visualization = McpReviewVisualization::Radiance;
+        break;
+    case 40:
+        source = m_nrdDiffuseConfidence.Get();
+        visualization = McpReviewVisualization::ScalarX;
+        break;
+    default:
+        break;
+    }
+    if (!source || !m_commandQueue || !m_device || !m_fence ||
+        !m_mcpReviewCommandAllocator || !m_mcpReviewCommandList)
+    {
+        diagnostics = "Review source is not available.";
+        return false;
+    }
+
+    try
+    {
+        if (m_pendingMcpReviewReadback || m_mcpReviewCaptureFuture.valid())
+        {
+            diagnostics = "Review capture pipeline is busy.";
+            return false;
+        }
+        const D3D12_RESOURCE_DESC desc = source->GetDesc();
+        D3D12_PLACED_SUBRESOURCE_FOOTPRINT layout{};
+        UINT rows = 0;
+        UINT64 rowBytes = 0;
+        UINT64 totalBytes = 0;
+        m_device->GetCopyableFootprints(&desc, 0, 1, 0, &layout, &rows, &rowBytes, &totalBytes);
+        if (desc.Dimension != D3D12_RESOURCE_DIMENSION_TEXTURE2D || rows == 0 || totalBytes == 0)
+        {
+            diagnostics = "Review source is not a copyable 2D texture.";
+            return false;
+        }
+
+        ComPtr<ID3D12Resource> readback;
+        const CD3DX12_HEAP_PROPERTIES heap(D3D12_HEAP_TYPE_READBACK);
+        const CD3DX12_RESOURCE_DESC buffer = CD3DX12_RESOURCE_DESC::Buffer(totalBytes);
+        ThrowIfFailed(m_device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &buffer,
+            D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&readback)));
+        ThrowIfFailed(m_mcpReviewCommandAllocator->Reset());
+        ThrowIfFailed(m_mcpReviewCommandList->Reset(m_mcpReviewCommandAllocator.Get(), nullptr));
+        auto toCopy = CD3DX12_RESOURCE_BARRIER::Transition(source,
+            D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_SOURCE);
+        m_mcpReviewCommandList->ResourceBarrier(1, &toCopy);
+        D3D12_TEXTURE_COPY_LOCATION destination{};
+        destination.pResource = readback.Get();
+        destination.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+        destination.PlacedFootprint = layout;
+        D3D12_TEXTURE_COPY_LOCATION sourceLocation{};
+        sourceLocation.pResource = source;
+        sourceLocation.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+        m_mcpReviewCommandList->CopyTextureRegion(&destination, 0, 0, 0, &sourceLocation, nullptr);
+        auto toUav = CD3DX12_RESOURCE_BARRIER::Transition(source,
+            D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        m_mcpReviewCommandList->ResourceBarrier(1, &toUav);
+        ThrowIfFailed(m_mcpReviewCommandList->Close());
+        ID3D12CommandList* lists[] = { m_mcpReviewCommandList.Get() };
+        m_commandQueue->ExecuteCommandLists(1, lists);
+        const UINT64 captureFence = m_fenceValue++;
+        ThrowIfFailed(m_commandQueue->Signal(m_fence.Get(), captureFence));
+        PendingMcpReviewReadback pending;
+        pending.reviewId = reviewId;
+        pending.debugView = debugView;
+        pending.visualization = visualization;
+        pending.resource = std::move(readback);
+        pending.sourceDesc = desc;
+        pending.layout = layout;
+        pending.rows = rows;
+        pending.rowBytes = rowBytes;
+        pending.totalBytes = totalBytes;
+        pending.fenceValue = captureFence;
+        pending.sceneFingerprint = SceneFingerprint();
+        pending.cameraFingerprint = CameraFingerprint();
+        pending.materialFingerprint = std::to_string(m_frameState.revisions.material);
+        pending.lightingFingerprint = std::to_string(m_frameState.revisions.light) + "-" +
+            std::to_string(m_frameState.revisions.hdri);
+        pending.backendFingerprint = std::to_string(m_frameState.revisions.backend) + "-" +
+            std::to_string(m_frameState.revisions.qualityProfile);
+        m_pendingMcpReviewReadback = std::move(pending);
+        diagnostics = "Review GPU readback queued.";
+        return true;
+    }
+    catch (const std::exception& error)
+    {
+        diagnostics = error.what();
+        return false;
+    }
+}
+
+D3D12PathTracingBackend::McpReviewCaptureResult D3D12PathTracingBackend::EncodeMcpReviewCapture(
+    uint64_t reviewId,
+    int debugView,
+    McpReviewVisualization visualization,
+    D3D12_RESOURCE_DESC sourceDesc,
+    UINT64 rowBytes,
+    std::vector<uint8_t> sourcePixels)
+{
+    McpReviewCaptureResult result;
+    result.reviewId = reviewId;
+    result.debugView = debugView;
+    const HRESULT comResult = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+    const bool uninitializeCom = SUCCEEDED(comResult);
+    try
+    {
+        DirectX::Image input{};
+        input.width = static_cast<size_t>(sourceDesc.Width);
+        input.height = sourceDesc.Height;
+        input.format = sourceDesc.Format;
+        input.rowPitch = static_cast<size_t>(rowBytes);
+        input.slicePitch = sourcePixels.size();
+        input.pixels = sourcePixels.data();
+        DirectX::ScratchImage floats;
+        ThrowIfFailed(DirectX::Convert(input, DXGI_FORMAT_R32G32B32A32_FLOAT,
+            DirectX::TEX_FILTER_DEFAULT, 0.0f, floats));
+        const DirectX::Image* floatImage = floats.GetImage(0, 0, 0);
+        if (!floatImage) throw std::runtime_error("Review source conversion failed.");
+
+        result.rgba.width = static_cast<uint32_t>(floatImage->width);
+        result.rgba.height = static_cast<uint32_t>(floatImage->height);
+        result.rgba.pixels.resize(floatImage->width * floatImage->height * 4u);
+        auto encode = [](float value)
+        {
+            value = std::clamp(value, 0.0f, 1.0f);
+            const float srgb = value <= 0.0031308f ? 12.92f * value : 1.055f * powf(value, 1.0f / 2.4f) - 0.055f;
+            return static_cast<uint8_t>(std::round(std::clamp(srgb, 0.0f, 1.0f) * 255.0f));
+        };
+        for (size_t y = 0; y < floatImage->height; ++y)
+        {
+            const XMFLOAT4* row = reinterpret_cast<const XMFLOAT4*>(floatImage->pixels + y * floatImage->rowPitch);
+            for (size_t x = 0; x < floatImage->width; ++x)
+            {
+                XMFLOAT3 color(row[x].x, row[x].y, row[x].z);
+                bool linearColor = true;
+                switch (visualization)
+                {
+                case McpReviewVisualization::Radiance:
+                    color = XMFLOAT3(color.x / (1.0f + std::max(color.x, 0.0f)),
+                        color.y / (1.0f + std::max(color.y, 0.0f)),
+                        color.z / (1.0f + std::max(color.z, 0.0f)));
+                    break;
+                case McpReviewVisualization::Normal:
+                    linearColor = false;
+                    break;
+                case McpReviewVisualization::ScalarX: color = XMFLOAT3(row[x].x, row[x].x, row[x].x); break;
+                case McpReviewVisualization::ScalarY: color = XMFLOAT3(row[x].y, row[x].y, row[x].y); break;
+                case McpReviewVisualization::ScalarZ: color = XMFLOAT3(row[x].z, row[x].z, row[x].z); break;
+                case McpReviewVisualization::ScalarW:
+                {
+                    const float value = debugView == 7 || debugView == 43
+                        ? std::clamp(row[x].w / 250.0f, 0.0f, 1.0f) : row[x].w;
+                    color = XMFLOAT3(value, value, value);
+                    break;
+                }
+                case McpReviewVisualization::Motion:
+                    color = XMFLOAT3(0.5f + row[x].x * 20.0f, 0.5f + row[x].y * 20.0f, 0.5f);
+                    linearColor = false;
+                    break;
+                case McpReviewVisualization::Variance:
+                {
+                    const float variance = std::max(row[x].y - row[x].x * row[x].x, 0.0f);
+                    const float value = variance / (variance + 1.0f);
+                    color = XMFLOAT3(value, value, value);
+                    break;
+                }
+                default:
+                    linearColor = false;
+                    break;
+                }
+                const size_t offset = (y * floatImage->width + x) * 4u;
+                if (linearColor)
+                {
+                    result.rgba.pixels[offset + 0u] = encode(color.x);
+                    result.rgba.pixels[offset + 1u] = encode(color.y);
+                    result.rgba.pixels[offset + 2u] = encode(color.z);
+                }
+                else
+                {
+                    result.rgba.pixels[offset + 0u] = static_cast<uint8_t>(std::round(std::clamp(color.x, 0.0f, 1.0f) * 255.0f));
+                    result.rgba.pixels[offset + 1u] = static_cast<uint8_t>(std::round(std::clamp(color.y, 0.0f, 1.0f) * 255.0f));
+                    result.rgba.pixels[offset + 2u] = static_cast<uint8_t>(std::round(std::clamp(color.z, 0.0f, 1.0f) * 255.0f));
+                }
+                result.rgba.pixels[offset + 3u] = 255u;
+            }
+        }
+        if (!EncodePngRgba8(result.rgba, result.base64Png))
+            throw std::runtime_error("Review PNG encoding failed.");
+        result.ok = true;
+        result.diagnostics = "Non-destructive review view captured.";
+    }
+    catch (const std::exception& error)
+    {
+        result.diagnostics = error.what();
+    }
+    if (uninitializeCom) CoUninitialize();
+    return result;
+}
+
+void D3D12PathTracingBackend::PollMcpReviewCapture()
+{
+    std::optional<McpReviewCaptureResult> completed;
+    if (m_mcpReviewCaptureFuture.valid() &&
+        m_mcpReviewCaptureFuture.wait_for(std::chrono::seconds(0)) == std::future_status::ready)
+    {
+        completed = m_mcpReviewCaptureFuture.get();
+    }
+    else if (m_pendingMcpReviewReadback && m_fence &&
+        m_fence->GetCompletedValue() >= m_pendingMcpReviewReadback->fenceValue)
+    {
+        PendingMcpReviewReadback pending = std::move(*m_pendingMcpReviewReadback);
+        m_pendingMcpReviewReadback.reset();
+        try
+        {
+            void* mapped = nullptr;
+            const D3D12_RANGE readRange{ 0, static_cast<SIZE_T>(pending.totalBytes) };
+            ThrowIfFailed(pending.resource->Map(0, &readRange, &mapped));
+            const size_t tightPitch = static_cast<size_t>(pending.rowBytes);
+            std::vector<uint8_t> sourcePixels(tightPitch * pending.rows);
+            const uint8_t* mappedBytes = static_cast<const uint8_t*>(mapped) + pending.layout.Offset;
+            for (UINT row = 0; row < pending.rows; ++row)
+            {
+                memcpy(sourcePixels.data() + row * tightPitch,
+                    mappedBytes + row * pending.layout.Footprint.RowPitch, tightPitch);
+            }
+            const D3D12_RANGE writtenRange{ 0, 0 };
+            pending.resource->Unmap(0, &writtenRange);
+            m_mcpReviewCaptureFuture = std::async(std::launch::async,
+                [reviewId = pending.reviewId,
+                    debugView = pending.debugView,
+                    visualization = pending.visualization,
+                    sourceDesc = pending.sourceDesc,
+                    rowBytes = pending.rowBytes,
+                    sceneFingerprint = std::move(pending.sceneFingerprint),
+                    cameraFingerprint = std::move(pending.cameraFingerprint),
+                    materialFingerprint = std::move(pending.materialFingerprint),
+                    lightingFingerprint = std::move(pending.lightingFingerprint),
+                    backendFingerprint = std::move(pending.backendFingerprint),
+                    pixels = std::move(sourcePixels)]() mutable
+                {
+                    McpReviewCaptureResult result = EncodeMcpReviewCapture(reviewId, debugView, visualization,
+                        sourceDesc, rowBytes, std::move(pixels));
+                    result.sceneFingerprint = std::move(sceneFingerprint);
+                    result.cameraFingerprint = std::move(cameraFingerprint);
+                    result.materialFingerprint = std::move(materialFingerprint);
+                    result.lightingFingerprint = std::move(lightingFingerprint);
+                    result.backendFingerprint = std::move(backendFingerprint);
+                    return result;
+                });
+        }
+        catch (const std::exception& error)
+        {
+            McpReviewCaptureResult failed;
+            failed.reviewId = pending.reviewId;
+            failed.debugView = pending.debugView;
+            failed.diagnostics = error.what();
+            completed = std::move(failed);
+        }
+    }
+
+    if (!completed) return;
+    bool publish = false;
+    {
+        std::lock_guard<std::mutex> lock(m_mcpSnapshotMutex);
+        auto iterator = std::find_if(m_mcpReviews.begin(), m_mcpReviews.end(),
+            [&](const McpReview& review) { return review.id == completed->reviewId; });
+        if (iterator == m_mcpReviews.end() || m_activeMcpReviewId != completed->reviewId) return;
+        McpReview& review = *iterator;
+        if (!completed->ok)
+        {
+            review.state = "failed";
+            review.stage = "failed";
+            review.errorCode = "capture_failed";
+            review.diagnostics = completed->diagnostics;
+            for (const uint64_t captureId : review.captureIds)
+                for (auto& capture : m_mcpCaptures)
+                    if (capture.id == captureId && capture.pinCount != 0u) --capture.pinCount;
+            if (review.baselineCaptureId != 0)
+                for (auto& capture : m_mcpCaptures)
+                    if (capture.id == review.baselineCaptureId && capture.pinCount != 0u) --capture.pinCount;
+            m_activeMcpReviewId = 0;
+        }
+        else
+        {
+            McpCapture capture;
+            capture.id = m_nextMcpCaptureId++;
+            capture.debugView = completed->debugView;
+            capture.label = DebugViewLabels[completed->debugView];
+            capture.base64Png = std::move(completed->base64Png);
+            capture.rgba = std::move(completed->rgba);
+            capture.sceneFingerprint = std::move(completed->sceneFingerprint);
+            capture.cameraFingerprint = std::move(completed->cameraFingerprint);
+            capture.materialFingerprint = std::move(completed->materialFingerprint);
+            capture.lightingFingerprint = std::move(completed->lightingFingerprint);
+            capture.backendFingerprint = std::move(completed->backendFingerprint);
+            capture.artifactBytes = capture.base64Png.size() * 3u / 4u + capture.rgba.pixels.size();
+            capture.accessSerial = m_mcpArtifactAccessSerial++;
+            capture.pinCount = 1u;
+            review.captureIds.push_back(capture.id);
+            ++review.nextView;
+            review.stage = "capturing";
+            review.progress = 0.1 + 0.8 * static_cast<double>(review.nextView) /
+                static_cast<double>(review.views.size());
+            m_mcpCaptures.push_back(std::move(capture));
+            EnforceMcpArtifactBudget();
+        }
+        publish = true;
+    }
+    if (publish)
+    {
+        const std::string reviewUri = "lookdevpt://reviews/" + std::to_string(completed->reviewId);
+        m_mcpServer.PublishResourceUpdates({ "lookdevpt://reviews/index", reviewUri,
+            "lookdevpt://captures/index" });
     }
 }
 
@@ -6457,6 +7699,10 @@ void D3D12PathTracingBackend::CreateOutputResources()
         compactSecondaryResources
             ? L"Compact Secondary DispatchRays Arguments"
             : L"Secondary DispatchRays Arguments Placeholder");
+    m_reviewProbeBuffer = CreateUavBuffer(
+        16u * 256u,
+        D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+        L"MCP Review Surface Probe Records");
 
     D3D12_UNORDERED_ACCESS_VIEW_DESC outputUav = {};
     outputUav.Format = BackBufferFormat;
@@ -6585,6 +7831,16 @@ void D3D12PathTracingBackend::CreateOutputResources()
         nullptr,
         &indirectArgsUav,
         CpuDescriptor(DescriptorSecondaryIndirectArgsUav));
+    D3D12_UNORDERED_ACCESS_VIEW_DESC reviewProbeUav{};
+    reviewProbeUav.Format = DXGI_FORMAT_R32_TYPELESS;
+    reviewProbeUav.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
+    reviewProbeUav.Buffer.NumElements = 16u * 256u / sizeof(UINT);
+    reviewProbeUav.Buffer.Flags = D3D12_BUFFER_UAV_FLAG_RAW;
+    m_device->CreateUnorderedAccessView(
+        m_reviewProbeBuffer.Get(),
+        nullptr,
+        &reviewProbeUav,
+        CpuDescriptor(DescriptorReviewProbeUav));
 
     m_qualityCounterTileCountX =
         qualityDiagnosticsEnabled ? (m_renderWidth + 15u) / 16u : 1u;
@@ -7357,6 +8613,7 @@ void D3D12PathTracingBackend::CreatePathtracingStateObject()
     library->DefineExport(RayGenShaderName);
     library->DefineExport(PrimaryRayGenShaderName);
     library->DefineExport(SecondaryRayGenShaderName);
+    library->DefineExport(ReviewProbeRayGenShaderName);
     library->DefineExport(MissShaderName);
     library->DefineExport(ShadowMissShaderName);
     library->DefineExport(ClosestHitShaderName);
@@ -7837,6 +9094,7 @@ void D3D12PathTracingBackend::CreateShaderTables()
     createTable(L"RayGen Shader Table", { RayGenShaderName }, m_rayGenTable);
     createTable(L"Primary Visibility RayGen Shader Table", { PrimaryRayGenShaderName }, m_primaryRayGenTable);
     createTable(L"Compact Secondary RayGen Shader Table", { SecondaryRayGenShaderName }, m_secondaryRayGenTable);
+    createTable(L"MCP Review Probe RayGen Shader Table", { ReviewProbeRayGenShaderName }, m_reviewProbeRayGenTable);
     createTable(L"Miss Shader Table", { MissShaderName, ShadowMissShaderName }, m_missTable);
     createTable(L"HitGroup Shader Table", { HitGroupName, ShadowHitGroupName }, m_hitGroupTable);
 
@@ -7993,6 +9251,7 @@ void D3D12PathTracingBackend::OnUpdate()
         // frame that actually writes the corresponding current histories.
         m_lastUpdate = now;
         const auto mcpSnapshotStart = std::chrono::steady_clock::now();
+        ProcessMcpReview();
         UpdateMcpSnapshots();
         if (m_benchmarkHarness && !m_benchmarkFinished)
         {
@@ -8028,6 +9287,7 @@ void D3D12PathTracingBackend::OnUpdate()
     m_lastUpdate = now;
     UpdateConstantBuffer(deltaSeconds);
     const auto mcpSnapshotStart = std::chrono::steady_clock::now();
+    ProcessMcpReview();
     UpdateMcpSnapshots();
     if (m_benchmarkHarness && !m_benchmarkFinished)
     {
@@ -10093,10 +11353,15 @@ void D3D12PathTracingBackend::InvalidateHistoryDomains(rb::HistoryDomain domains
 
     if (rb::HasAny(changes, rb::FrameChangeMask::Geometry))
     {
+        m_mcpSceneAuditFresh = false;
         ++m_frameState.revisions.scene;
         ++m_frameState.revisions.geometry;
     }
-    if (rb::HasAny(changes, rb::FrameChangeMask::Material)) ++m_frameState.revisions.material;
+    if (rb::HasAny(changes, rb::FrameChangeMask::Material))
+    {
+        m_mcpSceneAuditFresh = false;
+        ++m_frameState.revisions.material;
+    }
     if (rb::HasAny(changes, rb::FrameChangeMask::Light)) ++m_frameState.revisions.light;
     if (rb::HasAny(changes, rb::FrameChangeMask::Hdri)) ++m_frameState.revisions.hdri;
     if (rb::HasAny(changes, rb::FrameChangeMask::Backend)) ++m_frameState.revisions.backend;

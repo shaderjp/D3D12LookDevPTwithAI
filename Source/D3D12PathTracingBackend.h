@@ -5,6 +5,7 @@
 #include "DlssBackend.h"
 #include "FpsCamera.h"
 #include "McpDispatcher.h"
+#include "McpReviewAnalysis.h"
 #include "McpServer.h"
 #include "NrdBackend.h"
 #include "PathTracingScene.h"
@@ -195,6 +196,7 @@ private:
         DescriptorSecondaryTasksUav,
         DescriptorSecondaryResultsUav,
         DescriptorSecondaryIndirectArgsUav,
+        DescriptorReviewProbeUav,
         DescriptorVertexBuffer,
         DescriptorIndexBuffer,
         DescriptorGeometryBuffer,
@@ -204,7 +206,7 @@ private:
         DescriptorTextureBase
     };
 
-    // u0..u60 form one complete shader-visible output table. A second fixed
+    // u0..u61 form one complete shader-visible output table. A second fixed
     // copy lives after the scene/texture descriptors and swaps only the
     // SurfaceGuide current/previous bindings for odd frames.
     static constexpr UINT OutputTableDescriptorCount = DescriptorVertexBuffer;
@@ -536,6 +538,7 @@ private:
     ComPtr<ID3D12Resource> m_secondaryTasks;
     ComPtr<ID3D12Resource> m_secondaryResults;
     ComPtr<ID3D12Resource> m_secondaryIndirectArgs;
+    ComPtr<ID3D12Resource> m_reviewProbeBuffer;
     UINT m_secondaryTaskCapacity = 1;
     UINT m_secondaryGroupCount = 1;
     bool m_dlssFallbackRebuildAfterFrame = false;
@@ -606,6 +609,7 @@ private:
     ShaderTableInfo m_rayGenTable;
     ShaderTableInfo m_primaryRayGenTable;
     ShaderTableInfo m_secondaryRayGenTable;
+    ShaderTableInfo m_reviewProbeRayGenTable;
     ShaderTableInfo m_missTable;
     ShaderTableInfo m_hitGroupTable;
 
@@ -823,6 +827,8 @@ private:
     HANDLE m_fenceEvent = nullptr;
     ComPtr<ID3D12Fence> m_fence;
     UINT64 m_fenceValue = 0;
+    ComPtr<ID3D12CommandAllocator> m_mcpReviewCommandAllocator;
+    ComPtr<ID3D12GraphicsCommandList> m_mcpReviewCommandList;
 
     void LoadPipeline();
     void LoadAssets();
@@ -846,6 +852,10 @@ private:
     bool DeleteStartupSettings();
     bool ApplyAction(const std::string& method, const cld::JsonValue& params, std::string& diagnostics, bool validateOnly);
     mcp::ToolResult CallMcpTool(const std::string& name, const cld::JsonValue& arguments, int timeoutMs) override;
+    std::optional<mcp::ToolResult> CallMcpReviewTool(
+        const std::string& name,
+        const cld::JsonValue& arguments,
+        int timeoutMs);
     mcp::ResourceResult ReadMcpResource(const std::string& uri) override;
     size_t PendingMcpCommandCount() const override;
     void LoadMcpUserSettings();
@@ -865,6 +875,8 @@ private:
         std::string& diagnostics,
         const std::filesystem::path& outputPath,
         lookdevpt::benchmark::ArtifactStatistics* statistics = nullptr);
+    bool BeginMcpReviewCapture(uint64_t reviewId, int debugView, std::string& diagnostics);
+    void PollMcpReviewCapture();
     bool CaptureTextureArtifact(
         ID3D12Resource* texture,
         const std::filesystem::path& outputPath,
@@ -896,6 +908,13 @@ private:
     std::string BuildMcpProjectJson() const;
     std::string BuildMcpSceneSummaryJson() const;
     std::string BuildMcpCaptureIndexJson() const;
+    void RefreshMcpAuditCache();
+    void ProcessMcpReview();
+    std::string BuildMcpReviewIndexJson() const;
+    std::string BuildMcpReviewJson(uint64_t id) const;
+    std::string SceneFingerprint() const;
+    std::string CameraFingerprint() const;
+    void EnforceMcpArtifactBudget();
     mcp::ToolResult SubmitMcpCommandTool(const std::string& toolName, const std::string& actionMethod, const cld::JsonValue& params, bool mutation, int timeoutMs);
     mcp::CommandResult ExecuteMcpCommand(const mcp::CommandRequest& request);
     void CreateDescriptorHeap();
@@ -1065,6 +1084,14 @@ private:
     std::string m_mcpSceneSummaryJson = "{}";
     std::string m_mcpMaterialVariantsJson = "{}";
     std::string m_mcpMaterialPresetsJson = "{}";
+    std::string m_mcpAuditJson = "{}";
+    uint32_t m_mcpAuditInfoCount = 0;
+    uint32_t m_mcpAuditWarningCount = 0;
+    uint32_t m_mcpAuditErrorCount = 0;
+    std::string m_mcpLatestProbesJson = "{\"probes\":[]}";
+    lookdevpt::review::SceneAuditSummary m_mcpSceneAuditSummary;
+    bool m_mcpSceneAuditFresh = false;
+    rb::FrameRevisions m_mcpAuditRevisions{};
     std::chrono::steady_clock::time_point m_mcpNextStateSnapshot{};
     std::chrono::steady_clock::time_point m_mcpNextStatsSnapshot{};
     rb::FrameRevisions m_mcpSnapshotRevisions{};
@@ -1080,9 +1107,108 @@ private:
         int debugView = 0;
         std::string label;
         std::string base64Png;
+        lookdevpt::review::Rgba8Image rgba;
+        std::string sceneFingerprint;
+        std::string cameraFingerprint;
+        std::string materialFingerprint;
+        std::string lightingFingerprint;
+        std::string backendFingerprint;
+        size_t artifactBytes = 0;
+        uint64_t accessSerial = 0;
+        uint32_t pinCount = 0;
     };
     std::deque<McpCapture> m_mcpCaptures;
     uint64_t m_nextMcpCaptureId = 1;
+    uint64_t m_mcpArtifactAccessSerial = 1;
+    struct McpComparison
+    {
+        uint64_t id = 0;
+        uint64_t beforeCaptureId = 0;
+        uint64_t afterCaptureId = 0;
+        std::string json;
+        std::string heatmapBase64;
+        size_t artifactBytes = 0;
+        uint64_t accessSerial = 0;
+    };
+    std::deque<McpComparison> m_mcpComparisons;
+    uint64_t m_nextMcpComparisonId = 1;
+    struct McpReview
+    {
+        uint64_t id = 0;
+        std::string preset;
+        std::string state = "queued";
+        std::string stage = "queued";
+        std::string errorCode;
+        std::string diagnostics;
+        std::vector<int> views;
+        std::vector<uint64_t> captureIds;
+        size_t nextView = 0;
+        uint64_t baselineCaptureId = 0;
+        uint64_t comparisonId = 0;
+        uint64_t startFrame = 0;
+        uint64_t settleUntilFrame = 0;
+        std::chrono::steady_clock::time_point deadline{};
+        double progress = 0.0;
+        bool cancelRequested = false;
+        bool artifactEvicted = false;
+        std::string auditJson;
+    };
+    std::deque<McpReview> m_mcpReviews;
+    uint64_t m_nextMcpReviewId = 1;
+    uint64_t m_activeMcpReviewId = 0;
+    enum class McpReviewVisualization : uint8_t
+    {
+        Color,
+        Radiance,
+        Normal,
+        ScalarX,
+        ScalarY,
+        ScalarZ,
+        ScalarW,
+        Motion,
+        Variance,
+    };
+    struct PendingMcpReviewReadback
+    {
+        uint64_t reviewId = 0;
+        int debugView = 0;
+        McpReviewVisualization visualization = McpReviewVisualization::Color;
+        ComPtr<ID3D12Resource> resource;
+        D3D12_RESOURCE_DESC sourceDesc{};
+        D3D12_PLACED_SUBRESOURCE_FOOTPRINT layout{};
+        UINT rows = 0;
+        UINT64 rowBytes = 0;
+        UINT64 totalBytes = 0;
+        UINT64 fenceValue = 0;
+        std::string sceneFingerprint;
+        std::string cameraFingerprint;
+        std::string materialFingerprint;
+        std::string lightingFingerprint;
+        std::string backendFingerprint;
+    };
+    struct McpReviewCaptureResult
+    {
+        uint64_t reviewId = 0;
+        int debugView = 0;
+        bool ok = false;
+        std::string base64Png;
+        lookdevpt::review::Rgba8Image rgba;
+        std::string diagnostics;
+        std::string sceneFingerprint;
+        std::string cameraFingerprint;
+        std::string materialFingerprint;
+        std::string lightingFingerprint;
+        std::string backendFingerprint;
+    };
+    std::optional<PendingMcpReviewReadback> m_pendingMcpReviewReadback;
+    std::future<McpReviewCaptureResult> m_mcpReviewCaptureFuture;
+    static McpReviewCaptureResult EncodeMcpReviewCapture(
+        uint64_t reviewId,
+        int debugView,
+        McpReviewVisualization visualization,
+        D3D12_RESOURCE_DESC sourceDesc,
+        UINT64 rowBytes,
+        std::vector<uint8_t> sourcePixels);
     lookdevpt::benchmark::Options m_benchmarkOptions;
     std::unique_ptr<lookdevpt::benchmark::Harness> m_benchmarkHarness;
     lookdevpt::benchmark::FramePlan m_benchmarkFramePlan;

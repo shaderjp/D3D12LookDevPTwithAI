@@ -158,10 +158,16 @@
     <ClCompile Include="Source\McpDispatcher.cpp">
       <Filter>Source Files\Services</Filter>
     </ClCompile>
+    <ClCompile Include="Source\McpReviewAnalysis.cpp">
+      <Filter>Source Files\Services</Filter>
+    </ClCompile>
     <ClCompile Include="Source\McpServer.cpp">
       <Filter>Source Files\Services</Filter>
     </ClCompile>
     <ClCompile Include="Tests\McpServerHttpTests.cpp">
+      <Filter>Source Files\Services</Filter>
+    </ClCompile>
+    <ClCompile Include="Tests\McpReviewAnalysisTests.cpp">
       <Filter>Source Files\Services</Filter>
     </ClCompile>
     <ClCompile Include="Source\QualitySettingsJson.cpp">
@@ -259,6 +265,9 @@
     <ClInclude Include="Source\McpDispatcher.h">
       <Filter>Header Files\Services</Filter>
     </ClInclude>
+    <ClInclude Include="Source\McpReviewAnalysis.h">
+      <Filter>Header Files\Services</Filter>
+    </ClInclude>
     <ClInclude Include="Source\McpServer.h">
       <Filter>Header Files\Services</Filter>
     </ClInclude>
@@ -309,6 +318,9 @@
   </ItemGroup>
   <ItemGroup>
     <None Include="Shaders\PathTracingABI.hlsli">
+      <Filter>Shaders\Shared</Filter>
+    </None>
+    <None Include="Shaders\PathTracingDebugViews.hlsli">
       <Filter>Shaders\Shared</Filter>
     </None>
     <None Include="Shaders\PathTracingSampling.hlsli">
@@ -372,6 +384,9 @@
       <Filter>Build Scripts</Filter>
     </None>
     <None Include="Scripts\TestMcpServerHttp.ps1">
+      <Filter>Build Scripts</Filter>
+    </None>
+    <None Include="Scripts\TestMcpReviewAnalysis.ps1">
       <Filter>Build Scripts</Filter>
     </None>
   </ItemGroup>

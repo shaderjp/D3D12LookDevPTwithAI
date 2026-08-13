@@ -232,6 +232,10 @@ Read tools:
 - `lookdevpt.list_render_modes`: returns render mode labels and action values.
 - `lookdevpt.get_diagnostics`: returns scene/project/capture/MCP diagnostics.
 - `lookdevpt.capture_viewport`: captures the current final/debug viewport as PNG and returns an inline `image/png` plus `lookdevpt://captures/latest.png`.
+- `lookdevpt.audit_scene`: returns cached, stable-code diagnostics for scene structure, geometry, materials, textures, lighting, and RTXDI/NRD/DLSS fallback state.
+- `lookdevpt.probe_surfaces`: traces up to 16 exact surface probes in normalized or output-pixel coordinates without writing the normal render targets or temporal history.
+- `lookdevpt.compare_captures`: compares two same-resolution captures using linear-sRGB RMSE/PSNR, luminance SSIM, maximum difference, changed-pixel ratio, fingerprints, and a heatmap.
+- `lookdevpt.start_review`, `lookdevpt.get_review`, and `lookdevpt.cancel_review`: run and control one asynchronous `quick`, `material`, `lighting`, or `temporal` review. Reviews are available in `read_only` mode and do not change camera, debug view, accumulation, temporal history, or project dirty state.
 
 Validation and capture workflow tools:
 
@@ -284,16 +288,25 @@ Tool results primarily use `structuredContent`. A text content summary is also i
 - `lookdevpt://render-modes`: render modes and `set_path_tracing.mode` values.
 - `lookdevpt://project`: current project path and dirty flag.
 - `lookdevpt://scene/summary`: scene counts, bounds, lights, and asset paths.
+- `lookdevpt://scene/audit`: cached scene and renderer-fallback audit.
 - `lookdevpt://actions/schema`: action names and JSON input schemas.
 - `lookdevpt://captures/index`: in-memory capture history.
 - `lookdevpt://captures/latest.png`: most recent PNG capture.
 - `lookdevpt://captures/{id}.png`: PNG from `capture_viewport` or `capture_debug_pack`.
+- `lookdevpt://reviews/index`: review queue/history and active review id.
+- `lookdevpt://reviews/{id}`: review state, progress, audit, captures, and optional comparison.
+- `lookdevpt://comparisons/{id}`: comparison metrics and scene/camera fingerprint matches.
+- `lookdevpt://comparisons/{id}/heatmap.png`: PNG difference heatmap.
+- `lookdevpt://probes/latest`: most recent surface-probe result.
 
 Resource templates:
 
 - `lookdevpt://captures/{id}.png`
 - `lookdevpt://materials/{index}`
 - `lookdevpt://materials/{index}/textures`
+- `lookdevpt://reviews/{id}`
+- `lookdevpt://comparisons/{id}`
+- `lookdevpt://comparisons/{id}/heatmap.png`
 
 Prompts:
 
@@ -301,6 +314,10 @@ Prompts:
 - `lookdevpt.tune_denoise`: propose and apply stable denoise settings through validation.
 - `lookdevpt.setup_camera_shot`: fit/refine a camera shot using scene bounds and state.
 - `lookdevpt.capture_debug_review`: capture a debug pack and summarize visible issues.
+- `lookdevpt.review_scene`: perform a non-destructive audit/review/probe workflow.
+- `lookdevpt.review_change`: review current output against a baseline capture and explain fingerprint mismatches separately.
+
+Review captures use an asynchronous GPU fence and one submitted capture per frame. PNG conversion runs on a worker. Capture and heatmap artifacts stay in memory and are limited to 24 images or 128 MiB with LRU eviction; active-review artifacts are pinned.
 
 ## State, Stats, And Benchmark Metrics
 

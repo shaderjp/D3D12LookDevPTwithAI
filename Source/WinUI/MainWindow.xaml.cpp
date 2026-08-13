@@ -925,6 +925,38 @@ void MainWindow::RefreshSnapshot()
         std::to_wstring(mcpActiveRequests) +
         L" · Pending commands: " +
         std::to_wstring(mcpPendingCommands));
+    std::int64_t reviewId = 0;
+    std::int64_t auditInfo = 0;
+    std::int64_t auditWarning = 0;
+    std::int64_t auditError = 0;
+    double reviewProgress = 0.0;
+    TryInteger(*snapshot, L"mcp.review.id", reviewId);
+    TryInteger(*snapshot, L"mcp.audit.info", auditInfo);
+    TryInteger(*snapshot, L"mcp.audit.warning", auditWarning);
+    TryInteger(*snapshot, L"mcp.audit.error", auditError);
+    TryDouble(*snapshot, L"mcp.review.progress", reviewProgress);
+    auto editorText = [&](wchar_t const* property, std::wstring fallback)
+    {
+        auto const found = snapshot->values.find(property);
+        if (found != snapshot->values.end())
+        {
+            if (auto const value = std::get_if<std::wstring>(&found->second)) return *value;
+            if (auto const value = std::get_if<std::string>(&found->second))
+                return std::wstring(value->begin(), value->end());
+        }
+        return fallback;
+    };
+    const std::wstring reviewState = editorText(L"mcp.review.state", L"idle");
+    const std::wstring reviewStage = editorText(L"mcp.review.stage", L"No active review");
+    McpReviewStatusText().Text(reviewId == 0
+        ? reviewStage
+        : L"Review " + std::to_wstring(reviewId) + L" · " + reviewState + L"\n" + reviewStage);
+    McpReviewProgress().Value(std::clamp(reviewProgress * 100.0, 0.0, 100.0));
+    McpCancelReviewButton().IsEnabled(reviewId != 0);
+    McpAuditCountsText().Text(
+        L"Audit · Errors: " + std::to_wstring(auditError) +
+        L" · Warnings: " + std::to_wstring(auditWarning) +
+        L" · Info: " + std::to_wstring(auditInfo));
     McpIdleText().Text(
         snapshot->mcpRunning
             ? L"Waiting for requests\u2026"

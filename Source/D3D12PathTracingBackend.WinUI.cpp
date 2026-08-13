@@ -487,6 +487,18 @@ void D3D12PathTracingBackend::ApplyEditorCommand(
         {
             StopMcpServer();
         }
+        else if (action == L"mcp.review.cancel")
+        {
+            std::lock_guard lock(m_mcpSnapshotMutex);
+            for (auto& review : m_mcpReviews)
+            {
+                if (review.id == m_activeMcpReviewId)
+                {
+                    review.cancelRequested = true;
+                    break;
+                }
+            }
+        }
         else if (action == L"mcp.token.regenerate")
         {
             {
@@ -1923,6 +1935,26 @@ D3D12PathTracingBackend::CaptureEditorSnapshot() const
     values[L"mcp.pendingCommands"] =
         static_cast<std::int64_t>(
             m_mcpDispatcher.PendingCount());
+    {
+        std::lock_guard lock(m_mcpSnapshotMutex);
+        values[L"mcp.audit.info"] = static_cast<std::int64_t>(m_mcpAuditInfoCount);
+        values[L"mcp.audit.warning"] = static_cast<std::int64_t>(m_mcpAuditWarningCount);
+        values[L"mcp.audit.error"] = static_cast<std::int64_t>(m_mcpAuditErrorCount);
+        values[L"mcp.review.id"] = static_cast<std::int64_t>(m_activeMcpReviewId);
+        values[L"mcp.review.progress"] = 0.0;
+        values[L"mcp.review.state"] = std::wstring(L"idle");
+        values[L"mcp.review.stage"] = std::wstring(L"No active review");
+        for (const auto& review : m_mcpReviews)
+        {
+            if (review.id == m_activeMcpReviewId)
+            {
+                values[L"mcp.review.progress"] = review.progress;
+                values[L"mcp.review.state"] = Widen(review.state);
+                values[L"mcp.review.stage"] = Widen(review.stage);
+                break;
+            }
+        }
+    }
     for (std::string const& request : status.recentRequests)
     {
         snapshot.recentRequests.push_back(Widen(request));

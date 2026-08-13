@@ -517,7 +517,7 @@ namespace
 
     bool IsSubscribableResourceUri(const std::string& uri)
     {
-        static const std::array<const char*, 11> uris =
+        static const std::array<const char*, 14> uris =
         {
             "lookdevpt://state",
             "lookdevpt://stats",
@@ -527,11 +527,15 @@ namespace
             "lookdevpt://material-presets",
             "lookdevpt://project",
             "lookdevpt://scene/summary",
+            "lookdevpt://scene/audit",
             "lookdevpt://captures/index",
             "lookdevpt://captures/latest.png",
+            "lookdevpt://reviews/index",
+            "lookdevpt://probes/latest",
             "lookdevpt://actions/schema",
         };
-        return std::find_if(uris.begin(), uris.end(), [&](const char* candidate) { return uri == candidate; }) != uris.end();
+        return std::find_if(uris.begin(), uris.end(), [&](const char* candidate) { return uri == candidate; }) != uris.end() ||
+            StartsWith(uri, "lookdevpt://reviews/") || StartsWith(uri, "lookdevpt://comparisons/");
     }
 
     int64_t ResourceTtlMs(const std::string& uri)
@@ -539,8 +543,11 @@ namespace
         if (uri == "lookdevpt://state") return 33;
         if (uri == "lookdevpt://stats" || uri == "lookdevpt://diagnostics") return 100;
         if (uri == "lookdevpt://materials" || StartsWith(uri, "lookdevpt://materials/") || uri == "lookdevpt://material-variants" ||
-            uri == "lookdevpt://material-presets" || uri == "lookdevpt://project" || uri == "lookdevpt://scene/summary") return 1000;
+            uri == "lookdevpt://material-presets" || uri == "lookdevpt://project" || uri == "lookdevpt://scene/summary" ||
+            uri == "lookdevpt://scene/audit") return 1000;
         if (uri == "lookdevpt://captures/index" || uri == "lookdevpt://captures/latest.png") return 0;
+        if (uri == "lookdevpt://reviews/index" || uri == "lookdevpt://probes/latest" ||
+            StartsWith(uri, "lookdevpt://reviews/") || StartsWith(uri, "lookdevpt://comparisons/")) return 0;
         if (StartsWith(uri, "lookdevpt://captures/") && uri != "lookdevpt://captures/latest.png") return CatalogTtlMs;
         return CatalogTtlMs;
     }
@@ -2031,6 +2038,11 @@ std::string BuildToolsListJson()
     const char* projectPathSchema = R"json({"type":"object","properties":{"path":{"type":"string"}},"required":["path"],"additionalProperties":false})json";
     const char* runActionsSchema = R"json({"type":"object","properties":{"actions":{"type":"array","items":{"type":"object","properties":{"method":{"type":"string"},"params":{"type":"object"}},"required":["method","params"],"additionalProperties":false},"minItems":1,"maxItems":16},"validateOnly":{"type":"boolean"},"stopOnError":{"type":"boolean"}},"required":["actions"],"additionalProperties":false})json";
     const char* captureDebugPackSchema = R"json({"type":"object","properties":{"views":{"type":"array","items":{"oneOf":[{"type":"integer"},{"type":"string"}]},"maxItems":8},"restoreView":{"type":"boolean"}},"additionalProperties":false})json";
+    const char* captureViewportSchema = R"json({"type":"object","properties":{"label":{"type":"string","maxLength":128}},"additionalProperties":false})json";
+    const char* probeSurfacesSchema = R"json({"type":"object","properties":{"coordinateSpace":{"type":"string","enum":["normalized","output_pixels"]},"points":{"type":"array","items":{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"}},"required":["x","y"],"additionalProperties":false},"minItems":1,"maxItems":16}},"required":["points"],"additionalProperties":false})json";
+    const char* compareCapturesSchema = R"json({"type":"object","properties":{"beforeCaptureId":{"type":"string"},"afterCaptureId":{"type":"string"}},"required":["beforeCaptureId","afterCaptureId"],"additionalProperties":false})json";
+    const char* startReviewSchema = R"json({"type":"object","properties":{"preset":{"type":"string","enum":["quick","material","lighting","temporal"]},"settleFrames":{"type":"integer","minimum":0,"maximum":600},"timeoutSeconds":{"type":"integer","minimum":1,"maximum":600},"baselineCaptureId":{"type":"string"}},"additionalProperties":false})json";
+    const char* reviewIdSchema = R"json({"type":"object","properties":{"reviewId":{"type":"string"}},"required":["reviewId"],"additionalProperties":false})json";
     std::vector<std::string> tools;
     tools.push_back(ToolJson("lookdevpt.get_stats", "Get renderer stats", "Return DXR, scene, renderer, ReSTIR, and denoiser stats.", EmptyObjectSchema().c_str(), true));
     tools.push_back(ToolJson("lookdevpt.get_state", "Get renderer state", "Return current scene, camera, lighting, path tracing, ReSTIR, denoise, and view state.", EmptyObjectSchema().c_str(), true));
@@ -2038,8 +2050,14 @@ std::string BuildToolsListJson()
     tools.push_back(ToolJson("lookdevpt.list_debug_views", "List debug views", "Return debug view ids, labels, and keys.", EmptyObjectSchema().c_str(), true));
     tools.push_back(ToolJson("lookdevpt.list_render_modes", "List render modes", "Return path tracing mode labels and action values.", EmptyObjectSchema().c_str(), true));
     tools.push_back(ToolJson("lookdevpt.get_diagnostics", "Get diagnostics", "Return scene, project, capture, and MCP diagnostics.", EmptyObjectSchema().c_str(), true));
-    tools.push_back(ToolJson("lookdevpt.capture_viewport", "Capture viewport", "Capture the current path-traced viewport as PNG.", EmptyObjectSchema().c_str()));
+    tools.push_back(ToolJson("lookdevpt.capture_viewport", "Capture viewport", "Capture the current path-traced viewport as PNG.", captureViewportSchema));
     tools.push_back(ToolJson("lookdevpt.capture_debug_pack", "Capture debug pack", "Capture up to eight debug views as PNG resources.", captureDebugPackSchema));
+    tools.push_back(ToolJson("lookdevpt.audit_scene", "Audit scene", "Audit scene structure, materials, textures, geometry, lighting, and renderer fallbacks without changing renderer state.", EmptyObjectSchema().c_str(), true));
+    tools.push_back(ToolJson("lookdevpt.probe_surfaces", "Probe surfaces", "Trace exact, non-destructive surface probes for up to sixteen viewport coordinates.", probeSurfacesSchema, true));
+    tools.push_back(ToolJson("lookdevpt.compare_captures", "Compare captures", "Compare two in-memory captures in linear sRGB and create a heatmap artifact.", compareCapturesSchema, true));
+    tools.push_back(ToolJson("lookdevpt.start_review", "Start review", "Start one asynchronous, non-destructive automatic LookDev review.", startReviewSchema, true));
+    tools.push_back(ToolJson("lookdevpt.get_review", "Get review", "Get progress and results for an automatic LookDev review.", reviewIdSchema, true));
+    tools.push_back(ToolJson("lookdevpt.cancel_review", "Cancel review", "Cancel an active automatic LookDev review.", reviewIdSchema, true));
     tools.push_back(ToolJson("lookdevpt.validate_action", "Validate action", "Validate an action without applying it.", actionSchema, true));
     tools.push_back(ToolJson("lookdevpt.run_actions", "Run actions", "Validate and run multiple action-layer mutations as one MCP request.", runActionsSchema));
     tools.push_back(ToolJson("lookdevpt.reset_accumulation", "Reset accumulation", "Reset progressive accumulation.", EmptyObjectSchema().c_str()));
@@ -2094,6 +2112,9 @@ std::string BuildResourcesListJson()
     resources.push_back(ResourceJson("lookdevpt://actions/schema", "actions_schema", "Action Schema", "Action names and input schemas.", "application/json"));
     resources.push_back(ResourceJson("lookdevpt://captures/index", "captures_index", "Capture Index", "In-memory MCP capture history.", "application/json"));
     resources.push_back(ResourceJson("lookdevpt://captures/latest.png", "latest_capture", "Latest Viewport Capture", "Most recent viewport capture.", "image/png"));
+    resources.push_back(ResourceJson("lookdevpt://scene/audit", "scene_audit", "Scene Audit", "Cached deterministic scene and renderer audit.", "application/json"));
+    resources.push_back(ResourceJson("lookdevpt://reviews/index", "reviews_index", "Review Index", "In-memory automatic LookDev review history.", "application/json"));
+    resources.push_back(ResourceJson("lookdevpt://probes/latest", "latest_probes", "Latest Surface Probes", "Most recent exact surface-probe result.", "application/json"));
     std::ostringstream out;
     out << "{\"resources\":[";
     AppendJoined(out, resources);
@@ -2107,6 +2128,9 @@ std::string BuildResourceTemplatesListJson()
     templates.push_back(ResourceTemplateJson("lookdevpt://captures/{id}.png", "capture_by_id", "Capture By Id", "Read an in-memory PNG capture by id.", "image/png"));
     templates.push_back(ResourceTemplateJson("lookdevpt://materials/{index}", "material_by_index", "Material By Index", "Read one material JSON object by material index.", "application/json"));
     templates.push_back(ResourceTemplateJson("lookdevpt://materials/{index}/textures", "material_textures_by_index", "Material Textures By Index", "Read texture slots and override state for one material.", "application/json"));
+    templates.push_back(ResourceTemplateJson("lookdevpt://reviews/{id}", "review_by_id", "Review By Id", "Read one automatic LookDev review.", "application/json"));
+    templates.push_back(ResourceTemplateJson("lookdevpt://comparisons/{id}", "comparison_by_id", "Comparison By Id", "Read capture comparison metrics and fingerprints.", "application/json"));
+    templates.push_back(ResourceTemplateJson("lookdevpt://comparisons/{id}/heatmap.png", "comparison_heatmap", "Comparison Heatmap", "Read the PNG difference heatmap for a comparison.", "image/png"));
     std::ostringstream out;
     out << "{\"resourceTemplates\":[";
     AppendJoined(out, templates);
@@ -2121,6 +2145,8 @@ std::string BuildPromptsListJson()
     prompts.push_back(PromptJson("lookdevpt.tune_denoise", "Tune Denoise", "Tune temporal denoise settings for a stable LookDev viewport."));
     prompts.push_back(PromptJson("lookdevpt.setup_camera_shot", "Setup Camera Shot", "Create or refine a camera shot using scene bounds and current state."));
     prompts.push_back(PromptJson("lookdevpt.capture_debug_review", "Capture Debug Review", "Capture key debug views and summarize rendering issues."));
+    prompts.push_back(PromptJson("lookdevpt.review_scene", "Review Scene", "Run a deterministic, non-destructive LookDev review of the current scene."));
+    prompts.push_back(PromptJson("lookdevpt.review_change", "Review Change", "Compare the current result to a baseline capture and review the change."));
     std::ostringstream out;
     out << "{\"prompts\":[";
     AppendJoined(out, prompts);
@@ -2151,6 +2177,16 @@ std::string BuildPromptGetResultJson(const std::string& name, const cld::JsonVal
     {
         return PromptTextResult("Capture debug views for review.",
             "Capture a debug review pack from D3D12LookDevPT. Call lookdevpt.capture_debug_pack with Final, Base Color, World Normal, Roughness, Metallic, Direct Signal, Indirect Signal, and History Confidence. Then read lookdevpt://captures/index and summarize visible render/debug issues.");
+    }
+    if (name == "lookdevpt.review_scene")
+    {
+        return PromptTextResult("Review the current LookDev scene without mutating it.",
+            "Call lookdevpt.audit_scene, then start lookdevpt.start_review with the most relevant preset. Poll lookdevpt.get_review until it reaches a terminal state. Read the review captures, probe suspicious surfaces with lookdevpt.probe_surfaces, and report issue codes, evidence, affected entities, and suggested fixes. Do not call mutation tools.");
+    }
+    if (name == "lookdevpt.review_change")
+    {
+        return PromptTextResult("Review a rendering change against a baseline.",
+            "Start lookdevpt.start_review with baselineCaptureId and the appropriate preset, poll lookdevpt.get_review, then read the comparison metrics and heatmap resource. Explain fingerprint mismatches separately from image differences and use lookdevpt.probe_surfaces to locate material or geometry causes. Do not mutate renderer state.");
     }
     found = false;
     return "{}";

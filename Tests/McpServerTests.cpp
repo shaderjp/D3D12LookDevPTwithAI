@@ -221,14 +221,32 @@ namespace
         Require(list.find("\"ttlMs\":3600000") != std::string::npos && list.find("\"cacheScope\":\"private\"") != std::string::npos, "list cache metadata missing");
         Require(list.find("\"annotations\":{\"readOnlyHint\":true}") != std::string::npos, "read-only annotation missing");
         Require(list.find("lookdevpt.get_stats") < list.find("lookdevpt.get_state"), "tool order is not deterministic");
+        Require(list.find("lookdevpt.audit_scene") != std::string::npos &&
+            list.find("lookdevpt.probe_surfaces") != std::string::npos &&
+            list.find("lookdevpt.compare_captures") != std::string::npos &&
+            list.find("lookdevpt.start_review") != std::string::npos,
+            "automatic review tools are missing");
 
         const std::string resourcesBody = "{\"jsonrpc\":\"2.0\",\"id\":21,\"method\":\"resources/list\",\"params\":{" + Meta() + "}}";
         const std::string resources = Exchange(port, RequestText(port, "POST", resourcesBody, "2026-07-28", "resources/list"));
         Require(resources.find("lookdevpt://state") != std::string::npos && resources.find("\"ttlMs\":3600000") != std::string::npos, "modern resources/list failed");
+        Require(resources.find("lookdevpt://scene/audit") != std::string::npos &&
+            resources.find("lookdevpt://reviews/index") != std::string::npos,
+            "automatic review resources are missing");
+
+        const std::string templatesBody = "{\"jsonrpc\":\"2.0\",\"id\":24,\"method\":\"resources/templates/list\",\"params\":{" + Meta() + "}}";
+        const std::string templates = Exchange(port, RequestText(port, "POST", templatesBody, "2026-07-28", "resources/templates/list"));
+        Require(templates.find("lookdevpt://reviews/{id}") != std::string::npos &&
+            templates.find("lookdevpt://comparisons/{id}") != std::string::npos &&
+            templates.find("lookdevpt://comparisons/{id}/heatmap.png") != std::string::npos,
+            "automatic review resource templates are missing");
 
         const std::string promptsBody = "{\"jsonrpc\":\"2.0\",\"id\":22,\"method\":\"prompts/list\",\"params\":{" + Meta() + "}}";
         const std::string prompts = Exchange(port, RequestText(port, "POST", promptsBody, "2026-07-28", "prompts/list"));
-        Require(prompts.find("lookdevpt.inspect_scene") != std::string::npos, "modern prompts/list failed");
+        Require(prompts.find("lookdevpt.inspect_scene") != std::string::npos &&
+            prompts.find("lookdevpt.review_scene") != std::string::npos &&
+            prompts.find("lookdevpt.review_change") != std::string::npos,
+            "modern prompts/list failed");
 
         const std::string promptBody = "{\"jsonrpc\":\"2.0\",\"id\":23,\"method\":\"prompts/get\",\"params\":{" + Meta() + ",\"name\":\"lookdevpt.inspect_scene\"}}";
         const std::string prompt = Exchange(port, RequestText(port, "POST", promptBody, "2026-07-28", "prompts/get", "lookdevpt.inspect_scene"));
@@ -327,13 +345,16 @@ namespace
     void TestSubscription(mcp::Server& server, uint16_t port)
     {
         const std::string body = "{\"jsonrpc\":\"2.0\",\"id\":20,\"method\":\"subscriptions/listen\",\"params\":{" + Meta() +
-            ",\"notifications\":{\"toolsListChanged\":true,\"resourceSubscriptions\":[\"lookdevpt://state\",\"lookdevpt://unsupported\",\"lookdevpt://state\"]}}}";
+            ",\"notifications\":{\"toolsListChanged\":true,\"resourceSubscriptions\":[\"lookdevpt://state\",\"lookdevpt://reviews/index\",\"lookdevpt://unsupported\",\"lookdevpt://state\"]}}}";
         SOCKET socketValue = Connect(port);
         SendAll(socketValue, RequestText(port, "POST", body, "2026-07-28", "subscriptions/listen"));
         const std::string acknowledged = ReceiveUntil(socketValue, "notifications/subscriptions/acknowledged");
         Require(acknowledged.find("Content-Type: text/event-stream") != std::string::npos, "subscription did not use SSE");
         Require(acknowledged.find("data: ") < acknowledged.find("notifications/subscriptions/acknowledged"), "subscription acknowledgment was not the first SSE event");
-        Require(acknowledged.find("\"resourceSubscriptions\":[\"lookdevpt://state\"]") != std::string::npos, "subscription filter was not acknowledged correctly");
+        Require(acknowledged.find("lookdevpt://state") != std::string::npos &&
+            acknowledged.find("lookdevpt://reviews/index") != std::string::npos &&
+            acknowledged.find("lookdevpt://unsupported") == std::string::npos,
+            "subscription filter was not acknowledged correctly");
         Require(acknowledged.find("toolsListChanged") == std::string::npos, "unsupported list notification was acknowledged");
 
         const std::string secondBody = "{\"jsonrpc\":\"2.0\",\"id\":21,\"method\":\"subscriptions/listen\",\"params\":{" + Meta() +
@@ -350,6 +371,10 @@ namespace
         Require(updated.find("notifications/resources/updated") == updated.rfind("notifications/resources/updated"), "duplicate revision notification was not coalesced");
         const std::string secondUpdated = ReceiveUntil(secondSocket, "notifications/resources/updated");
         Require(secondUpdated.find("\"uri\":\"lookdevpt://stats\"") != std::string::npos && secondUpdated.find("lookdevpt://state") == std::string::npos, "multiple subscription filters crossed streams");
+
+        server.PublishResourceUpdates({ "lookdevpt://reviews/index" });
+        const std::string reviewUpdated = ReceiveUntil(socketValue, "notifications/resources/updated");
+        Require(reviewUpdated.find("\"uri\":\"lookdevpt://reviews/index\"") != std::string::npos, "review progress resource update missing");
 
         const std::string keepAlive = ReceiveUntil(socketValue, ":\r\n\r\n");
         Require(keepAlive.find(":\r\n\r\n") != std::string::npos, "subscription keepalive was not sent");

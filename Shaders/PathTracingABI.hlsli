@@ -208,6 +208,7 @@ VK_BINDING(61, 0) RWStructuredBuffer<uint> g_secondaryGroupOffsets : register(u5
 VK_BINDING(62, 0) RWStructuredBuffer<SecondaryTask> g_secondaryTasks : register(u58, space0);
 VK_BINDING(63, 0) RWStructuredBuffer<SecondaryResult> g_secondaryResults : register(u59, space0);
 VK_BINDING(64, 0) RWByteAddressBuffer g_secondaryIndirectArgs : register(u60, space0);
+VK_BINDING(66, 0) RWByteAddressBuffer g_reviewProbeBuffer : register(u61, space0);
 VK_BINDING(0, 1) Texture2D g_textures[] : register(t0, space1);
 
 bool PreviousHistoryIsA()
@@ -2275,6 +2276,8 @@ bool GatherAdaptiveReprojectedLuminance(
     return true;
 }
 
+#include "PathTracingDebugViews.hlsli"
+
 void RunPathPixel(
     uint2 pixel,
     uint2 dimensions,
@@ -2431,22 +2434,28 @@ void RunPathPixel(
     float diffuseHitDistance = diffuseHitDistanceSum / (float)max(diffuseHitDistanceCount, 1u);
     float specularHitDistance = specularHitDistanceSum / (float)max(specularHitDistanceCount, 1u);
     uint debugMode = (uint)round(g_scene.debugOptions.x);
-    float3 debugColor = color;
-    if (debugMode == 1u) debugColor = firstHit.surface.baseColor;
-    if (debugMode == 2u) debugColor = firstHit.hit != 0u ? firstHit.surface.normal * 0.5f + 0.5f : 0.0f.xxx;
-    if (debugMode == 3u) debugColor = firstHit.surface.normalTexture;
-    if (debugMode == 4u) debugColor = firstHit.surface.roughness.xxx;
-    if (debugMode == 5u) debugColor = firstHit.surface.metallic.xxx;
-    if (debugMode == 6u) debugColor = firstHit.surface.emissive;
-    if (debugMode == 7u) debugColor = firstHit.hit != 0u ? saturate(firstHit.hitT / 250.0f).xxx : 0.0f.xxx;
-    if (debugMode == 8u) debugColor = diffuseSignal;
-    if (debugMode == 9u) debugColor = specularSignal;
-    if (debugMode == 10u) debugColor = (averageBounces / max(g_scene.pathOptions.x, 1.0f)).xxx;
+    float3 skyDebug = 0.0f.xxx;
     if (debugMode == 12u)
     {
         float3 skyDirection = GenerateCameraDirection(pixel);
-        debugColor = EvaluateSky(skyDirection, CameraPixelConeSpread(pixel, g_scene.jitterOptions.xy));
+        skyDebug = EvaluateSky(skyDirection, CameraPixelConeSpread(pixel, g_scene.jitterOptions.xy));
     }
+    float3 debugColor = SelectPrimaryDebugView(
+        debugMode,
+        color,
+        firstHit.hit != 0u,
+        firstHit.surface.baseColor,
+        firstHit.surface.normal,
+        firstHit.surface.normalTexture,
+        firstHit.surface.roughness,
+        firstHit.surface.metallic,
+        firstHit.surface.emissive,
+        firstHit.hitT,
+        diffuseSignal,
+        specularSignal,
+        averageBounces,
+        g_scene.pathOptions.x,
+        skyDebug);
     color = ApplyMaterialFocus(color, firstHit.surface.materialIndex, firstHit.hit);
     diffuseSignal = ApplyMaterialFocus(diffuseSignal, firstHit.surface.materialIndex, firstHit.hit);
     specularSignal = ApplyMaterialFocus(specularSignal, firstHit.surface.materialIndex, firstHit.hit);
@@ -2650,6 +2659,95 @@ void SecondaryRayGen()
         2u,
         taskIndex,
         task.sampleIndex);
+}
+
+void StoreProbeFloat(uint base, uint offset, float value)
+{
+    g_reviewProbeBuffer.Store(base + offset, asuint(value));
+}
+
+void StoreProbeFloat3(uint base, uint offset, float3 value)
+{
+    g_reviewProbeBuffer.Store3(base + offset, asuint(value));
+}
+
+[shader("raygeneration")]
+void ReviewProbeRayGen()
+{
+    const uint probeIndex = DispatchRaysIndex().x;
+    const uint base = probeIndex * 256u;
+    const float2 normalized = saturate(float2(
+        asfloat(g_reviewProbeBuffer.Load(base + 0u)),
+        asfloat(g_reviewProbeBuffer.Load(base + 4u))));
+    const uint2 dimensions = max((uint2)round(g_scene.rayOptions.zw), 1u.xx);
+    const uint2 pixel = min((uint2)(normalized * float2(dimensions)), dimensions - 1u.xx);
+    const float3 rayOrigin = g_scene.cameraPosition.xyz;
+    const float3 rayDirection = GenerateCameraDirection(pixel, 0.0f.xx);
+    RayPayload payload = EmptyPayload();
+    payload.rayConeSpread = CameraPixelConeSpread(pixel, 0.0f.xx);
+    RayDesc ray;
+    ray.Origin = rayOrigin;
+    ray.Direction = rayDirection;
+    ray.TMin = g_scene.rayOptions.x;
+    ray.TMax = g_scene.rayOptions.y;
+    TraceRay(g_sceneAs, RAY_FLAG_NONE, 0xff, 0, 0, 0, ray, payload);
+
+    g_reviewProbeBuffer.Store(base + 8u, 0x50524f42u);
+    g_reviewProbeBuffer.Store(base + 12u, PayloadHit(payload) ? 1u : 0u);
+    g_reviewProbeBuffer.Store(base + 16u, pixel.x);
+    g_reviewProbeBuffer.Store(base + 20u, pixel.y);
+    if (!PayloadHit(payload))
+    {
+        g_reviewProbeBuffer.Store(base + 32u, 0xffffffffu);
+        g_reviewProbeBuffer.Store(base + 36u, 0xffffffffu);
+        g_reviewProbeBuffer.Store(base + 40u, 0xffffffffu);
+        g_reviewProbeBuffer.Store(base + 44u, 0xffffffffu);
+        const float3 sky = EvaluateSky(rayDirection, payload.rayConeSpread);
+        StoreProbeFloat3(base, 160u, sky);
+        return;
+    }
+
+    SurfaceData surface = LoadPayloadSurface(payload, rayOrigin, rayDirection);
+    surface.normal = dot(surface.normal, -rayDirection) > 0.0f ? surface.normal : -surface.normal;
+    surface.geometricNormal = dot(surface.geometricNormal, -rayDirection) > 0.0f
+        ? surface.geometricNormal : -surface.geometricNormal;
+    g_reviewProbeBuffer.Store(base + 32u, payload.instanceIndex);
+    g_reviewProbeBuffer.Store(base + 36u, payload.geometryIndex);
+    g_reviewProbeBuffer.Store(base + 40u, payload.primitiveIndex);
+    g_reviewProbeBuffer.Store(base + 44u, surface.materialIndex);
+    StoreProbeFloat(base, 48u, payload.hitT);
+    uint aovWidth, aovHeight;
+    g_denoiseAov0.GetDimensions(aovWidth, aovHeight);
+    const uint2 aovPixel = min(pixel, uint2(max(aovWidth, 1u) - 1u, max(aovHeight, 1u) - 1u));
+    StoreProbeFloat(base, 52u, g_denoiseAov0[aovPixel].w);
+    StoreProbeFloat3(base, 56u, surface.position);
+    StoreProbeFloat3(base, 68u, surface.geometricNormal);
+    StoreProbeFloat3(base, 80u, surface.normal);
+    g_reviewProbeBuffer.Store2(base + 92u, asuint(surface.texcoord));
+    StoreProbeFloat3(base, 100u, surface.baseColor);
+    StoreProbeFloat(base, 112u, surface.roughness);
+    StoreProbeFloat(base, 116u, surface.metallic);
+    StoreProbeFloat3(base, 120u, surface.emissive);
+    StoreProbeFloat(base, 132u, surface.ao);
+    uint signalWidth, signalHeight;
+    g_signalDirect.GetDimensions(signalWidth, signalHeight);
+    const uint2 signalPixel = min(pixel, uint2(max(signalWidth, 1u) - 1u, max(signalHeight, 1u) - 1u));
+    const float3 direct = max(g_signalDirect[signalPixel].rgb, 0.0f.xxx);
+    const float3 indirect = max(g_signalIndirect[signalPixel].rgb, 0.0f.xxx);
+    const float3 residual = max(g_signalResidual[signalPixel].rgb, 0.0f.xxx);
+    StoreProbeFloat3(base, 136u, direct);
+    StoreProbeFloat3(base, 148u, indirect);
+    StoreProbeFloat3(base, 160u, direct + indirect + residual);
+    uint confidenceWidth, confidenceHeight;
+    g_diffuseHistoryConfidence.GetDimensions(confidenceWidth, confidenceHeight);
+    const uint2 confidencePixel = min(pixel, uint2(max(confidenceWidth, 1u) - 1u, max(confidenceHeight, 1u) - 1u));
+    const float diffuseConfidence = saturate(g_diffuseHistoryConfidence[confidencePixel]);
+    const float specularConfidence = saturate(g_specularHistoryConfidence[confidencePixel]);
+    StoreProbeFloat(base, 172u, diffuseConfidence);
+    StoreProbeFloat(base, 176u, specularConfidence);
+    StoreProbeFloat(base, 180u, min(diffuseConfidence, specularConfidence));
+    StoreProbeFloat3(base, 184u, surface.normalTexture);
+    StoreProbeFloat(base, 196u, surface.coverage);
 }
 
 [shader("miss")]

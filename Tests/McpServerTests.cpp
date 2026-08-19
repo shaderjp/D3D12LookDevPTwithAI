@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cctype>
 #include <cstdlib>
 #include <iostream>
 #include <sstream>
@@ -26,6 +27,21 @@ namespace
             result.ok = true;
             result.text = "called " + name;
             result.structuredJson = "{\"ok\":true,\"name\":\"" + cld::EscapeJson(name) + "\"}";
+            if (name == "lookdevpt.capture_viewport")
+            {
+                result.structuredJson = "{\"ok\":true,\"captureId\":1,\"resource\":\"lookdevpt://captures/1.png\"}";
+                result.contentJson = "[{\"type\":\"text\",\"text\":\"fake viewport capture\"},"
+                    "{\"type\":\"image\",\"data\":\"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=\",\"mimeType\":\"image/png\"},"
+                    "{\"type\":\"resource_link\",\"uri\":\"lookdevpt://captures/1.png\",\"name\":\"capture_1\",\"mimeType\":\"image/png\"}]";
+            }
+            else if (name == "lookdevpt.start_review")
+            {
+                result.structuredJson = "{\"ok\":true,\"reviewId\":1,\"state\":\"running\",\"resource\":\"lookdevpt://reviews/1\"}";
+            }
+            else if (name == "lookdevpt.get_review")
+            {
+                result.structuredJson = "{\"ok\":true,\"reviewId\":1,\"state\":\"completed\",\"progress\":1,\"capture\":\"lookdevpt://captures/1.png\",\"heatmap\":\"lookdevpt://comparisons/1/heatmap.png\"}";
+            }
             return result;
         }
 
@@ -33,6 +49,26 @@ namespace
         {
             mcp::ResourceResult result;
             result.uri = uri;
+            if (uri == "lookdevpt://captures/1.png" || uri == "lookdevpt://captures/latest.png" ||
+                uri == "lookdevpt://comparisons/1/heatmap.png")
+            {
+                result.ok = true;
+                result.mimeType = "image/png";
+                result.blob = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
+                return result;
+            }
+            if (uri == "lookdevpt://reviews/1")
+            {
+                result.ok = true;
+                result.text = "{\"reviewId\":1,\"state\":\"completed\",\"progress\":1}";
+                return result;
+            }
+            if (uri == "lookdevpt://comparisons/1")
+            {
+                result.ok = true;
+                result.text = "{\"id\":1,\"rmse\":0.01,\"psnr\":40,\"ssim\":0.99}";
+                return result;
+            }
             if (uri != "lookdevpt://state")
             {
                 result.error = "Resource not found.";
@@ -129,11 +165,11 @@ namespace
 
     std::string RequestText(uint16_t port, const std::string& method, const std::string& body,
         const std::string& protocolVersion, const std::string& mcpMethod = {}, const std::string& mcpName = {},
-        const std::string& sessionId = {}, const std::string& origin = {})
+        const std::string& sessionId = {}, const std::string& origin = {}, const std::string& token = Token)
     {
         std::string request = method + " /mcp HTTP/1.1\r\n";
         request += "Host: 127.0.0.1:" + std::to_string(port) + "\r\n";
-        request += "Authorization: Bearer " + std::string(Token) + "\r\n";
+        if (!token.empty()) request += "Authorization: Bearer " + token + "\r\n";
         if (!origin.empty()) request += "Origin: " + origin + "\r\n";
         if (!protocolVersion.empty()) request += "MCP-Protocol-Version: " + protocolVersion + "\r\n";
         if (!mcpMethod.empty()) request += "Mcp-Method: " + mcpMethod + "\r\n";
@@ -144,6 +180,28 @@ namespace
         request += "Content-Length: " + std::to_string(body.size()) + "\r\n\r\n";
         request += body;
         return request;
+    }
+
+    std::string PairingRequestText(uint16_t port, const std::string& method, const std::string& path,
+        const std::string& body = {}, const std::string& origin = {})
+    {
+        std::string request = method + " " + path + " HTTP/1.1\r\n";
+        request += "Host: 127.0.0.1:" + std::to_string(port) + "\r\n";
+        if (!origin.empty()) request += "Origin: " + origin + "\r\n";
+        request += "Accept: application/json\r\n";
+        request += "Content-Type: application/json\r\n";
+        request += "Content-Length: " + std::to_string(body.size()) + "\r\n\r\n" + body;
+        return request;
+    }
+
+    std::string JsonStringField(const std::string& response, const std::string& name)
+    {
+        const std::string prefix = "\"" + name + "\":\"";
+        const size_t begin = response.find(prefix);
+        if (begin == std::string::npos) return {};
+        const size_t valueBegin = begin + prefix.size();
+        const size_t end = response.find('"', valueBegin);
+        return end == std::string::npos ? std::string{} : response.substr(valueBegin, end - valueBegin);
     }
 
     std::string ChunkedRequestText(uint16_t port, const std::string& body,
@@ -224,21 +282,31 @@ namespace
         Require(list.find("lookdevpt.audit_scene") != std::string::npos &&
             list.find("lookdevpt.probe_surfaces") != std::string::npos &&
             list.find("lookdevpt.compare_captures") != std::string::npos &&
-            list.find("lookdevpt.start_review") != std::string::npos,
+            list.find("lookdevpt.start_review") != std::string::npos &&
+            list.find("lookdevpt.create_checkpoint") != std::string::npos &&
+            list.find("lookdevpt.restore_checkpoint") != std::string::npos &&
+            list.find("lookdevpt.start_benchmark") != std::string::npos &&
+            list.find("lookdevpt.get_benchmark") != std::string::npos &&
+            list.find("lookdevpt.cancel_benchmark") != std::string::npos,
             "automatic review tools are missing");
 
         const std::string resourcesBody = "{\"jsonrpc\":\"2.0\",\"id\":21,\"method\":\"resources/list\",\"params\":{" + Meta() + "}}";
         const std::string resources = Exchange(port, RequestText(port, "POST", resourcesBody, "2026-07-28", "resources/list"));
         Require(resources.find("lookdevpt://state") != std::string::npos && resources.find("\"ttlMs\":3600000") != std::string::npos, "modern resources/list failed");
         Require(resources.find("lookdevpt://scene/audit") != std::string::npos &&
-            resources.find("lookdevpt://reviews/index") != std::string::npos,
+            resources.find("lookdevpt://reviews/index") != std::string::npos &&
+            resources.find("lookdevpt://checkpoints/index") != std::string::npos &&
+            resources.find("lookdevpt://benchmarks/index") != std::string::npos,
             "automatic review resources are missing");
 
         const std::string templatesBody = "{\"jsonrpc\":\"2.0\",\"id\":24,\"method\":\"resources/templates/list\",\"params\":{" + Meta() + "}}";
         const std::string templates = Exchange(port, RequestText(port, "POST", templatesBody, "2026-07-28", "resources/templates/list"));
         Require(templates.find("lookdevpt://reviews/{id}") != std::string::npos &&
             templates.find("lookdevpt://comparisons/{id}") != std::string::npos &&
-            templates.find("lookdevpt://comparisons/{id}/heatmap.png") != std::string::npos,
+            templates.find("lookdevpt://comparisons/{id}/heatmap.png") != std::string::npos &&
+            templates.find("lookdevpt://checkpoints/{id}") != std::string::npos &&
+            templates.find("lookdevpt://benchmarks/{id}") != std::string::npos &&
+            templates.find("lookdevpt://benchmarks/{id}/{artifact}") != std::string::npos,
             "automatic review resource templates are missing");
 
         const std::string promptsBody = "{\"jsonrpc\":\"2.0\",\"id\":22,\"method\":\"prompts/list\",\"params\":{" + Meta() + "}}";
@@ -342,6 +410,42 @@ namespace
         Require(afterDelete.find("HTTP/1.1 404 Not Found") != std::string::npos, "deleted session remained valid");
     }
 
+    void TestPairing(mcp::Server& server, uint16_t port)
+    {
+        const std::string code = server.BeginPairing();
+        Require(code.size() == 8 && std::all_of(code.begin(), code.end(), [](unsigned char ch) { return std::isdigit(ch) != 0; }), "pairing code is not eight digits");
+        const std::string discovery = Exchange(port, PairingRequestText(port, "GET", "/.well-known/lookdevpt/v1"));
+        Require(discovery.find("HTTP/1.1 200 OK") != std::string::npos && discovery.find("\"contractVersion\":\"1.0\"") != std::string::npos, "pairing discovery failed");
+        Require(discovery.find(code) == std::string::npos, "pairing discovery disclosed the code");
+        const std::string remote = Exchange(port, PairingRequestText(port, "POST", "/pair", "{\"code\":\"" + code + "\",\"clientName\":\"remote\"}", "https://example.com"));
+        Require(remote.find("HTTP/1.1 403 Forbidden") != std::string::npos, "pairing accepted a remote Origin");
+
+        std::string wrongCode = code;
+        wrongCode[0] = wrongCode[0] == '9' ? '0' : static_cast<char>(wrongCode[0] + 1);
+        for (int attempt = 1; attempt <= 5; ++attempt)
+        {
+            const std::string wrong = Exchange(port, PairingRequestText(port, "POST", "/pair", "{\"code\":\"" + wrongCode + "\",\"clientName\":\"brute-force\"}"));
+            Require(wrong.find(attempt == 5 ? "HTTP/1.1 429 Too Many Requests" : "HTTP/1.1 401 Unauthorized") != std::string::npos,
+                "pairing brute-force limit is incorrect");
+        }
+
+        const std::string activeCode = server.BeginPairing();
+        const std::string paired = Exchange(port, PairingRequestText(port, "POST", "/pair", "{\"code\":\"" + activeCode + "\",\"clientName\":\"LocalMCPChatClient Tests\"}"));
+        Require(paired.find("HTTP/1.1 200 OK") != std::string::npos, "valid pairing failed");
+        const std::string clientId = JsonStringField(paired, "clientId");
+        const std::string pairedToken = JsonStringField(paired, "token");
+        Require(!clientId.empty() && pairedToken.size() == 64, "pairing did not issue a 256-bit token");
+        const std::string reused = Exchange(port, PairingRequestText(port, "POST", "/pair", "{\"code\":\"" + activeCode + "\",\"clientName\":\"reuse\"}"));
+        Require(reused.find("HTTP/1.1 409 Conflict") != std::string::npos, "one-time pairing code was reused");
+
+        const std::string initializeBody = "{\"jsonrpc\":\"2.0\",\"id\":80,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-11-25\",\"capabilities\":{},\"clientInfo\":{\"name\":\"paired\",\"version\":\"1\"}}}";
+        const std::string authorized = Exchange(port, RequestText(port, "POST", initializeBody, "2025-11-25", {}, {}, {}, {}, pairedToken));
+        Require(authorized.find("HTTP/1.1 200 OK") != std::string::npos, "paired token was not authorized");
+        Require(server.RevokePairedClient(clientId), "paired client could not be revoked");
+        const std::string revoked = Exchange(port, RequestText(port, "POST", initializeBody, "2025-11-25", {}, {}, {}, {}, pairedToken));
+        Require(revoked.find("HTTP/1.1 401 Unauthorized") != std::string::npos, "revoked token remained authorized");
+    }
+
     void TestSubscription(mcp::Server& server, uint16_t port)
     {
         const std::string body = "{\"jsonrpc\":\"2.0\",\"id\":20,\"method\":\"subscriptions/listen\",\"params\":{" + Meta() +
@@ -427,6 +531,7 @@ int main(int argc, char** argv)
         const uint16_t port = StartServer(server, host);
         TestModern(server, port);
         TestLegacy(port);
+        TestPairing(server, port);
         TestSubscription(server, port);
         server.Stop();
         WSACleanup();

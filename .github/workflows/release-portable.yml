@@ -1,0 +1,42 @@
+name: release-portable
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+
+jobs:
+  build:
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: actions/checkout@v4
+        with:
+          repository: shaderjp/LocalMCPChatClient
+          path: LocalMCPChatClient
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - name: Build and test integration
+        shell: pwsh
+        run: |
+          ./Scripts/BootstrapSuite.ps1 -LocalMcpRepository "$env:GITHUB_WORKSPACE/LocalMCPChatClient"
+      - name: Build portable suite
+        shell: pwsh
+        run: |
+          ./Scripts/BuildPortableSuite.ps1 -OutputDirectory "$env:RUNNER_TEMP/D3D12LookDevSuite" -LocalMcpRepository "$env:GITHUB_WORKSPACE/LocalMCPChatClient"
+      - name: Audit dependency and license payload
+        shell: pwsh
+        run: |
+          $suite = "$env:RUNNER_TEMP/D3D12LookDevSuite"
+          if (-not (Test-Path "$suite/suite-manifest.json")) { throw 'suite manifest missing' }
+          if (-not (Get-ChildItem $suite -Recurse -Filter '*LICENSE*')) { throw 'license payload missing' }
+          Get-ChildItem $suite -Recurse -Filter *.dll | ForEach-Object { $_.FullName }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: D3D12LookDevSuite-win-x64
+          path: |
+            ${{ runner.temp }}/D3D12LookDevSuite.zip
+            ${{ runner.temp }}/D3D12LookDevSuite.zip.sha256

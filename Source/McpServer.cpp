@@ -3,16 +3,21 @@
 
 #include <winsock2.h>
 #include <ws2tcpip.h>
+#include <bcrypt.h>
 
 #include <algorithm>
 #include <array>
 #include <cctype>
 #include <chrono>
 #include <functional>
+#include <filesystem>
+#include <fstream>
 #include <iomanip>
 #include <memory>
 #include <random>
 #include <sstream>
+
+#pragma comment(lib, "bcrypt.lib")
 
 namespace
 {
@@ -29,6 +34,8 @@ namespace
     constexpr auto LegacySessionIdleTimeout = std::chrono::minutes(30);
     constexpr auto SubscriptionKeepAlive = std::chrono::seconds(15);
     constexpr int64_t CatalogTtlMs = 3600000;
+    constexpr auto PairingLifetime = std::chrono::seconds(90);
+    constexpr int MaxPairingFailures = 5;
 
     std::string ToLowerAscii(std::string text)
     {
@@ -42,6 +49,44 @@ namespace
     bool StartsWith(const std::string& text, const std::string& prefix)
     {
         return text.size() >= prefix.size() && text.compare(0, prefix.size(), prefix) == 0;
+    }
+
+    std::string Sha256Hex(const std::string& value)
+    {
+        BCRYPT_ALG_HANDLE algorithm = nullptr;
+        BCRYPT_HASH_HANDLE hash = nullptr;
+        DWORD objectBytes = 0;
+        DWORD hashBytes = 0;
+        DWORD copied = 0;
+        if (BCryptOpenAlgorithmProvider(&algorithm, BCRYPT_SHA256_ALGORITHM, nullptr, 0) < 0 ||
+            BCryptGetProperty(algorithm, BCRYPT_OBJECT_LENGTH, reinterpret_cast<PUCHAR>(&objectBytes), sizeof(objectBytes), &copied, 0) < 0 ||
+            BCryptGetProperty(algorithm, BCRYPT_HASH_LENGTH, reinterpret_cast<PUCHAR>(&hashBytes), sizeof(hashBytes), &copied, 0) < 0)
+        {
+            if (algorithm) BCryptCloseAlgorithmProvider(algorithm, 0);
+            throw std::runtime_error("SHA-256 provider initialization failed.");
+        }
+        std::vector<unsigned char> object(objectBytes);
+        std::vector<unsigned char> digest(hashBytes);
+        const NTSTATUS created = BCryptCreateHash(algorithm, &hash, object.data(), objectBytes, nullptr, 0, 0);
+        const NTSTATUS updated = created < 0 ? created : BCryptHashData(hash,
+            reinterpret_cast<PUCHAR>(const_cast<char*>(value.data())), static_cast<ULONG>(value.size()), 0);
+        const NTSTATUS finished = updated < 0 ? updated : BCryptFinishHash(hash, digest.data(), hashBytes, 0);
+        if (hash) BCryptDestroyHash(hash);
+        BCryptCloseAlgorithmProvider(algorithm, 0);
+        if (finished < 0) throw std::runtime_error("SHA-256 hashing failed.");
+        std::ostringstream output;
+        output << std::hex << std::setfill('0');
+        for (const unsigned char byte : digest) output << std::setw(2) << static_cast<unsigned>(byte);
+        return output.str();
+    }
+
+    std::string GeneratePairingCode()
+    {
+        std::random_device randomDevice;
+        std::uniform_int_distribution<unsigned long> distribution(0, 99'999'999);
+        std::ostringstream code;
+        code << std::setw(8) << std::setfill('0') << distribution(randomDevice);
+        return code.str();
     }
 
     bool ContainsHeaderToken(const std::string& header, const std::string& token)
@@ -107,6 +152,11 @@ namespace
     const char* ServerInfoJson()
     {
         return R"json({"name":"d3d12lookdevpt","title":"D3D12LookDevPT","version":"0.1.0"})json";
+    }
+
+    const char* LookDevExperimentalJson()
+    {
+        return R"json({"lookdevpt":{"contractVersion":"1.0","features":{"imageArtifacts":true,"structuredContent":true,"resourceTemplates":true,"prompts":true,"resourceSubscriptions":true,"sceneAudit":true,"viewportCapture":true,"asyncReview":true,"comparisonHeatmap":true,"surfaceProbe":true,"pairing":true,"checkpoints":true,"benchmarks":true},"artifactLimits":{"maxImageBytes":16777216,"maxImagesPerToolCall":8,"maxTurnBytes":67108864,"maxDecodedPixels":64000000}}})json";
     }
 
     std::string ModernResultJson(const std::string& resultJson, int64_t ttlMs = -1)
@@ -517,7 +567,7 @@ namespace
 
     bool IsSubscribableResourceUri(const std::string& uri)
     {
-        static const std::array<const char*, 14> uris =
+        static const std::array<const char*, 16> uris =
         {
             "lookdevpt://state",
             "lookdevpt://stats",
@@ -531,11 +581,14 @@ namespace
             "lookdevpt://captures/index",
             "lookdevpt://captures/latest.png",
             "lookdevpt://reviews/index",
+            "lookdevpt://checkpoints/index",
+            "lookdevpt://benchmarks/index",
             "lookdevpt://probes/latest",
             "lookdevpt://actions/schema",
         };
         return std::find_if(uris.begin(), uris.end(), [&](const char* candidate) { return uri == candidate; }) != uris.end() ||
-            StartsWith(uri, "lookdevpt://reviews/") || StartsWith(uri, "lookdevpt://comparisons/");
+            StartsWith(uri, "lookdevpt://reviews/") || StartsWith(uri, "lookdevpt://comparisons/") ||
+            StartsWith(uri, "lookdevpt://checkpoints/") || StartsWith(uri, "lookdevpt://benchmarks/");
     }
 
     int64_t ResourceTtlMs(const std::string& uri)
@@ -546,8 +599,9 @@ namespace
             uri == "lookdevpt://material-presets" || uri == "lookdevpt://project" || uri == "lookdevpt://scene/summary" ||
             uri == "lookdevpt://scene/audit") return 1000;
         if (uri == "lookdevpt://captures/index" || uri == "lookdevpt://captures/latest.png") return 0;
-        if (uri == "lookdevpt://reviews/index" || uri == "lookdevpt://probes/latest" ||
-            StartsWith(uri, "lookdevpt://reviews/") || StartsWith(uri, "lookdevpt://comparisons/")) return 0;
+        if (uri == "lookdevpt://reviews/index" || uri == "lookdevpt://checkpoints/index" || uri == "lookdevpt://benchmarks/index" || uri == "lookdevpt://probes/latest" ||
+            StartsWith(uri, "lookdevpt://reviews/") || StartsWith(uri, "lookdevpt://comparisons/") ||
+            StartsWith(uri, "lookdevpt://checkpoints/") || StartsWith(uri, "lookdevpt://benchmarks/")) return 0;
         if (StartsWith(uri, "lookdevpt://captures/") && uri != "lookdevpt://captures/latest.png") return CatalogTtlMs;
         return CatalogTtlMs;
     }
@@ -590,6 +644,8 @@ bool Server::Start(const ServerSettings& settings, IServerHost* host)
         return false;
     }
 
+    m_settings = settings;
+    LoadPairedClients();
     try
     {
         const cld::JsonValue catalog = cld::JsonParser(BuildToolsListJson()).Parse();
@@ -761,7 +817,40 @@ ServerStatus Server::GetStatus() const
     status.activeSubscriptions = m_activeSubscriptions.load();
     status.activeRequests = m_activeRequests.load();
     status.recentRequests = m_recentRequests;
+    const auto now = std::chrono::steady_clock::now();
+    if (!m_pairingCode.empty() && now < m_pairingExpiresAt)
+    {
+        status.pairingCode = m_pairingCode;
+        status.pairingSecondsRemaining = static_cast<int>(std::chrono::duration_cast<std::chrono::seconds>(m_pairingExpiresAt - now).count()) + 1;
+    }
+    for (const PairedClient& client : m_pairedClients) status.pairedClients.push_back({ client.id, client.name });
     return status;
+}
+
+std::string Server::BeginPairing()
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_pairingCode = GeneratePairingCode();
+    m_pairingExpiresAt = std::chrono::steady_clock::now() + PairingLifetime;
+    m_pairingFailures = 0;
+    return m_pairingCode;
+}
+
+bool Server::RevokePairedClient(const std::string& clientId)
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    const auto iterator = std::find_if(m_pairedClients.begin(), m_pairedClients.end(), [&](const PairedClient& client) { return client.id == clientId; });
+    if (iterator == m_pairedClients.end()) return false;
+    m_pairedClients.erase(iterator);
+    SavePairedClientsLocked();
+    return true;
+}
+
+void Server::RevokeAllPairedClients()
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_pairedClients.clear();
+    SavePairedClientsLocked();
 }
 
 void Server::PublishResourceUpdates(const std::vector<std::string>& uris)
@@ -1389,10 +1478,6 @@ void Server::StreamSubscription(uintptr_t socketValue, const HttpResponse& respo
 
 Server::HttpResponse Server::HandleHttpRequest(const HttpRequest& request)
 {
-    if (request.path != "/mcp")
-    {
-        return JsonResponse(404, "Not Found", MakeHttpErrorBody(-32601, "MCP endpoint is /mcp."));
-    }
     if (!ValidateOrigin(request))
     {
         return JsonResponse(403, "Forbidden", MakeHttpErrorBody(-32000, "Origin is not allowed."));
@@ -1400,6 +1485,23 @@ Server::HttpResponse Server::HandleHttpRequest(const HttpRequest& request)
     if (!ValidateHost(request))
     {
         return JsonResponse(403, "Forbidden", MakeHttpErrorBody(-32000, "Host is not allowed."));
+    }
+    if (request.path == "/.well-known/lookdevpt/v1")
+    {
+        if (request.method != "GET") return JsonResponse(405, "Method Not Allowed", MakeHttpErrorBody(-32000, "Discovery requires GET."));
+        const ServerStatus status = GetStatus();
+        return JsonResponse(200, "OK", "{\"name\":\"D3D12LookDevPTWinUI\",\"version\":\"0.1.0\",\"contractVersion\":\"1.0\",\"endpoint\":\"" +
+            cld::EscapeJson(status.endpoint) + "\",\"pairing\":{\"available\":true,\"active\":" + (status.pairingSecondsRemaining > 0 ? "true" : "false") +
+            ",\"expiresInSeconds\":" + std::to_string(status.pairingSecondsRemaining) + "}}");
+    }
+    if (request.path == "/pair")
+    {
+        if (request.method != "POST") return JsonResponse(405, "Method Not Allowed", MakeHttpErrorBody(-32000, "Pairing requires POST."));
+        return HandlePairRequest(request);
+    }
+    if (request.path != "/mcp")
+    {
+        return JsonResponse(404, "Not Found", MakeHttpErrorBody(-32601, "MCP endpoint is /mcp."));
     }
     if (!ValidateAuthorization(request))
     {
@@ -1509,6 +1611,49 @@ Server::HttpResponse Server::HandleHttpRequest(const HttpRequest& request)
     return HandleJsonRpc(request, rpc, modern);
 }
 
+Server::HttpResponse Server::HandlePairRequest(const HttpRequest& request)
+{
+    cld::JsonValue body;
+    try { body = cld::JsonParser(request.body).Parse(); }
+    catch (const std::exception& ex) { return JsonResponse(400, "Bad Request", MakeHttpErrorBody(-32700, ex.what())); }
+    if (body.type != cld::JsonValue::Type::Object) return JsonResponse(400, "Bad Request", MakeHttpErrorBody(-32602, "Pairing body must be an object."));
+    const std::string code = cld::JsonStringOr(body, "code");
+    std::string clientName = cld::JsonStringOr(body, "clientName", "LocalMCPChatClient");
+    if (clientName.empty()) clientName = "LocalMCPChatClient";
+    if (clientName.size() > 128 || code.size() != 8 || !std::all_of(code.begin(), code.end(), [](unsigned char ch) { return std::isdigit(ch) != 0; }))
+        return JsonResponse(400, "Bad Request", MakeHttpErrorBody(-32602, "Pairing requires an 8-digit code and a clientName of at most 128 bytes."));
+
+    std::lock_guard<std::mutex> lock(m_mutex);
+    const auto now = std::chrono::steady_clock::now();
+    if (m_pairingCode.empty() || now >= m_pairingExpiresAt)
+    {
+        m_pairingCode.clear();
+        return JsonResponse(409, "Conflict", MakeHttpErrorBody(-32030, "No active pairing code."));
+    }
+    if (!ConstantTimeEquals(code, m_pairingCode))
+    {
+        ++m_pairingFailures;
+        if (m_pairingFailures >= MaxPairingFailures)
+        {
+            m_pairingCode.clear();
+            return JsonResponse(429, "Too Many Requests", MakeHttpErrorBody(-32031, "Pairing code invalidated after five failures."));
+        }
+        return JsonResponse(401, "Unauthorized", MakeHttpErrorBody(-32031, "Pairing code is invalid."));
+    }
+
+    const std::string token = GenerateToken(32);
+    const std::string clientId = GenerateToken(12);
+    if (m_pairedClients.size() >= 32) m_pairedClients.erase(m_pairedClients.begin());
+    m_pairedClients.push_back(PairedClient{ clientId, clientName, Sha256Hex(token) });
+    SavePairedClientsLocked();
+    m_pairingCode.clear();
+    m_pairingFailures = 0;
+    m_recentRequests.push_back("paired client: " + clientName);
+    if (m_recentRequests.size() > 12) m_recentRequests.erase(m_recentRequests.begin());
+    return JsonResponse(200, "OK", "{\"clientId\":\"" + clientId + "\",\"clientName\":\"" + cld::EscapeJson(clientName) +
+        "\",\"endpoint\":\"http://127.0.0.1:" + std::to_string(m_settings.port) + "/mcp\",\"token\":\"" + token + "\",\"contractVersion\":\"1.0\"}");
+}
+
 Server::HttpResponse Server::HandleJsonRpc(const HttpRequest& request, const cld::JsonValue& rpc, bool modern)
 {
     if (rpc.type != cld::JsonValue::Type::Object)
@@ -1570,6 +1715,7 @@ Server::HttpResponse Server::HandleJsonRpc(const HttpRequest& request, const cld
     {
         const std::string result = "{\"resultType\":\"complete\",\"supportedVersions\":" + SupportedVersionsJson() +
             ",\"capabilities\":{\"tools\":{\"listChanged\":false},\"resources\":{\"subscribe\":true,\"listChanged\":false},\"prompts\":{\"listChanged\":false}},"
+            "\"experimental\":" + std::string(LookDevExperimentalJson()) + ","
             "\"instructions\":\"Use lookdevpt.* tools to inspect and control the local D3D12LookDevPT session.\","
             "\"ttlMs\":" + std::to_string(CatalogTtlMs) + ",\"cacheScope\":\"private\",\"_meta\":{\"io.modelcontextprotocol/serverInfo\":" + ServerInfoJson() + "}}";
         return JsonResponse(200, "OK", MakeResponse(idJson, result));
@@ -1730,6 +1876,7 @@ Server::HttpResponse Server::HandleInitialize(const cld::JsonValue& rpc)
 
     std::string result = "{\"protocolVersion\":\"" + negotiatedVersion + "\","
         "\"capabilities\":{\"tools\":{\"listChanged\":false},\"resources\":{\"listChanged\":false},\"prompts\":{\"listChanged\":false}},"
+        "\"experimental\":" + std::string(LookDevExperimentalJson()) + ","
         "\"serverInfo\":" + std::string(ServerInfoJson()) + ","
         "\"instructions\":\"Use lookdevpt.* tools to inspect and control the local D3D12LookDevPT session.\"}";
     HttpResponse response = JsonResponse(200, "OK", MakeResponse(JsonIdToJson(rpc), result));
@@ -1803,7 +1950,17 @@ bool Server::ValidateAuthorization(const HttpRequest& request) const
         return true;
     }
     const std::string authorization = HeaderValue(request.headers, "authorization");
-    return ConstantTimeEquals(authorization, "Bearer " + m_settings.token);
+    if (ConstantTimeEquals(authorization, "Bearer " + m_settings.token)) return true;
+    constexpr const char* prefix = "Bearer ";
+    if (!StartsWith(authorization, prefix)) return false;
+    std::string presentedHash;
+    try { presentedHash = Sha256Hex(authorization.substr(std::char_traits<char>::length(prefix))); }
+    catch (...) { return false; }
+    std::lock_guard<std::mutex> lock(m_mutex);
+    return std::any_of(m_pairedClients.begin(), m_pairedClients.end(), [&](const PairedClient& client)
+    {
+        return ConstantTimeEquals(presentedHash, client.tokenHash);
+    });
 }
 
 bool Server::ValidateProtocolHeader(const HttpRequest& request, std::string& diagnostics) const
@@ -1935,6 +2092,62 @@ void Server::AppendLog(const std::string& message)
     }
 }
 
+void Server::LoadPairedClients()
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_pairedClients.clear();
+    if (m_settings.pairedClientsPath.empty()) return;
+    std::ifstream file(std::filesystem::path(m_settings.pairedClientsPath), std::ios::binary);
+    if (!file) return;
+    try
+    {
+        std::stringstream buffer;
+        buffer << file.rdbuf();
+        const cld::JsonValue root = cld::JsonParser(buffer.str()).Parse();
+        const cld::JsonValue* clients = cld::FindMember(root, "clients");
+        if (!clients || clients->type != cld::JsonValue::Type::Array) return;
+        for (const cld::JsonValue& value : clients->array)
+        {
+            if (value.type != cld::JsonValue::Type::Object || m_pairedClients.size() >= 32) break;
+            const std::string id = cld::JsonStringOr(value, "id");
+            const std::string name = cld::JsonStringOr(value, "name");
+            const std::string hash = cld::JsonStringOr(value, "tokenHash");
+            if (id.empty() || id.size() > 64 || name.empty() || name.size() > 128 || hash.size() != 64 ||
+                !std::all_of(hash.begin(), hash.end(), [](unsigned char ch) { return std::isxdigit(ch) != 0; })) continue;
+            m_pairedClients.push_back(PairedClient{ id, name, ToLowerAscii(hash) });
+        }
+    }
+    catch (...) { m_pairedClients.clear(); }
+}
+
+void Server::SavePairedClientsLocked() const
+{
+    if (m_settings.pairedClientsPath.empty()) return;
+    const std::filesystem::path path(m_settings.pairedClientsPath);
+    std::error_code error;
+    std::filesystem::create_directories(path.parent_path(), error);
+    const std::filesystem::path temporary = path.wstring() + L".tmp";
+    std::ofstream file(temporary, std::ios::binary | std::ios::trunc);
+    if (!file) return;
+    file << "{\n  \"schemaVersion\": 1,\n  \"clients\": [";
+    for (size_t index = 0; index < m_pairedClients.size(); ++index)
+    {
+        const PairedClient& client = m_pairedClients[index];
+        file << (index == 0 ? "\n" : ",\n") << "    {\"id\":\"" << cld::EscapeJson(client.id)
+            << "\",\"name\":\"" << cld::EscapeJson(client.name) << "\",\"tokenHash\":\"" << client.tokenHash << "\"}";
+    }
+    file << "\n  ]\n}\n";
+    file.close();
+    if (!file) { std::filesystem::remove(temporary, error); return; }
+    std::filesystem::rename(temporary, path, error);
+    if (error)
+    {
+        std::filesystem::remove(path, error);
+        error.clear();
+        std::filesystem::rename(temporary, path, error);
+    }
+}
+
 std::string GenerateToken(size_t byteCount)
 {
     std::random_device randomDevice;
@@ -2043,6 +2256,10 @@ std::string BuildToolsListJson()
     const char* compareCapturesSchema = R"json({"type":"object","properties":{"beforeCaptureId":{"type":"string"},"afterCaptureId":{"type":"string"}},"required":["beforeCaptureId","afterCaptureId"],"additionalProperties":false})json";
     const char* startReviewSchema = R"json({"type":"object","properties":{"preset":{"type":"string","enum":["quick","material","lighting","temporal"]},"settleFrames":{"type":"integer","minimum":0,"maximum":600},"timeoutSeconds":{"type":"integer","minimum":1,"maximum":600},"baselineCaptureId":{"type":"string"}},"additionalProperties":false})json";
     const char* reviewIdSchema = R"json({"type":"object","properties":{"reviewId":{"type":"string"}},"required":["reviewId"],"additionalProperties":false})json";
+    const char* createCheckpointSchema = R"json({"type":"object","properties":{"label":{"type":"string","maxLength":128}},"additionalProperties":false})json";
+    const char* checkpointIdSchema = R"json({"type":"object","properties":{"checkpointId":{"type":"string"}},"required":["checkpointId"],"additionalProperties":false})json";
+    const char* startBenchmarkSchema = R"json({"type":"object","properties":{"kind":{"type":"string","enum":["combined","performance","quality"]},"cameraPath":{"type":"string"},"frames":{"type":"integer","minimum":1,"maximum":10000},"warmup":{"type":"integer","minimum":0,"maximum":2000},"seed":{"type":"integer","minimum":0},"captureEvery":{"type":"integer","minimum":0,"maximum":10000},"captureAovs":{"type":"boolean"}},"required":["cameraPath"],"additionalProperties":false})json";
+    const char* benchmarkIdSchema = R"json({"type":"object","properties":{"benchmarkId":{"type":"string"}},"required":["benchmarkId"],"additionalProperties":false})json";
     std::vector<std::string> tools;
     tools.push_back(ToolJson("lookdevpt.get_stats", "Get renderer stats", "Return DXR, scene, renderer, ReSTIR, and denoiser stats.", EmptyObjectSchema().c_str(), true));
     tools.push_back(ToolJson("lookdevpt.get_state", "Get renderer state", "Return current scene, camera, lighting, path tracing, ReSTIR, denoise, and view state.", EmptyObjectSchema().c_str(), true));
@@ -2060,6 +2277,12 @@ std::string BuildToolsListJson()
     tools.push_back(ToolJson("lookdevpt.cancel_review", "Cancel review", "Cancel an active automatic LookDev review.", reviewIdSchema, true));
     tools.push_back(ToolJson("lookdevpt.validate_action", "Validate action", "Validate an action without applying it.", actionSchema, true));
     tools.push_back(ToolJson("lookdevpt.run_actions", "Run actions", "Validate and run multiple action-layer mutations as one MCP request.", runActionsSchema));
+    tools.push_back(ToolJson("lookdevpt.create_checkpoint", "Create checkpoint", "Capture camera, lighting, material, quality, denoise, and view state for the current scene fingerprint.", createCheckpointSchema));
+    tools.push_back(ToolJson("lookdevpt.restore_checkpoint", "Restore checkpoint", "Restore a checkpoint only when the current scene fingerprint matches.", checkpointIdSchema));
+    tools.push_back(ToolJson("lookdevpt.delete_checkpoint", "Delete checkpoint", "Delete one stored renderer checkpoint.", checkpointIdSchema));
+    tools.push_back(ToolJson("lookdevpt.start_benchmark", "Start benchmark", "Start an asynchronous deterministic benchmark and checkpoint interactive state.", startBenchmarkSchema));
+    tools.push_back(ToolJson("lookdevpt.get_benchmark", "Get benchmark", "Get asynchronous benchmark progress and result artifact links.", benchmarkIdSchema, true));
+    tools.push_back(ToolJson("lookdevpt.cancel_benchmark", "Cancel benchmark", "Cancel an asynchronous benchmark and restore interactive state.", benchmarkIdSchema));
     tools.push_back(ToolJson("lookdevpt.reset_accumulation", "Reset accumulation", "Reset progressive accumulation.", EmptyObjectSchema().c_str()));
     tools.push_back(ToolJson("lookdevpt.reset_denoise_history", "Reset denoise history", "Invalidate denoise temporal history.", EmptyObjectSchema().c_str()));
     tools.push_back(ToolJson("lookdevpt.reset_reservoirs", "Reset reservoirs", "Reset accumulation, ReSTIR reservoirs, and denoise history.", EmptyObjectSchema().c_str()));
@@ -2099,6 +2322,7 @@ std::string BuildToolsListJson()
 std::string BuildResourcesListJson()
 {
     std::vector<std::string> resources;
+    resources.push_back(ResourceJson("lookdevpt://integration", "integration", "LookDev Integration", "Application, MCP contract, review features, and artifact limits.", "application/json"));
     resources.push_back(ResourceJson("lookdevpt://state", "state", "D3D12LookDevPT State", "Current renderer state as JSON.", "application/json"));
     resources.push_back(ResourceJson("lookdevpt://stats", "stats", "D3D12LookDevPT Stats", "Current renderer stats as JSON.", "application/json"));
     resources.push_back(ResourceJson("lookdevpt://diagnostics", "diagnostics", "Diagnostics", "Scene, project, capture, and MCP diagnostics.", "application/json"));
@@ -2114,6 +2338,8 @@ std::string BuildResourcesListJson()
     resources.push_back(ResourceJson("lookdevpt://captures/latest.png", "latest_capture", "Latest Viewport Capture", "Most recent viewport capture.", "image/png"));
     resources.push_back(ResourceJson("lookdevpt://scene/audit", "scene_audit", "Scene Audit", "Cached deterministic scene and renderer audit.", "application/json"));
     resources.push_back(ResourceJson("lookdevpt://reviews/index", "reviews_index", "Review Index", "In-memory automatic LookDev review history.", "application/json"));
+    resources.push_back(ResourceJson("lookdevpt://checkpoints/index", "checkpoints_index", "Checkpoint Index", "Stored safe-change checkpoints for the current renderer session.", "application/json"));
+    resources.push_back(ResourceJson("lookdevpt://benchmarks/index", "benchmarks_index", "Benchmark Index", "Asynchronous benchmark run history and progress.", "application/json"));
     resources.push_back(ResourceJson("lookdevpt://probes/latest", "latest_probes", "Latest Surface Probes", "Most recent exact surface-probe result.", "application/json"));
     std::ostringstream out;
     out << "{\"resources\":[";
@@ -2129,6 +2355,9 @@ std::string BuildResourceTemplatesListJson()
     templates.push_back(ResourceTemplateJson("lookdevpt://materials/{index}", "material_by_index", "Material By Index", "Read one material JSON object by material index.", "application/json"));
     templates.push_back(ResourceTemplateJson("lookdevpt://materials/{index}/textures", "material_textures_by_index", "Material Textures By Index", "Read texture slots and override state for one material.", "application/json"));
     templates.push_back(ResourceTemplateJson("lookdevpt://reviews/{id}", "review_by_id", "Review By Id", "Read one automatic LookDev review.", "application/json"));
+    templates.push_back(ResourceTemplateJson("lookdevpt://checkpoints/{id}", "checkpoint_by_id", "Checkpoint By Id", "Read checkpoint fingerprints and label.", "application/json"));
+    templates.push_back(ResourceTemplateJson("lookdevpt://benchmarks/{id}", "benchmark_by_id", "Benchmark By Id", "Read benchmark progress and artifact links.", "application/json"));
+    templates.push_back(ResourceTemplateJson("lookdevpt://benchmarks/{id}/{artifact}", "benchmark_artifact", "Benchmark Artifact", "Read summary.json, artifacts.json, quality_analysis.json, or frames.csv.", "application/octet-stream"));
     templates.push_back(ResourceTemplateJson("lookdevpt://comparisons/{id}", "comparison_by_id", "Comparison By Id", "Read capture comparison metrics and fingerprints.", "application/json"));
     templates.push_back(ResourceTemplateJson("lookdevpt://comparisons/{id}/heatmap.png", "comparison_heatmap", "Comparison Heatmap", "Read the PNG difference heatmap for a comparison.", "image/png"));
     std::ostringstream out;

@@ -18,20 +18,25 @@ client 側では先に validation を通し、mutation tool を適用し、そ�
 - Default port: `8777`
 - Bind address: `127.0.0.1` のみ
 - Transport: Streamable HTTP 形式の JSON-RPC over `POST /mcp`
-- 対応 protocol version: `2025-11-25`、`2025-06-18`
+- 対応 protocol version: `2026-07-28`、`2025-11-25`、`2025-06-18`
+- LookDev contract: `initialize.experimental.lookdevpt.contractVersion = "1.0"`
 - 認証: `bearer_token`（default）または `none`。`bearer_token` では `Authorization: Bearer <token>` が必須
-- Session: `initialize` の response header で `MCP-Session-Id` を返し、以後の request では同じ header が必須
-- Server-Sent Events: 未実装。`GET /mcp` は `405 Method Not Allowed`
+- Session: legacy initializeは`MCP-Session-Id`を返します。`2026-07-28`はstatelessです。
+- Server-Sent Events: `POST subscriptions/listen`で購読Resource更新をstreamします。
+  standalone `GET /mcp`は`405 Method Not Allowed`です。
 - HTTP request body の上限: 16 MiB
 - HTTP/1.1 request body は `Content-Length` と `Transfer-Encoding: chunked` の両方に対応します。chunk extension と trailer は安全に消費し、両 framing header を同時指定した曖昧な request は拒否します。
 
-認証 mode、Bearer token、その他の MCP 設定は以下に保存されます。
+認証mode、credential参照、その他のMCP設定は以下に保存されます。
 
 ```text
 %APPDATA%\D3D12LookDevPTWinUI\settings.json
 ```
 
-この file は user-local です。token を `.lookdevpt.json`、README、screenshot、issue comment、commit 済み VS Code 設定に入れないでください。
+primary bearer token本体はWindows Credential Managerへ保存し、paired client記録には
+SHA-256 token hashだけを保持します。平文primary tokenを含む既存設定は初回起動時に
+移行します。tokenを`.lookdevpt.json`、README、screenshot、issue comment、commit済み
+VS Code設定に入れないでください。
 
 `Origin` header は absent、`null`、`http://127.0.0.1:*`、`http://localhost:*` だけ許可します。それ以外は `403` になります。
 
@@ -46,6 +51,7 @@ dockable な `MCP Server` panel から操作できます。
 - `Authentication`
 - `Copy Token`
 - `Regenerate Token`
+- `Pair LocalMCPChatClient` とpaired clientの失効
 - `Export mcp.json...`
 - pending approvals と recent request log
 
@@ -82,6 +88,15 @@ command line から認証なしで起動する例:
 ```
 
 mutation queue は renderer-thread の safe point で処理され、同時に保持できる request は 16 件までです。HTTP server thread から D3D12 / WinUI state を直接触りません。
+
+### LocalMCPChatClientとのpairing
+
+panelは90秒で期限切れになる1回限りの8桁codeを生成し、5回失敗すると無効化します。
+loopback clientは`GET /.well-known/lookdevpt/v1`でcontractを検出し、`POST /pair`で
+codeを交換します。serverはclient専用256-bit bearer tokenを返し、そのhashだけを
+保持します。LocalMCPChatClientはtokenをWindows Credential Managerへ保存します。
+検出、pairing、MCPはいずれも`127.0.0.1`限定で、同じOrigin検証を適用します。
+MCP panelからclientを失効すると、そのtokenは直ちに利用できなくなります。
 
 `capture_viewport` は read operation ですが、GPU readback を行うため renderer thread の queue を経由します。`capture_debug_pack` は一時的に debug view を変更し、その関連 temporal history を無効化するため mutation access が必要です（`confirm_mutations` では承認も必要）。`restoreView` の default は `true` です。
 
@@ -147,7 +162,8 @@ VS Code の MCP server 設定は、workspace の `.vscode/mcp.json` または us
 
 - VS Code 側の server entry を start する前に、D3D12LookDevPTWinUI 本体と MCP server を起動しておきます。
 - `bearer_token` 利用時に WinUI の MCP panel で token を regenerate した場合は、VS Code 側の MCP server entry を restart し、新しい token を入力します。
-- この server は HTTP POST JSON-RPC 対応です。SSE-only の MCP client では利用できません。
+- このserverはHTTP POST JSON-RPCとPOST-based subscription SSEに対応します。
+  standalone GET SSE transportだけを要求するclientでは利用できません。
 
 ## JSON-RPC の流れ
 
@@ -239,6 +255,16 @@ Validation / capture workflow tools:
 - `lookdevpt.run_actions`: 最大 16 個の action-layer call を 1 request で validation / apply します。validation 失敗時は一切 mutation しません。apply は指定順ですが、後段の runtime operation が失敗した場合の rollback transaction ではありません。
 - `lookdevpt.capture_debug_pack`: 最大 8 個の debug view を PNG capture し、それぞれの resource link を返します。capture 中に debug-view / history state を変更するため mutation として扱います。
 
+安全な変更とbenchmark tools:
+
+- `lookdevpt.create_checkpoint`: 現在のscene fingerprintに対するcamera、lighting、
+  materials、quality、denoise、view stateを保存します。
+- `lookdevpt.restore_checkpoint`: 現在のscene fingerprintが一致する場合だけ復元します。
+- `lookdevpt.delete_checkpoint`: 保存済みcheckpointを削除します。
+- `lookdevpt.start_benchmark`: 対話状態をcheckpointして非同期BenchmarkHarness runを開始します。
+- `lookdevpt.get_benchmark`: progress、GPU/quality metric、result artifact linkを返します。
+- `lookdevpt.cancel_benchmark`: runを中止し、checkpointした対話状態を復元します。
+
 Mutation tools:
 
 - `lookdevpt.reset_accumulation`
@@ -272,6 +298,7 @@ tool result は主に `structuredContent` を使います。互換用に text su
 
 ## Resources
 
+- `lookdevpt://integration`: application/contract version、review、安全な変更、benchmark機能、artifact上限。
 - `lookdevpt://state`: 現在の state JSON。
 - `lookdevpt://stats`: 現在の stats JSON。
 - `lookdevpt://diagnostics`: scene、project、capture、MCP diagnostics。
@@ -294,6 +321,12 @@ tool result は主に `structuredContent` を使います。互換用に text su
 - `lookdevpt://comparisons/{id}`: comparison metric と scene / camera fingerprint の一致状態。
 - `lookdevpt://comparisons/{id}/heatmap.png`: PNG difference heatmap。
 - `lookdevpt://probes/latest`: 最新の surface probe 結果。
+- `lookdevpt://checkpoints/index`: checkpoint id、label、fingerprint。
+- `lookdevpt://checkpoints/{id}`: 1 checkpointのmetadata。
+- `lookdevpt://benchmarks/index`: 非同期benchmark履歴とprogress。
+- `lookdevpt://benchmarks/{id}`: 1 benchmarkのprogress、metric、artifact link。
+- `lookdevpt://benchmarks/{id}/{artifact}`: `summary.json`、`artifacts.json`、
+  `quality_analysis.json`、`frames.csv`。
 
 Resource templates:
 
@@ -303,6 +336,9 @@ Resource templates:
 - `lookdevpt://reviews/{id}`
 - `lookdevpt://comparisons/{id}`
 - `lookdevpt://comparisons/{id}/heatmap.png`
+- `lookdevpt://checkpoints/{id}`
+- `lookdevpt://benchmarks/{id}`
+- `lookdevpt://benchmarks/{id}/{artifact}`
 
 Prompts:
 
@@ -698,7 +734,8 @@ dialog なしで project 保存:
 - `400 Unsupported MCP-Protocol-Version`: `2025-11-25` または `2025-06-18` を使ってください。
 - `400 MCP-Session-Id is required`: 最初に `initialize` を呼び、返ってきた `MCP-Session-Id` を送ってください。
 - `404 Unknown MCP session`: session が削除されたか、app/server が再起動されています。再度 initialize してください。
-- `GET` の `405 Method Not Allowed`: 想定通りです。この server は SSE を実装していません。
+- `GET` の `405 Method Not Allowed`: 想定通りです。subscriptionはstandalone GETではなく
+  `POST subscriptions/listen`を使用します。
 - `confirm_mutations` で mutation request が止まる: timeout 前に WinUI の `MCP` panel で Approve / Reject してください。
 - `MCP mutation queue is full`: pending request が終わるのを待つか、pending mutation を approve/reject するか、server を再起動してください。
 - mutation 成功直後の state / stats read が古く見える: state は 33 ms、stats / diagnostics は 100 ms 待ってから再度 read してください。

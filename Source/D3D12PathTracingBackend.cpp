@@ -14,6 +14,7 @@
 #include <cfloat>
 #include <cmath>
 #include <commdlg.h>
+#include <wincred.h>
 #include <cstddef>
 #include <cstdlib>
 #include <cwctype>
@@ -27,6 +28,31 @@
 
 namespace
 {
+    constexpr const wchar_t* McpTokenCredentialTarget = L"D3D12LookDevPTWinUI/MCPBearerToken";
+
+    bool WriteMcpTokenCredential(const std::string& token)
+    {
+        CREDENTIALW credential{};
+        credential.Type = CRED_TYPE_GENERIC;
+        credential.TargetName = const_cast<LPWSTR>(McpTokenCredentialTarget);
+        credential.CredentialBlobSize = static_cast<DWORD>(token.size());
+        credential.CredentialBlob = reinterpret_cast<LPBYTE>(const_cast<char*>(token.data()));
+        credential.Persist = CRED_PERSIST_LOCAL_MACHINE;
+        credential.UserName = const_cast<LPWSTR>(L"D3D12LookDevPTWinUI");
+        return CredWriteW(&credential, 0) != FALSE;
+    }
+
+    std::string ReadMcpTokenCredential()
+    {
+        PCREDENTIALW credential = nullptr;
+        if (!CredReadW(McpTokenCredentialTarget, CRED_TYPE_GENERIC, 0, &credential) || !credential) return {};
+        std::string token;
+        if (credential->CredentialBlob && credential->CredentialBlobSize > 0)
+            token.assign(reinterpret_cast<const char*>(credential->CredentialBlob), credential->CredentialBlobSize);
+        CredFree(credential);
+        return token;
+    }
+
     std::wstring ExecutableDirectory()
     {
         std::array<wchar_t, 32768> path = {};
@@ -962,6 +988,16 @@ namespace
     std::wstring McpSettingsPath()
     {
         return (std::filesystem::path(UserSettingsDirectory()) / L"settings.json").wstring();
+    }
+
+    std::filesystem::path McpCheckpointDirectory()
+    {
+        return std::filesystem::path(UserSettingsDirectory()) / L"Checkpoints";
+    }
+
+    std::filesystem::path McpBenchmarkDirectory()
+    {
+        return std::filesystem::path(UserSettingsDirectory()) / L"Benchmarks";
     }
 
     std::wstring DefaultStartupSettingsPath()
@@ -2738,14 +2774,35 @@ bool D3D12PathTracingBackend::LoadProjectFromDisk(const std::wstring& path, std:
             root,
             "schemaVersion",
             static_cast<double>(rb::LegacySpatialIterationsSchemaVersion));
+        constexpr unsigned int BundleProjectSchemaVersion = 3;
         if (!std::isfinite(schemaVersionValue) || schemaVersionValue < 1.0 ||
-            schemaVersionValue > static_cast<double>(rb::DenoiseSettingsSchemaVersion) ||
+            schemaVersionValue > static_cast<double>(BundleProjectSchemaVersion) ||
             std::floor(schemaVersionValue) != schemaVersionValue)
         {
             diagnostics = "Project schemaVersion is unsupported.";
             return false;
         }
         const unsigned int projectSchemaVersion = static_cast<unsigned int>(schemaVersionValue);
+        const bool bundleProject = projectSchemaVersion == BundleProjectSchemaVersion;
+        const std::filesystem::path projectFilePath(path);
+        std::filesystem::path assetRoot;
+        if (bundleProject)
+        {
+            const std::string assetRootText = cld::JsonStringOr(root, "assetRoot");
+            if (assetRootText.empty())
+            {
+                diagnostics = "Bundle project schema v3 requires assetRoot.";
+                return false;
+            }
+            assetRoot = Utf8ToWide(assetRootText);
+        }
+        auto resolveAssetPath = [&](const std::string& pathText) -> std::filesystem::path
+        {
+            const std::filesystem::path relativeOrAbsolute = Utf8ToWide(pathText);
+            return bundleProject
+                ? rb::ResolveProjectAssetPath(projectFilePath, relativeOrAbsolute, assetRoot)
+                : rb::ResolveProjectAssetPath(projectFilePath, relativeOrAbsolute);
+        };
 
         std::string denoiseCompatibilityWarning;
         const DenoiseBackend initialDenoiseBackend = m_denoiseBackend;
@@ -2761,10 +2818,13 @@ bool D3D12PathTracingBackend::LoadProjectFromDisk(const std::wstring& path, std:
         bool qualityResourcesChanged = false;
         m_mode = loadedMode;
 
-        const std::filesystem::path projectFilePath(path);
-        const std::filesystem::path scenePath = rb::ResolveProjectAssetPath(
-            projectFilePath,
-            Utf8ToWide(cld::JsonStringOr(root, "scenePath")));
+        const std::string scenePathText = cld::JsonStringOr(root, "scenePath");
+        const std::filesystem::path scenePath = resolveAssetPath(scenePathText);
+        if (bundleProject && !scenePathText.empty() && scenePath.empty())
+        {
+            diagnostics = "Bundle scenePath is absolute or escapes assetRoot.";
+            return false;
+        }
         if (!scenePath.empty())
         {
             if (!LoadScenePath(scenePath.wstring(), diagnostics))
@@ -2774,9 +2834,13 @@ bool D3D12PathTracingBackend::LoadProjectFromDisk(const std::wstring& path, std:
         }
         if (cld::FindMember(root, "environmentPath"))
         {
-            const std::filesystem::path environmentPath = rb::ResolveProjectAssetPath(
-                projectFilePath,
-                Utf8ToWide(cld::JsonStringOr(root, "environmentPath")));
+            const std::string environmentPathText = cld::JsonStringOr(root, "environmentPath");
+            const std::filesystem::path environmentPath = resolveAssetPath(environmentPathText);
+            if (bundleProject && !environmentPathText.empty() && environmentPath.empty())
+            {
+                diagnostics = "Bundle environmentPath is absolute or escapes assetRoot.";
+                return false;
+            }
             std::string envDiagnostics;
             if (!LoadEnvironmentPath(environmentPath.wstring(), envDiagnostics))
             {
@@ -2840,7 +2904,13 @@ bool D3D12PathTracingBackend::LoadProjectFromDisk(const std::wstring& path, std:
                             continue;
                         }
                         const std::string texturePathUtf8 = cld::JsonStringOr(*textures, TextureSlotKeys[slot]);
-                        const std::wstring texturePath = Utf8ToWide(texturePathUtf8);
+                        const std::filesystem::path resolvedTexturePath = resolveAssetPath(texturePathUtf8);
+                        if (bundleProject && !texturePathUtf8.empty() && resolvedTexturePath.empty())
+                        {
+                            diagnostics = "Bundle material texture path is absolute or escapes assetRoot.";
+                            return false;
+                        }
+                        const std::wstring texturePath = resolvedTexturePath.wstring();
                         std::string textureDiagnostics;
                         if (ValidateMaterialTexturePath(texturePath, textureDiagnostics))
                         {
@@ -2894,7 +2964,13 @@ bool D3D12PathTracingBackend::LoadProjectFromDisk(const std::wstring& path, std:
                             ? cld::JsonBoolOr(*enabled, TextureSlotKeys[slot], false)
                             : false;
                         const std::string texturePathUtf8 = cld::JsonStringOr(*textures, TextureSlotKeys[slot]);
-                        variant.snapshot.textures[slot] = Utf8ToWide(texturePathUtf8);
+                        const std::filesystem::path resolvedTexturePath = resolveAssetPath(texturePathUtf8);
+                        if (bundleProject && !texturePathUtf8.empty() && resolvedTexturePath.empty())
+                        {
+                            diagnostics = "Bundle material variant texture path is absolute or escapes assetRoot.";
+                            return false;
+                        }
+                        variant.snapshot.textures[slot] = resolvedTexturePath.wstring();
                     }
                 }
                 m_materialVariants.push_back(std::move(variant));
@@ -4145,6 +4221,20 @@ mcp::ToolResult D3D12PathTracingBackend::CallMcpTool(const std::string& name, co
         std::lock_guard<std::mutex> lock(m_mcpSnapshotMutex);
         return MakeMcpJsonToolResult(true, "Diagnostics returned.", m_mcpDiagnosticsJson);
     }
+    if (name == "lookdevpt.get_benchmark")
+    {
+        uint64_t id = 0;
+        if (const cld::JsonValue* value = cld::FindMember(arguments, "benchmarkId"))
+        {
+            if (value->type == cld::JsonValue::Type::Number) id = static_cast<uint64_t>((std::max)(value->number, 0.0));
+            else if (value->type == cld::JsonValue::Type::String) id = std::strtoull(value->string.c_str(), nullptr, 10);
+        }
+        std::lock_guard<std::mutex> lock(m_mcpSnapshotMutex);
+        const std::string json = BuildMcpBenchmarkJson(id);
+        const bool found = std::find_if(m_mcpBenchmarks.begin(), m_mcpBenchmarks.end(),
+            [&](const McpBenchmark& benchmark) { return benchmark.id == id; }) != m_mcpBenchmarks.end();
+        return MakeMcpJsonToolResult(found, found ? "Benchmark returned." : "Benchmark id was not found.", json);
+    }
     if (auto reviewTool = CallMcpReviewTool(name, arguments, timeoutMs))
     {
         return *reviewTool;
@@ -4171,6 +4261,26 @@ mcp::ToolResult D3D12PathTracingBackend::CallMcpTool(const std::string& name, co
     {
         const bool validateOnly = cld::JsonBoolOr(arguments, "validateOnly", false);
         return SubmitMcpCommandTool(name, "__run_actions", arguments, !validateOnly, timeoutMs);
+    }
+    if (name == "lookdevpt.create_checkpoint")
+    {
+        return SubmitMcpCommandTool(name, "__create_checkpoint", arguments, true, timeoutMs);
+    }
+    if (name == "lookdevpt.restore_checkpoint")
+    {
+        return SubmitMcpCommandTool(name, "__restore_checkpoint", arguments, true, timeoutMs);
+    }
+    if (name == "lookdevpt.delete_checkpoint")
+    {
+        return SubmitMcpCommandTool(name, "__delete_checkpoint", arguments, true, timeoutMs);
+    }
+    if (name == "lookdevpt.start_benchmark")
+    {
+        return SubmitMcpCommandTool(name, "__start_benchmark", arguments, true, timeoutMs);
+    }
+    if (name == "lookdevpt.cancel_benchmark")
+    {
+        return SubmitMcpCommandTool(name, "__cancel_benchmark", arguments, true, timeoutMs);
     }
     if (name == "lookdevpt.reset_accumulation")
     {
@@ -4373,6 +4483,13 @@ mcp::ResourceResult D3D12PathTracingBackend::ReadMcpResource(const std::string& 
 {
     mcp::ResourceResult result;
     result.uri = uri;
+    if (uri == "lookdevpt://integration")
+    {
+        result.ok = true;
+        result.mimeType = "application/json";
+        result.text = R"json({"application":{"name":"D3D12LookDevPTWinUI","version":"0.1.0"},"contractVersion":"1.0","features":{"imageArtifacts":true,"structuredContent":true,"resourceTemplates":true,"prompts":true,"resourceSubscriptions":true,"sceneAudit":true,"viewportCapture":true,"asyncReview":true,"comparisonHeatmap":true,"surfaceProbe":true,"pairing":true,"checkpoints":true,"benchmarks":true},"artifactLimits":{"maxImageBytes":16777216,"maxImagesPerToolCall":8,"maxTurnBytes":67108864,"maxDecodedPixels":64000000}})json";
+        return result;
+    }
     if (uri == "lookdevpt://actions/schema")
     {
         result.ok = true;
@@ -4535,6 +4652,84 @@ mcp::ResourceResult D3D12PathTracingBackend::ReadMcpResource(const std::string& 
         result.text = m_mcpLatestProbesJson;
         return result;
     }
+    if (uri == "lookdevpt://checkpoints/index")
+    {
+        result.ok = true;
+        result.mimeType = "application/json";
+        result.text = BuildMcpCheckpointIndexJson();
+        return result;
+    }
+    constexpr const char* checkpointPrefix = "lookdevpt://checkpoints/";
+    if (uri.rfind(checkpointPrefix, 0) == 0)
+    {
+        const uint64_t id = std::strtoull(
+            uri.c_str() + std::char_traits<char>::length(checkpointPrefix), nullptr, 10);
+        const auto iterator = std::find_if(m_mcpCheckpoints.begin(), m_mcpCheckpoints.end(),
+            [&](const McpCheckpoint& checkpoint) { return checkpoint.id == id; });
+        if (iterator == m_mcpCheckpoints.end())
+        {
+            result.error = "Checkpoint id was not found.";
+            return result;
+        }
+        result.ok = true;
+        result.mimeType = "application/json";
+        result.text = "{\"id\":\"" + std::to_string(iterator->id) + "\",\"label\":\"" +
+            cld::EscapeJson(iterator->label) + "\",\"sceneFingerprint\":\"" +
+            cld::EscapeJson(iterator->sceneFingerprint) + "\",\"cameraFingerprint\":\"" +
+            cld::EscapeJson(iterator->cameraFingerprint) + "\"}";
+        return result;
+    }
+    if (uri == "lookdevpt://benchmarks/index")
+    {
+        result.ok = true;
+        result.mimeType = "application/json";
+        result.text = BuildMcpBenchmarkIndexJson();
+        return result;
+    }
+    constexpr const char* benchmarkPrefix = "lookdevpt://benchmarks/";
+    if (uri.rfind(benchmarkPrefix, 0) == 0)
+    {
+        const std::string suffix = uri.substr(std::char_traits<char>::length(benchmarkPrefix));
+        const size_t separator = suffix.find('/');
+        const std::string idText = separator == std::string::npos ? suffix : suffix.substr(0, separator);
+        const uint64_t id = std::strtoull(idText.c_str(), nullptr, 10);
+        const auto iterator = std::find_if(m_mcpBenchmarks.begin(), m_mcpBenchmarks.end(),
+            [&](const McpBenchmark& benchmark) { return benchmark.id == id; });
+        if (iterator == m_mcpBenchmarks.end())
+        {
+            result.error = "Benchmark id was not found.";
+            return result;
+        }
+        if (separator == std::string::npos)
+        {
+            result.ok = true;
+            result.mimeType = "application/json";
+            result.text = BuildMcpBenchmarkJson(id);
+            return result;
+        }
+        const std::string artifactName = suffix.substr(separator + 1);
+        const bool jsonArtifact = artifactName == "summary.json" || artifactName == "artifacts.json" ||
+            artifactName == "quality_analysis.json";
+        const bool csvArtifact = artifactName == "frames.csv";
+        if ((!jsonArtifact && !csvArtifact) || iterator->state != "completed")
+        {
+            result.error = "Benchmark artifact is unavailable.";
+            return result;
+        }
+        const std::filesystem::path artifactPath = iterator->outputDirectory / Utf8ToWide(artifactName);
+        std::ifstream artifactFile(artifactPath, std::ios::binary);
+        if (!artifactFile)
+        {
+            result.error = "Benchmark artifact file was not found.";
+            return result;
+        }
+        std::stringstream artifactBuffer;
+        artifactBuffer << artifactFile.rdbuf();
+        result.ok = true;
+        result.mimeType = jsonArtifact ? "application/json" : "text/csv";
+        result.text = artifactBuffer.str();
+        return result;
+    }
     if (uri == "lookdevpt://reviews/index")
     {
         result.ok = true;
@@ -4625,6 +4820,7 @@ void D3D12PathTracingBackend::LoadMcpUserSettings()
         m_mcpSettings = mcp::ServerSettings{};
     }
     mcp::ServerSettings loadedSettings;
+    loadedSettings.pairedClientsPath = (std::filesystem::path(UserSettingsDirectory()) / L"mcp-paired-clients.json").string();
     bool shouldSaveSettings = false;
     const std::wstring path = McpSettingsPath();
     std::ifstream file(std::filesystem::path(path), std::ios::binary);
@@ -4649,6 +4845,12 @@ void D3D12PathTracingBackend::LoadMcpUserSettings()
                         cld::JsonStringOr(root, "authenticationMode"),
                         loadedSettings.authenticationMode);
                 loadedSettings.token = cld::JsonStringOr(root, "token", loadedSettings.token);
+                if (!loadedSettings.token.empty())
+                {
+                    if (!WriteMcpTokenCredential(loadedSettings.token))
+                        m_mcpUiDiagnostics = "Could not migrate the MCP token to Windows Credential Manager.";
+                    shouldSaveSettings = true;
+                }
             }
         }
         catch (const std::exception& ex)
@@ -4656,6 +4858,7 @@ void D3D12PathTracingBackend::LoadMcpUserSettings()
             m_mcpUiDiagnostics = std::string("MCP settings ignored: ") + ex.what();
         }
     }
+    if (loadedSettings.token.empty()) loadedSettings.token = ReadMcpTokenCredential();
     if (loadedSettings.token.empty())
     {
         loadedSettings.token = mcp::GenerateToken();
@@ -4695,7 +4898,11 @@ void D3D12PathTracingBackend::SaveMcpUserSettings()
     file << "  \"authenticationMode\": \""
          << mcp::AuthenticationModeName(settings.authenticationMode)
          << "\",\n";
-    file << "  \"token\": \"" << cld::EscapeJson(settings.token) << "\"\n";
+    if (!WriteMcpTokenCredential(settings.token))
+    {
+        m_mcpUiDiagnostics = "Failed to save the MCP bearer token to Windows Credential Manager.";
+    }
+    file << "  \"tokenSecretRef\": \"windows-credential-manager\"\n";
     file << "}\n";
 }
 
@@ -5137,6 +5344,251 @@ mcp::CommandResult D3D12PathTracingBackend::ExecuteMcpCommand(const mcp::Command
             const bool ok = SaveProjectToDisk(path.wstring());
             const std::string diagnostics = ok ? "Project saved." : "Project save failed.";
             return finish(ok, diagnostics, "{\"ok\":" + std::string(ok ? "true" : "false") + ",\"diagnostics\":\"" + diagnostics + "\",\"projectPath\":\"" + cld::EscapeJson(pathUtf8) + "\"}");
+        }
+        if (request.actionMethod == "__start_benchmark")
+        {
+            if (m_activeMcpBenchmarkId != 0 || (m_benchmarkHarness && !m_benchmarkFinished))
+                return finish(false, "A benchmark is already running.",
+                    "{\"ok\":false,\"code\":\"benchmark_busy\"}");
+            const std::string cameraPathText = cld::JsonStringOr(request.params, "cameraPath");
+            const std::filesystem::path cameraPath = Utf8ToWide(cameraPathText);
+            if (cameraPath.empty() || !std::filesystem::is_regular_file(cameraPath))
+                return finish(false, "start_benchmark requires an existing cameraPath.",
+                    "{\"ok\":false,\"code\":\"camera_path_not_found\"}");
+            const std::string kind = cld::JsonStringOr(request.params, "kind", "combined");
+            lookdevpt::benchmark::BenchmarkKind benchmarkKind = lookdevpt::benchmark::BenchmarkKind::Combined;
+            if (kind == "performance") benchmarkKind = lookdevpt::benchmark::BenchmarkKind::Performance;
+            else if (kind == "quality") benchmarkKind = lookdevpt::benchmark::BenchmarkKind::Quality;
+            else if (kind != "combined")
+                return finish(false, "Benchmark kind must be combined, performance, or quality.",
+                    "{\"ok\":false,\"code\":\"invalid_benchmark_kind\"}");
+
+            uint64_t id = m_nextMcpBenchmarkId++;
+            std::filesystem::path outputDirectory;
+            do
+            {
+                outputDirectory = McpBenchmarkDirectory() / (L"benchmark-" + std::to_wstring(id));
+                if (std::filesystem::exists(outputDirectory)) id = m_nextMcpBenchmarkId++;
+                else break;
+            } while (true);
+            std::error_code error;
+            std::filesystem::create_directories(McpCheckpointDirectory(), error);
+            if (error)
+                return finish(false, "Benchmark checkpoint directory could not be created.",
+                    "{\"ok\":false,\"code\":\"benchmark_storage_failed\"}");
+
+            McpBenchmark benchmark;
+            benchmark.id = id;
+            benchmark.kind = kind;
+            benchmark.outputDirectory = outputDirectory;
+            benchmark.checkpointPath = McpCheckpointDirectory() /
+                (L"benchmark-" + std::to_wstring(id) + L".lookdevpt.json");
+            benchmark.projectPath = m_projectPath;
+            benchmark.projectDiagnostics = m_projectDiagnostics;
+            benchmark.projectDirty = m_projectDirty;
+            benchmark.vsyncEnabled = m_vsyncEnabled;
+            benchmark.samplingSeed = m_samplingSeed;
+
+            const bool checkpointSaved = SaveProjectToDisk(benchmark.checkpointPath.wstring());
+            m_projectPath = benchmark.projectPath;
+            m_projectDiagnostics = benchmark.projectDiagnostics;
+            m_projectDirty = benchmark.projectDirty;
+            if (!checkpointSaved)
+                return finish(false, "Benchmark checkpoint could not be written.",
+                    "{\"ok\":false,\"code\":\"benchmark_storage_failed\"}");
+
+            lookdevpt::benchmark::Options options;
+            options.enabled = true;
+            options.benchmarkKind = benchmarkKind;
+            options.cameraPath = std::filesystem::absolute(cameraPath);
+            options.frames = static_cast<uint32_t>(std::clamp(
+                static_cast<int>(cld::JsonNumberOr(request.params, "frames", 120.0)), 1, 10000));
+            options.warmup = static_cast<uint32_t>(std::clamp(
+                static_cast<int>(cld::JsonNumberOr(request.params, "warmup", 30.0)), 0, 2000));
+            options.seed = static_cast<uint64_t>((std::max)(cld::JsonNumberOr(request.params, "seed", 1.0), 0.0));
+            options.outputDirectory = outputDirectory;
+            options.captureEvery = static_cast<uint32_t>(std::clamp(
+                static_cast<int>(cld::JsonNumberOr(request.params, "captureEvery", 0.0)), 0, 10000));
+            options.captureAovs = cld::JsonBoolOr(request.params, "captureAovs", false);
+            auto harness = std::make_unique<lookdevpt::benchmark::Harness>(options);
+            std::string diagnostics;
+            if (!harness->Initialize(diagnostics))
+            {
+                std::filesystem::remove(benchmark.checkpointPath, error);
+                return finish(false, diagnostics,
+                    "{\"ok\":false,\"code\":\"benchmark_initialization_failed\",\"diagnostics\":\"" +
+                    cld::EscapeJson(diagnostics) + "\"}");
+            }
+            benchmark.totalFrames = harness->TotalFrames();
+            benchmark.state = "running";
+            benchmark.diagnostics = "Benchmark running.";
+            m_benchmarkOptions = options;
+            m_benchmarkHarness = std::move(harness);
+            m_benchmarkFrameIndex = 0;
+            m_benchmarkRecordedFrameCount = 0;
+            m_completedBenchmarkMetrics.clear();
+            m_benchmarkFinished = false;
+            m_samplingSeed = static_cast<uint32_t>(options.seed) ^ static_cast<uint32_t>(options.seed >> 32u);
+            m_vsyncEnabled = false;
+            ResetRenderingHistory();
+            try
+            {
+                CreateGpuResourcesForCurrentScene();
+            }
+            catch (const std::exception& exception)
+            {
+                m_benchmarkHarness.reset();
+                m_benchmarkOptions = {};
+                m_benchmarkFinished = true;
+                m_vsyncEnabled = benchmark.vsyncEnabled;
+                m_samplingSeed = benchmark.samplingSeed;
+                std::filesystem::remove(benchmark.checkpointPath, error);
+                return finish(false, exception.what(),
+                    "{\"ok\":false,\"code\":\"benchmark_resource_initialization_failed\",\"diagnostics\":\"" +
+                    cld::EscapeJson(exception.what()) + "\"}");
+            }
+            {
+                std::lock_guard<std::mutex> lock(m_mcpSnapshotMutex);
+                m_mcpBenchmarks.push_back(benchmark);
+                m_activeMcpBenchmarkId = id;
+                while (m_mcpBenchmarks.size() > 16u && m_mcpBenchmarks.front().id != id)
+                    m_mcpBenchmarks.pop_front();
+            }
+            const std::string idText = std::to_string(id);
+            m_mcpServer.PublishResourceUpdates({ "lookdevpt://benchmarks/index", "lookdevpt://benchmarks/" + idText });
+            return finish(true, "Benchmark started.",
+                "{\"ok\":true,\"benchmarkId\":\"" + idText + "\",\"state\":\"running\",\"resource\":\"lookdevpt://benchmarks/" +
+                idText + "\",\"totalFrames\":" + std::to_string(benchmark.totalFrames) + "}");
+        }
+        if (request.actionMethod == "__cancel_benchmark")
+        {
+            uint64_t id = 0;
+            if (const cld::JsonValue* value = cld::FindMember(request.params, "benchmarkId"))
+            {
+                if (value->type == cld::JsonValue::Type::Number) id = static_cast<uint64_t>((std::max)(value->number, 0.0));
+                else if (value->type == cld::JsonValue::Type::String) id = std::strtoull(value->string.c_str(), nullptr, 10);
+            }
+            bool found = false;
+            {
+                std::lock_guard<std::mutex> lock(m_mcpSnapshotMutex);
+                const auto iterator = std::find_if(m_mcpBenchmarks.begin(), m_mcpBenchmarks.end(),
+                    [&](const McpBenchmark& benchmark) { return benchmark.id == id; });
+                if (iterator != m_mcpBenchmarks.end() && iterator->state == "running")
+                {
+                    iterator->cancelRequested = true;
+                    iterator->diagnostics = "Benchmark cancellation requested.";
+                    found = true;
+                }
+            }
+            return finish(found, found ? "Benchmark cancellation requested." : "Running benchmark id was not found.",
+                found ? "{\"ok\":true,\"benchmarkId\":\"" + std::to_string(id) + "\",\"state\":\"cancelling\"}"
+                    : "{\"ok\":false,\"code\":\"benchmark_not_found\"}");
+        }
+        if (request.actionMethod == "__create_checkpoint")
+        {
+            const uint64_t id = m_nextMcpCheckpointId++;
+            std::error_code error;
+            const std::filesystem::path directory = McpCheckpointDirectory();
+            std::filesystem::create_directories(directory, error);
+            if (error)
+            {
+                return finish(false, "Checkpoint directory could not be created.",
+                    "{\"ok\":false,\"code\":\"checkpoint_storage_failed\"}");
+            }
+            const std::filesystem::path snapshotPath = directory /
+                (L"checkpoint-" + std::to_wstring(id) + L".lookdevpt.json");
+            McpCheckpoint checkpoint;
+            checkpoint.id = id;
+            checkpoint.label = cld::JsonStringOr(request.params, "label", "Checkpoint").substr(0, 128);
+            checkpoint.sceneFingerprint = SceneFingerprint();
+            checkpoint.cameraFingerprint = CameraFingerprint();
+            checkpoint.snapshotPath = snapshotPath;
+            checkpoint.projectPath = m_projectPath;
+            checkpoint.projectDiagnostics = m_projectDiagnostics;
+            checkpoint.projectDirty = m_projectDirty;
+
+            const bool saved = SaveProjectToDisk(snapshotPath.wstring());
+            m_projectPath = checkpoint.projectPath;
+            m_projectDiagnostics = checkpoint.projectDiagnostics;
+            m_projectDirty = checkpoint.projectDirty;
+            if (!saved)
+            {
+                std::filesystem::remove(snapshotPath, error);
+                return finish(false, "Checkpoint snapshot could not be written.",
+                    "{\"ok\":false,\"code\":\"checkpoint_storage_failed\"}");
+            }
+            std::filesystem::path evictedPath;
+            {
+                std::lock_guard<std::mutex> lock(m_mcpSnapshotMutex);
+                m_mcpCheckpoints.push_back(checkpoint);
+                if (m_mcpCheckpoints.size() > 16u)
+                {
+                    evictedPath = m_mcpCheckpoints.front().snapshotPath;
+                    m_mcpCheckpoints.pop_front();
+                }
+            }
+            if (!evictedPath.empty()) std::filesystem::remove(evictedPath, error);
+            const std::string idText = std::to_string(id);
+            m_mcpServer.PublishResourceUpdates({ "lookdevpt://checkpoints/index", "lookdevpt://checkpoints/" + idText });
+            return finish(true, "Checkpoint created.",
+                "{\"ok\":true,\"checkpointId\":\"" + idText + "\",\"label\":\"" +
+                cld::EscapeJson(checkpoint.label) + "\",\"sceneFingerprint\":\"" +
+                cld::EscapeJson(checkpoint.sceneFingerprint) + "\",\"resource\":\"lookdevpt://checkpoints/" +
+                idText + "\"}");
+        }
+        if (request.actionMethod == "__restore_checkpoint" || request.actionMethod == "__delete_checkpoint")
+        {
+            uint64_t id = 0;
+            if (const cld::JsonValue* value = cld::FindMember(request.params, "checkpointId"))
+            {
+                if (value->type == cld::JsonValue::Type::Number && value->number > 0.0)
+                    id = static_cast<uint64_t>(value->number);
+                else if (value->type == cld::JsonValue::Type::String)
+                    id = std::strtoull(value->string.c_str(), nullptr, 10);
+            }
+            McpCheckpoint checkpoint;
+            bool foundCheckpoint = false;
+            {
+                std::lock_guard<std::mutex> lock(m_mcpSnapshotMutex);
+                const auto iterator = std::find_if(m_mcpCheckpoints.begin(), m_mcpCheckpoints.end(),
+                    [&](const McpCheckpoint& candidate) { return candidate.id == id; });
+                if (iterator != m_mcpCheckpoints.end())
+                {
+                    checkpoint = *iterator;
+                    foundCheckpoint = true;
+                    if (request.actionMethod == "__delete_checkpoint") m_mcpCheckpoints.erase(iterator);
+                }
+            }
+            if (!foundCheckpoint)
+                return finish(false, "Checkpoint id was not found.",
+                    "{\"ok\":false,\"code\":\"checkpoint_not_found\"}");
+            if (request.actionMethod == "__delete_checkpoint")
+            {
+                std::error_code error;
+                std::filesystem::remove(checkpoint.snapshotPath, error);
+                m_mcpServer.PublishResourceUpdates({ "lookdevpt://checkpoints/index", "lookdevpt://checkpoints/" + std::to_string(id) });
+                return finish(true, "Checkpoint deleted.",
+                    "{\"ok\":true,\"checkpointId\":\"" + std::to_string(id) + "\"}");
+            }
+            if (SceneFingerprint() != checkpoint.sceneFingerprint)
+            {
+                return finish(false, "Checkpoint belongs to a different scene fingerprint.",
+                    "{\"ok\":false,\"code\":\"scene_fingerprint_mismatch\",\"checkpointId\":\"" +
+                    std::to_string(id) + "\"}");
+            }
+            std::string diagnostics;
+            const bool restored = LoadProjectFromDisk(checkpoint.snapshotPath.wstring(), diagnostics);
+            if (restored)
+            {
+                m_projectPath = checkpoint.projectPath;
+                m_projectDiagnostics = checkpoint.projectDiagnostics;
+                m_projectDirty = checkpoint.projectDirty;
+                diagnostics = "Checkpoint restored.";
+            }
+            return finish(restored, diagnostics,
+                "{\"ok\":" + std::string(restored ? "true" : "false") +
+                ",\"checkpointId\":\"" + std::to_string(id) + "\",\"diagnostics\":\"" +
+                cld::EscapeJson(diagnostics) + "\"}");
         }
         if (request.actionMethod == "__run_actions")
         {
@@ -6304,6 +6756,163 @@ std::string D3D12PathTracingBackend::BuildMcpReviewIndexJson() const
     }
     json << "]}";
     return json.str();
+}
+
+std::string D3D12PathTracingBackend::BuildMcpCheckpointIndexJson() const
+{
+    std::ostringstream json;
+    json << "{\"checkpoints\":[";
+    for (size_t i = 0; i < m_mcpCheckpoints.size(); ++i)
+    {
+        if (i != 0) json << ',';
+        const McpCheckpoint& checkpoint = m_mcpCheckpoints[i];
+        json << "{\"id\":\"" << checkpoint.id << "\",\"label\":\""
+            << cld::EscapeJson(checkpoint.label) << "\",\"sceneFingerprint\":\""
+            << cld::EscapeJson(checkpoint.sceneFingerprint) << "\",\"resource\":\"lookdevpt://checkpoints/"
+            << checkpoint.id << "\"}";
+    }
+    json << "]}";
+    return json.str();
+}
+
+std::string D3D12PathTracingBackend::BuildMcpBenchmarkIndexJson() const
+{
+    std::ostringstream json;
+    json << "{\"activeBenchmarkId\":";
+    if (m_activeMcpBenchmarkId == 0) json << "null";
+    else json << '\"' << m_activeMcpBenchmarkId << '\"';
+    json << ",\"benchmarks\":[";
+    for (size_t i = 0; i < m_mcpBenchmarks.size(); ++i)
+    {
+        if (i != 0) json << ',';
+        const McpBenchmark& benchmark = m_mcpBenchmarks[i];
+        const double progress = benchmark.totalFrames == 0 ? 0.0 :
+            static_cast<double>(benchmark.completedFrames) / benchmark.totalFrames;
+        json << "{\"id\":\"" << benchmark.id << "\",\"kind\":\"" << benchmark.kind
+            << "\",\"state\":\"" << benchmark.state << "\",\"progress\":" << progress
+            << ",\"resource\":\"lookdevpt://benchmarks/" << benchmark.id << "\"}";
+    }
+    json << "]}";
+    return json.str();
+}
+
+std::string D3D12PathTracingBackend::BuildMcpBenchmarkJson(uint64_t id) const
+{
+    const auto iterator = std::find_if(m_mcpBenchmarks.begin(), m_mcpBenchmarks.end(),
+        [&](const McpBenchmark& benchmark) { return benchmark.id == id; });
+    if (iterator == m_mcpBenchmarks.end()) return "{\"ok\":false,\"code\":\"benchmark_not_found\"}";
+    const McpBenchmark& benchmark = *iterator;
+    const double progress = benchmark.totalFrames == 0 ? 0.0 :
+        static_cast<double>(benchmark.completedFrames) / benchmark.totalFrames;
+    std::ostringstream json;
+    json << "{\"ok\":true,\"id\":\"" << benchmark.id << "\",\"kind\":\"" << benchmark.kind
+        << "\",\"state\":\"" << benchmark.state << "\",\"progress\":" << progress
+        << ",\"completedFrames\":" << benchmark.completedFrames << ",\"totalFrames\":" << benchmark.totalFrames
+        << ",\"diagnostics\":\"" << cld::EscapeJson(benchmark.diagnostics) << "\"";
+    if (benchmark.state == "completed")
+    {
+        const std::string prefix = "lookdevpt://benchmarks/" + std::to_string(benchmark.id) + "/";
+        json << ",\"artifacts\":["
+            << "{\"name\":\"summary.json\",\"mimeType\":\"application/json\",\"resource\":\"" << prefix << "summary.json\"},"
+            << "{\"name\":\"artifacts.json\",\"mimeType\":\"application/json\",\"resource\":\"" << prefix << "artifacts.json\"},"
+            << "{\"name\":\"quality_analysis.json\",\"mimeType\":\"application/json\",\"resource\":\"" << prefix << "quality_analysis.json\"},"
+            << "{\"name\":\"frames.csv\",\"mimeType\":\"text/csv\",\"resource\":\"" << prefix << "frames.csv\"}]";
+    }
+    json << '}';
+    return json.str();
+}
+
+void D3D12PathTracingBackend::ProcessMcpBenchmark()
+{
+    if (m_activeMcpBenchmarkId == 0) return;
+    McpBenchmark benchmark;
+    bool terminal = false;
+    bool cancelled = false;
+    bool publishProgress = false;
+    {
+        std::lock_guard<std::mutex> lock(m_mcpSnapshotMutex);
+        const auto iterator = std::find_if(m_mcpBenchmarks.begin(), m_mcpBenchmarks.end(),
+            [&](const McpBenchmark& candidate) { return candidate.id == m_activeMcpBenchmarkId; });
+        if (iterator == m_mcpBenchmarks.end())
+        {
+            m_activeMcpBenchmarkId = 0;
+            return;
+        }
+        iterator->completedFrames = (std::min)(m_benchmarkFrameIndex, iterator->totalFrames);
+        cancelled = iterator->cancelRequested;
+        terminal = cancelled || m_benchmarkFinished;
+        const uint32_t publishStep = (std::max)(1u, iterator->totalFrames / 20u);
+        if (!terminal && iterator->completedFrames >= iterator->lastPublishedFrame + publishStep)
+        {
+            iterator->lastPublishedFrame = iterator->completedFrames;
+            publishProgress = true;
+        }
+        benchmark = *iterator;
+    }
+    const std::string idText = std::to_string(benchmark.id);
+    if (!terminal)
+    {
+        if (publishProgress)
+            m_mcpServer.PublishResourceUpdates({ "lookdevpt://benchmarks/index", "lookdevpt://benchmarks/" + idText });
+        return;
+    }
+
+    if (cancelled) WaitForPreviousFrame();
+    m_benchmarkHarness.reset();
+    m_benchmarkOptions = {};
+    m_benchmarkFinished = true;
+    m_completedBenchmarkMetrics.clear();
+    m_vsyncEnabled = benchmark.vsyncEnabled;
+    m_samplingSeed = benchmark.samplingSeed;
+    std::string restoreDiagnostics;
+    const bool restored = LoadProjectFromDisk(benchmark.checkpointPath.wstring(), restoreDiagnostics);
+    if (restored)
+    {
+        m_projectPath = benchmark.projectPath;
+        m_projectDiagnostics = benchmark.projectDiagnostics;
+        m_projectDirty = benchmark.projectDirty;
+    }
+    std::error_code error;
+    std::filesystem::remove(benchmark.checkpointPath, error);
+    {
+        std::lock_guard<std::mutex> lock(m_mcpSnapshotMutex);
+        const auto iterator = std::find_if(m_mcpBenchmarks.begin(), m_mcpBenchmarks.end(),
+            [&](const McpBenchmark& candidate) { return candidate.id == benchmark.id; });
+        if (iterator != m_mcpBenchmarks.end())
+        {
+            iterator->completedFrames = (std::min)(m_benchmarkFrameIndex, iterator->totalFrames);
+            if (!restored)
+            {
+                iterator->state = "failed";
+                iterator->diagnostics = "Benchmark ended, but checkpoint restoration failed: " + restoreDiagnostics;
+            }
+            else if (cancelled)
+            {
+                iterator->state = "cancelled";
+                iterator->diagnostics = "Benchmark cancelled; interactive state restored from checkpoint.";
+            }
+            else
+            {
+                iterator->state = "completed";
+                iterator->completedFrames = iterator->totalFrames;
+                iterator->diagnostics = "Benchmark completed; interactive state restored from checkpoint.";
+            }
+        }
+        m_activeMcpBenchmarkId = 0;
+    }
+    std::vector<std::string> resources =
+    {
+        "lookdevpt://benchmarks/index",
+        "lookdevpt://benchmarks/" + idText,
+    };
+    if (!cancelled && restored)
+    {
+        resources.push_back("lookdevpt://benchmarks/" + idText + "/summary.json");
+        resources.push_back("lookdevpt://benchmarks/" + idText + "/artifacts.json");
+        resources.push_back("lookdevpt://benchmarks/" + idText + "/quality_analysis.json");
+        resources.push_back("lookdevpt://benchmarks/" + idText + "/frames.csv");
+    }
+    m_mcpServer.PublishResourceUpdates(resources);
 }
 
 std::string D3D12PathTracingBackend::BuildMcpReviewJson(uint64_t id) const
@@ -9237,6 +9846,7 @@ void D3D12PathTracingBackend::OnUpdate()
 
     const auto mcpCommandStart = std::chrono::steady_clock::now();
     ProcessMcpCommands();
+    ProcessMcpBenchmark();
     if (m_benchmarkHarness && !m_benchmarkFinished)
     {
         m_benchmarkCpuMcpMs += std::chrono::duration<double, std::milli>(

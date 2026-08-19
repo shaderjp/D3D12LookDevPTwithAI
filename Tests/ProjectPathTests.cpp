@@ -38,5 +38,17 @@ int main()
 
     Require(rb::ResolveProjectAssetPath(projectPath, {}).empty(),
         "empty asset path did not remain empty");
+
+    const std::filesystem::path bundleProject =
+        workingDirectory / L"bundle" / L"project" / L"scene.lookdevpt.json";
+    const std::filesystem::path bundleAsset = rb::ResolveProjectAssetPath(
+        bundleProject, L"scenes\\scene.pbrt", L"..\\assets");
+    Require(bundleAsset ==
+        (workingDirectory / L"bundle" / L"assets" / L"scenes" / L"scene.pbrt").lexically_normal(),
+        "bundle assetRoot was not resolved relative to the project file");
+    Require(rb::ResolveProjectAssetPath(bundleProject, L"..\\secret.txt", L"..\\assets").empty(),
+        "bundle asset traversal was not rejected");
+    Require(rb::ResolveProjectAssetPath(bundleProject, absoluteAsset, L"..\\assets").empty(),
+        "bundle project retained an absolute asset path");
     return 0;
 }

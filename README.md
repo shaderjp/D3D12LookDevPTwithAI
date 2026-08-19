@@ -36,8 +36,9 @@ cancellation, the seventh alpha texture slot, and detailed RTXDI / DLSS status.
 - Windows App Runtime 2.3 x64
 - Git with submodule support
 
-The first release is an unpackaged, framework-dependent x64 application.
-VS 2022 / `v143`, MSIX, self-contained deployment, and ARM64 are not supported.
+Debug builds are unpackaged and framework-dependent. Release supports an
+unpackaged, Windows App SDK self-contained, Hybrid CRT portable build. VS 2022
+/ `v143`, MSIX, and ARM64 are not supported.
 
 The Visual Studio project pins these NuGet packages:
 
@@ -97,6 +98,34 @@ Assimp, DirectXTex, NRD, and RTXDI are built on demand by
 Build output is written to `Bin\x64\<Configuration>`. The project copies the
 Agility SDK, DXC-produced shaders, and available Streamline / DLSS runtimes
 beside the executable.
+
+## Reproducible and portable suite
+
+`suite.lock.json` pins the compatible D3D12 and LocalMCPChatClient revisions,
+SDKs, packages, model/projector, and llama runtime versions. `.vsconfig` and
+`config/development.dsc.yaml` describe the Visual Studio and WinGet
+Configuration prerequisites. The bootstrap is idempotent and modifies the
+machine only when `-InstallPrerequisites` is explicitly supplied:
+
+```powershell
+.\Scripts\BootstrapSuite.ps1 -LocalMcpRepository ..\LocalMCPChatClient
+```
+
+Build an xcopy-deployable suite with `DLSS=false / NRD=true / RTXDI=false`:
+
+```powershell
+.\Scripts\BuildPortableSuite.ps1 -LocalMcpRepository ..\LocalMCPChatClient `
+  -OutputDirectory .\artifacts\D3D12LookDevSuite
+```
+
+The ZIP contains both self-contained applications, Agility SDK, Windows App
+SDK, launch/bootstrap/uninstall scripts, licenses, a version-locked manifest,
+and SHA-256 for every file and the archive. Installation defaults to the
+current user's `%LocalAppData%\Programs`; Visual Studio, .NET, Windows App
+Runtime, and administrator rights are not required on the target PC. Use
+`BuildOfflinePack.ps1` to add selected model/projector and CPU/CUDA/Vulkan
+llama runtimes without including tokens, credentials, approval rules, or chat
+history.
 
 ## Run
 
@@ -180,7 +209,8 @@ resources.
 ## Project, settings, and logs
 
 Schema-v2 `.lookdevpt.json` files and all renderer CLI options remain
-compatible with the source revision. A failed scene or project load leaves the
+compatible with the source revision. Schema v3 adds `assetRoot` for bundle
+imports; ordinary saves remain v2. A failed scene or project load leaves the
 current scene active.
 
 WinUI-specific user data is isolated from the original application:
@@ -193,18 +223,30 @@ WinUI-specific user data is isolated from the original application:
 %TEMP%\D3D12LookDevPTWinUI.log
 ```
 
-Project paths may be absolute or relative to `baseDirectory`. See
-[Asset setup](docs/assets.md) for an example.
+Project paths may be absolute or relative to `baseDirectory`. Bundle-internal
+v3 paths are resolved beneath `assetRoot`, and escaping absolute or `..` paths
+are rejected. `Scripts\LookDevBundle.ps1` creates and safely imports the
+ZIP-based `thin` and `portable` `.lookdevbundle` formats with path, size,
+SHA-256, and license checks. See [Asset setup](docs/assets.md) for an example.
 
 ## MCP
 
 The MCP panel can start a local endpoint at
-`http://127.0.0.1:<port>/mcp`. The bearer token is stored in the WinUI-specific
-`settings.json`. Read-only, confirm-mutations, and allow-mutations modes are
-supported. The same endpoint serves stateless MCP `2026-07-28`, legacy
-session-based clients, and resource subscriptions. Confirmed mutations are
+`http://127.0.0.1:<port>/mcp`. The primary bearer token is stored in Windows
+Credential Manager; `settings.json` contains only its credential reference.
+Legacy plain-text settings are migrated on first start. Read-only,
+confirm-mutations, and allow-mutations modes are supported. The same endpoint
+serves MCP `2026-07-28`, legacy session-based clients, and resource
+subscriptions. Confirmed mutations are
 approved or rejected in the MCP panel and
 are executed at the same renderer-thread safe point as editor commands.
+
+`initialize.experimental.lookdevpt.contractVersion` advertises contract v1,
+and `lookdevpt://integration` exposes the matching diagnostic capabilities.
+The MCP panel can issue a one-time 8-digit LocalMCPChatClient pairing code
+(90 seconds, five failures maximum), revoke paired clients, and retains only
+SHA-256 token hashes. Discovery and pairing remain loopback-only and apply the
+same Origin policy as MCP.
 
 For command-line startup:
 
@@ -237,12 +279,20 @@ WinUI is composited separately and does not issue an ImGui GPU pass.
 See [Benchmark guide](benchmarks/README.md) for captures, AOVs, and sequence
 analysis.
 
+MCP clients can also run the same harness asynchronously with
+`start_benchmark`, `get_benchmark`, and `cancel_benchmark`, subscribe to
+`lookdevpt://benchmarks/{id}`, and retrieve CSV, quality JSON, capture, and AOV
+artifacts. The editor's interactive state is checkpointed and restored after
+completion or cancellation.
+
 ## Tests
 
 Run the inherited and WinUI boundary tests from PowerShell:
 
 ```powershell
 .\Scripts\TestProjectPaths.ps1
+.\Scripts\TestLookDevBundle.ps1
+.\Scripts\TestOfflinePack.ps1
 .\Scripts\TestQualitySettingsJson.ps1
 .\Scripts\TestTextureLoader.ps1
 .\Scripts\TestBenchmarkHarness.ps1

@@ -910,8 +910,12 @@ private:
     std::string BuildMcpCaptureIndexJson() const;
     void RefreshMcpAuditCache();
     void ProcessMcpReview();
+    void ProcessMcpBenchmark();
     std::string BuildMcpReviewIndexJson() const;
     std::string BuildMcpReviewJson(uint64_t id) const;
+    std::string BuildMcpCheckpointIndexJson() const;
+    std::string BuildMcpBenchmarkIndexJson() const;
+    std::string BuildMcpBenchmarkJson(uint64_t id) const;
     std::string SceneFingerprint() const;
     std::string CameraFingerprint() const;
     void EnforceMcpArtifactBudget();
@@ -1156,6 +1160,40 @@ private:
     std::deque<McpReview> m_mcpReviews;
     uint64_t m_nextMcpReviewId = 1;
     uint64_t m_activeMcpReviewId = 0;
+    struct McpCheckpoint
+    {
+        uint64_t id = 0;
+        std::string label;
+        std::string sceneFingerprint;
+        std::string cameraFingerprint;
+        std::filesystem::path snapshotPath;
+        std::wstring projectPath;
+        std::string projectDiagnostics;
+        bool projectDirty = false;
+    };
+    std::deque<McpCheckpoint> m_mcpCheckpoints;
+    uint64_t m_nextMcpCheckpointId = 1;
+    struct McpBenchmark
+    {
+        uint64_t id = 0;
+        std::string state = "queued";
+        std::string kind = "combined";
+        std::string diagnostics;
+        std::filesystem::path outputDirectory;
+        std::filesystem::path checkpointPath;
+        std::wstring projectPath;
+        std::string projectDiagnostics;
+        bool projectDirty = false;
+        bool vsyncEnabled = true;
+        uint32_t samplingSeed = 0;
+        uint32_t totalFrames = 0;
+        uint32_t completedFrames = 0;
+        uint32_t lastPublishedFrame = 0;
+        bool cancelRequested = false;
+    };
+    std::deque<McpBenchmark> m_mcpBenchmarks;
+    uint64_t m_nextMcpBenchmarkId = 1;
+    uint64_t m_activeMcpBenchmarkId = 0;
     enum class McpReviewVisualization : uint8_t
     {
         Color,

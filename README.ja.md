@@ -34,8 +34,9 @@ slot、RTXDI / DLSS の詳細 status を操作・確認できます。
 - Windows App Runtime 2.3 x64
 - submodule 対応 Git
 
-初版は unpackaged、framework-dependent の x64 application です。VS 2022 /
-`v143`、MSIX、self-contained、ARM64 は対象外です。
+Debug build は unpackaged、framework-dependent です。Release は unpackaged、
+Windows App SDK self-contained、Hybrid CRT の portable build に対応します。
+VS 2022 / `v143`、MSIX、ARM64 は対象外です。
 
 Visual Studio project は次の NuGet package を固定します。
 
@@ -94,6 +95,31 @@ Assimp、DirectXTex、NRD、RTXDI は `BuildThirdParty.ps1` が必要時に buil
 
 出力先は `Bin\x64\<Configuration>` です。Agility SDK、DXC で生成した shader、
 利用可能な Streamline / DLSS runtime も executable の横へコピーされます。
+
+## 再現可能な開発環境とPortableスイート
+
+`suite.lock.json`で両repositoryの互換commit、SDK、package、model/projector、
+llama runtimeを固定します。`.vsconfig`と`config/development.dsc.yaml`はVisual
+StudioとWinGet Configurationの前提を定義します。bootstrapは冪等で、
+`-InstallPrerequisites`を明示した場合だけsystemを変更します。
+
+```powershell
+.\Scripts\BootstrapSuite.ps1 -LocalMcpRepository ..\LocalMCPChatClient
+```
+
+`DLSS=false / NRD=true / RTXDI=false`のxcopy可能なsuiteを生成します。
+
+```powershell
+.\Scripts\BuildPortableSuite.ps1 -LocalMcpRepository ..\LocalMCPChatClient `
+  -OutputDirectory .\artifacts\D3D12LookDevSuite
+```
+
+ZIPにはself-containedな両application、Agility SDK、Windows App SDK、launcher、
+online install、clean uninstall、license、version固定manifest、全fileとarchiveの
+SHA-256が入ります。target PCでは現在userの`%LocalAppData%\Programs`へ展開し、
+Visual Studio、.NET、Windows App Runtime、管理者権限を要求しません。
+`BuildOfflinePack.ps1`ではmodel/projectorと選択したCPU/CUDA/Vulkan llama runtimeを
+追加できますが、token、資格情報、承認rule、会話履歴は含めません。
 
 ## 起動
 
@@ -172,7 +198,8 @@ renderer resource 解放の順に処理します。
 
 ## Project、設定、log
 
-schema v2 `.lookdevpt.json` と renderer CLI は移植元と互換です。scene または
+schema v2 `.lookdevpt.json` と renderer CLI は移植元と互換です。schema v3は
+bundle import用の`assetRoot`を追加し、通常保存はv2を維持します。scene または
 project の load に失敗しても、現在の scene を維持します。
 
 WinUI 版の user data は元アプリと競合しない専用 path に保存します。
@@ -186,16 +213,26 @@ WinUI 版の user data は元アプリと競合しない専用 path に保存し
 ```
 
 project path は absolute または `baseDirectory` 基準の relative path を
-使用できます。例は [Asset setup](docs/assets.ja.md) にあります。
+使用できます。bundle内部のv3 pathは`assetRoot`以下で解決され、absolute pathや
+`..`による脱出を拒否します。`Scripts\LookDevBundle.ps1`はZIPベースの`thin` /
+`portable` `.lookdevbundle`をpath、容量、SHA-256、license検証付きで作成・安全に
+importします。例は [Asset setup](docs/assets.ja.md) にあります。
 
 ## MCP
 
 MCP panel から `http://127.0.0.1:<port>/mcp` の local endpoint を開始できます。
-bearer token は WinUI 専用 `settings.json` に保存します。read-only、
-confirm-mutations、allow-mutations に対応しています。同じ endpoint で stateless
+primary bearer tokenはWindows Credential Managerへ保存し、`settings.json`には
+credential参照だけを残します。既存の平文設定は初回起動時に移行します。
+read-only、confirm-mutations、allow-mutations に対応しています。同じ endpoint で
 MCP `2026-07-28`、legacy session client、resource subscription を提供します。
 confirm mode の mutation は MCP panel で Approve / Reject し、editor command と
 同じ renderer-thread safe point で実行されます。
+
+`initialize.experimental.lookdevpt.contractVersion`はcontract v1を公開し、
+`lookdevpt://integration`で同じ診断機能を確認できます。MCP panelは90秒・1回限り・
+5回失敗までの8桁LocalMCPChatClient pairing codeを発行し、client失効もできます。
+server側は発行tokenのSHA-256 hashだけを保持します。検出とpairingもloopback限定で、
+MCPと同じOrigin検証を適用します。
 
 CLI から開始する例です。
 
@@ -228,12 +265,18 @@ WinUI 版の `cpu_ui_ms` は editor command 処理と snapshot 生成時間で�
 capture、AOV、sequence 解析は [Benchmark guide](benchmarks/README.md) を参照して
 ください。
 
+MCP clientは`start_benchmark`、`get_benchmark`、`cancel_benchmark`で同じharnessを
+非同期実行し、`lookdevpt://benchmarks/{id}`を購読してCSV、quality JSON、capture、
+AOV artifactを取得できます。完了または中止後はcheckpointから対話状態を復元します。
+
 ## Test
 
 継承した test と WinUI thread 境界の test を PowerShell から実行します。
 
 ```powershell
 .\Scripts\TestProjectPaths.ps1
+.\Scripts\TestLookDevBundle.ps1
+.\Scripts\TestOfflinePack.ps1
 .\Scripts\TestQualitySettingsJson.ps1
 .\Scripts\TestTextureLoader.ps1
 .\Scripts\TestBenchmarkHarness.ps1

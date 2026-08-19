@@ -201,6 +201,8 @@ private:
     std::int32_t m_selectedVariant = -1;
     std::int32_t m_selectedPreset = -1;
     std::uint64_t m_selectedApproval = 0;
+    std::vector<std::wstring> m_pairedClientIds;
+    std::vector<std::wstring> m_pairedClientNames;
     HWND m_windowHandle = nullptr;
 };
 }

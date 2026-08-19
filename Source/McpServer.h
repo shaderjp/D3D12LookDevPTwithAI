@@ -32,6 +32,7 @@ struct ServerSettings
     std::string token;
     bool allowUnauthenticatedLoopbackForTests = false;
     int subscriptionKeepAliveMillisecondsForTests = 0;
+    std::string pairedClientsPath;
 };
 
 struct ServerStatus
@@ -44,6 +45,9 @@ struct ServerStatus
     size_t activeSubscriptions = 0;
     size_t activeRequests = 0;
     std::vector<std::string> recentRequests;
+    std::string pairingCode;
+    int pairingSecondsRemaining = 0;
+    std::vector<std::pair<std::string, std::string>> pairedClients;
 };
 
 struct ToolResult
@@ -85,6 +89,9 @@ public:
     bool IsRunning() const;
     ServerStatus GetStatus() const;
     void PublishResourceUpdates(const std::vector<std::string>& uris);
+    std::string BeginPairing();
+    bool RevokePairedClient(const std::string& clientId);
+    void RevokeAllPairedClients();
 
     struct HttpRequest
     {
@@ -124,6 +131,13 @@ private:
         uintptr_t socketValue = 0;
     };
 
+    struct PairedClient
+    {
+        std::string id;
+        std::string name;
+        std::string tokenHash;
+    };
+
     void Run();
     void HandleClient(
         uintptr_t socketValue,
@@ -141,6 +155,7 @@ private:
     void StreamSubscription(uintptr_t socketValue, const HttpResponse& response);
     HttpResponse HandleHttpRequest(const HttpRequest& request);
     HttpResponse HandleJsonRpc(const HttpRequest& request, const cld::JsonValue& rpc, bool modern);
+    HttpResponse HandlePairRequest(const HttpRequest& request);
     HttpResponse HandleInitialize(const cld::JsonValue& rpc);
     HttpResponse HandlePromptGet(const std::string& idJson, const cld::JsonValue& rpc, bool modern);
     HttpResponse HandleDeleteSession(const HttpRequest& request);
@@ -153,6 +168,8 @@ private:
     void MarkSessionInitialized(const HttpRequest& request);
     void PruneLegacySessionsLocked(std::chrono::steady_clock::time_point now);
     void AppendLog(const std::string& message);
+    void LoadPairedClients();
+    void SavePairedClientsLocked() const;
 
     ServerSettings m_settings;
     IServerHost* m_host = nullptr;
@@ -170,6 +187,10 @@ private:
     std::atomic<size_t> m_activeSubscriptions = 0;
     std::vector<std::string> m_recentRequests;
     std::string m_lastError;
+    std::string m_pairingCode;
+    std::chrono::steady_clock::time_point m_pairingExpiresAt{};
+    int m_pairingFailures = 0;
+    std::vector<PairedClient> m_pairedClients;
 };
 
 std::string GenerateToken(size_t byteCount = 24);

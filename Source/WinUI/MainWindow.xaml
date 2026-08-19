@@ -811,6 +811,24 @@
                                         BorderThickness="1"
                                         CornerRadius="4">
                                     <StackPanel Spacing="4">
+                                        <TextBlock Text="LocalMCPChatClient Pairing" FontWeight="SemiBold" />
+                                        <TextBlock x:Name="McpPairingCodeText" Text="No active code" FontFamily="Consolas" FontSize="20" />
+                                        <TextBlock x:Name="McpPairedClientsText" Text="Paired clients: 0" Opacity="0.75" />
+                                        <ComboBox x:Name="McpPairedClientCombo" PlaceholderText="Select a paired client" />
+                                        <StackPanel Orientation="Horizontal" Spacing="6">
+                                            <Button x:Name="McpBeginPairingButton" Content="Pair LocalMCPChatClient" Tag="mcp.pairing.begin" Click="OnActionClick" />
+                                            <Button x:Name="McpRevokePairingButton" Content="Revoke selected" Tag="mcp.pairing.revoke" Click="OnActionClick" />
+                                            <Button x:Name="McpRevokePairingsButton" Content="Revoke all" Tag="mcp.pairing.revokeAll" Click="OnActionClick" />
+                                        </StackPanel>
+                                    </StackPanel>
+                                </Border>
+                                <Border Padding="8,6"
+                                        Margin="0,4"
+                                        Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                                        BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                                        BorderThickness="1"
+                                        CornerRadius="4">
+                                    <StackPanel Spacing="4">
                                         <TextBlock Text="Automatic LookDev Review" FontWeight="SemiBold" />
                                         <TextBlock x:Name="McpReviewStatusText" Text="No active review" TextWrapping="Wrap" />
                                         <ProgressBar x:Name="McpReviewProgress" Minimum="0" Maximum="100" Value="0" />

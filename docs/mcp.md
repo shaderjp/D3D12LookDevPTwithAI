@@ -19,20 +19,27 @@ The client should validate settings first, apply mutation tools, then read state
 - Default port: `8777`
 - Bind address: `127.0.0.1` only
 - Transport: Streamable HTTP-style JSON-RPC over `POST /mcp`
-- Protocol versions accepted: `2025-11-25`, `2025-06-18`
+- Protocol versions accepted: `2026-07-28`, `2025-11-25`, `2025-06-18`
+- LookDev contract: `initialize.experimental.lookdevpt.contractVersion = "1.0"`
 - Authentication: `bearer_token` (default) or `none`; `bearer_token` requires `Authorization: Bearer <token>`
-- Session: `initialize` returns `MCP-Session-Id`; all later requests must send it
-- Server-Sent Events: not implemented; `GET /mcp` returns `405 Method Not Allowed`
+- Session: legacy initialize returns `MCP-Session-Id`; `2026-07-28` is stateless
+- Server-Sent Events: `POST subscriptions/listen` streams subscribed Resource
+  updates; standalone `GET /mcp` returns `405 Method Not Allowed`
 - Maximum HTTP request body: 16 MiB
 - HTTP/1.1 request bodies accept either `Content-Length` or `Transfer-Encoding: chunked`. Chunk extensions and trailers are safely consumed; ambiguous requests containing both framing headers are rejected.
 
-The authentication mode, bearer token, and other MCP settings are stored in:
+The authentication mode, credential reference, and other MCP settings are
+stored in:
 
 ```text
 %APPDATA%\D3D12LookDevPTWinUI\settings.json
 ```
 
-This file is user-local. Do not copy the token into `.lookdevpt.json`, README files, screenshots, issue comments, or committed VS Code settings.
+The primary bearer token itself is stored in Windows Credential Manager;
+paired-client records contain only SHA-256 token hashes. Legacy settings that
+contain a plain-text primary token are migrated on first start. Do not copy a
+token into `.lookdevpt.json`, README files, screenshots, issue comments, or
+committed VS Code settings.
 
 The server accepts browser/client `Origin` values only when absent, `null`, `http://127.0.0.1:*`, or `http://localhost:*`. Other origins are rejected with `403`.
 
@@ -47,6 +54,7 @@ Use the dockable `MCP Server` panel:
 - `Authentication`
 - `Copy Token`
 - `Regenerate Token`
+- `Pair LocalMCPChatClient` and paired-client revocation
 - `Export mcp.json...`
 - pending approvals and recent request log
 
@@ -84,6 +92,17 @@ To start without authentication from the command line:
 ```
 
 The mutation queue is processed at a renderer-thread safe point and has a limit of 16 queued requests. Mutations never touch D3D12 or WinUI state directly from the HTTP server thread.
+
+### LocalMCPChatClient pairing
+
+The panel generates an 8-digit, one-time code that expires after 90 seconds
+and is invalidated after five failed attempts. A loopback client discovers the
+contract with `GET /.well-known/lookdevpt/v1` and exchanges the code with
+`POST /pair`. The server returns a client-specific 256-bit bearer token and
+stores only its hash; LocalMCPChatClient stores the token in Windows Credential
+Manager. Discovery, pairing, and MCP all remain bound to `127.0.0.1` and share
+the same Origin validation. Revoke a paired client from the MCP panel to make
+its token fail immediately.
 
 `capture_viewport` is a read operation, but it is still queued on the renderer thread because it performs a GPU readback. `capture_debug_pack` temporarily changes the debug view and invalidates its related temporal history, so it requires mutation access (and approval in `confirm_mutations` mode). Its `restoreView` option defaults to `true`.
 
@@ -150,7 +169,8 @@ Notes:
 
 - Start D3D12LookDevPTWinUI and its MCP server before starting the VS Code MCP entry.
 - With `bearer_token`, if the token is regenerated in the WinUI MCP panel, restart the VS Code MCP server entry and enter the new token.
-- This server supports HTTP POST JSON-RPC. Clients that require SSE-only MCP will not work.
+- This server supports HTTP POST JSON-RPC and POST-based subscription SSE.
+  Clients that require a standalone GET SSE transport will not work.
 
 ## JSON-RPC Flow
 
@@ -243,6 +263,20 @@ Validation and capture workflow tools:
 - `lookdevpt.run_actions`: validates and applies up to 16 action-layer calls as one MCP request. Validation failure prevents all mutation. Application is ordered but not rollback-transactional if a later runtime operation fails.
 - `lookdevpt.capture_debug_pack`: captures up to eight debug views and returns resource links for each PNG. It is treated as a mutation because it changes debug-view/history state while capturing.
 
+Safe-change and benchmark tools:
+
+- `lookdevpt.create_checkpoint`: stores camera, lighting, materials, quality,
+  denoise, and view state for the current scene fingerprint.
+- `lookdevpt.restore_checkpoint`: restores the state only if the current scene
+  fingerprint still matches.
+- `lookdevpt.delete_checkpoint`: deletes a stored checkpoint.
+- `lookdevpt.start_benchmark`: starts one asynchronous BenchmarkHarness run
+  after checkpointing the interactive renderer state.
+- `lookdevpt.get_benchmark`: reports progress, GPU/quality metrics, and result
+  artifact links.
+- `lookdevpt.cancel_benchmark`: cancels the run and restores the checkpointed
+  interactive state.
+
 Mutation tools:
 
 - `lookdevpt.reset_accumulation`
@@ -276,6 +310,8 @@ Tool results primarily use `structuredContent`. A text content summary is also i
 
 ## Resources
 
+- `lookdevpt://integration`: application/contract versions, supported review,
+  safe-change and benchmark capabilities, and artifact limits.
 - `lookdevpt://state`: current state JSON.
 - `lookdevpt://stats`: current stats JSON.
 - `lookdevpt://diagnostics`: scene, project, capture, and MCP diagnostics.
@@ -298,6 +334,12 @@ Tool results primarily use `structuredContent`. A text content summary is also i
 - `lookdevpt://comparisons/{id}`: comparison metrics and scene/camera fingerprint matches.
 - `lookdevpt://comparisons/{id}/heatmap.png`: PNG difference heatmap.
 - `lookdevpt://probes/latest`: most recent surface-probe result.
+- `lookdevpt://checkpoints/index`: checkpoint ids, labels, and fingerprints.
+- `lookdevpt://checkpoints/{id}`: one checkpoint's metadata.
+- `lookdevpt://benchmarks/index`: asynchronous benchmark history and progress.
+- `lookdevpt://benchmarks/{id}`: one benchmark's progress, metrics, and links.
+- `lookdevpt://benchmarks/{id}/{artifact}`: `summary.json`, `artifacts.json`,
+  `quality_analysis.json`, or `frames.csv`.
 
 Resource templates:
 
@@ -307,6 +349,9 @@ Resource templates:
 - `lookdevpt://reviews/{id}`
 - `lookdevpt://comparisons/{id}`
 - `lookdevpt://comparisons/{id}/heatmap.png`
+- `lookdevpt://checkpoints/{id}`
+- `lookdevpt://benchmarks/{id}`
+- `lookdevpt://benchmarks/{id}/{artifact}`
 
 Prompts:
 
@@ -702,7 +747,8 @@ Save a project without a dialog:
 - `400 Unsupported MCP-Protocol-Version`: use `2025-11-25` or `2025-06-18`.
 - `400 MCP-Session-Id is required`: call `initialize` first, then send the returned `MCP-Session-Id`.
 - `404 Unknown MCP session`: the session was deleted or the app/server restarted. Initialize again.
-- `405 Method Not Allowed` on `GET`: expected; this server does not implement SSE.
+- `405 Method Not Allowed` on `GET`: expected; subscriptions use
+  `POST subscriptions/listen`, not a standalone GET transport.
 - Mutation request hangs in `confirm_mutations`: approve or reject it in the WinUI `MCP` panel before the request timeout.
 - `MCP mutation queue is full`: wait for pending requests to finish, approve/reject pending mutations, or restart the server.
 - A state/stat read appears stale after a successful mutation: wait 33 ms for state or 100 ms for stats/diagnostics, then read again.

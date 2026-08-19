@@ -538,6 +538,15 @@ void MainWindow::OnActionClick(
     {
         command.id = m_selectedApproval;
     }
+    else if (command.property == L"mcp.pairing.revoke")
+    {
+        const int selected = McpPairedClientCombo().SelectedIndex();
+        if (selected < 0 || static_cast<size_t>(selected) >= m_pairedClientIds.size())
+        {
+            return;
+        }
+        command.value = m_pairedClientIds[static_cast<size_t>(selected)];
+    }
     Submit(std::move(command));
 }
 
@@ -925,6 +934,10 @@ void MainWindow::RefreshSnapshot()
         std::to_wstring(mcpActiveRequests) +
         L" · Pending commands: " +
         std::to_wstring(mcpPendingCommands));
+    std::int64_t pairingSeconds = 0;
+    std::int64_t pairedClients = 0;
+    TryInteger(*snapshot, L"mcp.pairing.seconds", pairingSeconds);
+    TryInteger(*snapshot, L"mcp.pairing.clients", pairedClients);
     std::int64_t reviewId = 0;
     std::int64_t auditInfo = 0;
     std::int64_t auditWarning = 0;
@@ -948,6 +961,41 @@ void MainWindow::RefreshSnapshot()
     };
     const std::wstring reviewState = editorText(L"mcp.review.state", L"idle");
     const std::wstring reviewStage = editorText(L"mcp.review.stage", L"No active review");
+    const std::wstring pairingCode = editorText(L"mcp.pairing.code", L"");
+    McpPairingCodeText().Text(pairingCode.empty()
+        ? L"No active code"
+        : pairingCode + L" · " + std::to_wstring(pairingSeconds) + L"s");
+    McpPairedClientsText().Text(L"Paired clients: " + std::to_wstring(pairedClients));
+    std::vector<std::wstring> pairedClientIds;
+    std::vector<std::wstring> pairedClientNames;
+    for (std::int64_t index = 0; index < pairedClients; ++index)
+    {
+        const std::wstring prefix = L"mcp.pairing.client." + std::to_wstring(index);
+        pairedClientIds.push_back(editorText((prefix + L".id").c_str(), L""));
+        pairedClientNames.push_back(editorText((prefix + L".name").c_str(), L"Unnamed client"));
+    }
+    if (pairedClientIds != m_pairedClientIds || pairedClientNames != m_pairedClientNames)
+    {
+        std::wstring selectedId;
+        const int selected = McpPairedClientCombo().SelectedIndex();
+        if (selected >= 0 && static_cast<size_t>(selected) < m_pairedClientIds.size())
+        {
+            selectedId = m_pairedClientIds[static_cast<size_t>(selected)];
+        }
+        m_pairedClientIds = std::move(pairedClientIds);
+        m_pairedClientNames = std::move(pairedClientNames);
+        McpPairedClientCombo().Items().Clear();
+        int restoredSelection = -1;
+        for (size_t index = 0; index < m_pairedClientNames.size(); ++index)
+        {
+            McpPairedClientCombo().Items().Append(box_value(m_pairedClientNames[index]));
+            if (m_pairedClientIds[index] == selectedId) restoredSelection = static_cast<int>(index);
+        }
+        if (!m_pairedClientIds.empty())
+        {
+            McpPairedClientCombo().SelectedIndex(restoredSelection >= 0 ? restoredSelection : 0);
+        }
+    }
     McpReviewStatusText().Text(reviewId == 0
         ? reviewStage
         : L"Review " + std::to_wstring(reviewId) + L" · " + reviewState + L"\n" + reviewStage);
@@ -988,6 +1036,9 @@ void MainWindow::RefreshSnapshot()
     RejectButton().IsEnabled(m_selectedApproval != 0);
     McpStartButton().IsEnabled(!snapshot->mcpRunning);
     McpStopButton().IsEnabled(snapshot->mcpRunning);
+    McpBeginPairingButton().IsEnabled(snapshot->mcpRunning && mcpUsesBearerToken);
+    McpRevokePairingButton().IsEnabled(pairedClients > 0);
+    McpRevokePairingsButton().IsEnabled(pairedClients > 0);
     McpPortNumber().IsEnabled(!snapshot->mcpRunning);
     McpAuthenticationCombo().IsEnabled(!snapshot->mcpRunning);
     McpTokenBox().IsEnabled(mcpUsesBearerToken);

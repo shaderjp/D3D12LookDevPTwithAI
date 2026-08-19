@@ -499,6 +499,30 @@ void D3D12PathTracingBackend::ApplyEditorCommand(
                 }
             }
         }
+        else if (action == L"mcp.pairing.begin")
+        {
+            if (m_mcpServer.IsRunning())
+            {
+                m_mcpServer.BeginPairing();
+                m_mcpUiDiagnostics = "LocalMCPChatClient pairing code created for 90 seconds.";
+            }
+            else
+            {
+                m_mcpUiDiagnostics = "Start the MCP server before pairing.";
+            }
+        }
+        else if (action == L"mcp.pairing.revokeAll")
+        {
+            m_mcpServer.RevokeAllPairedClients();
+            m_mcpUiDiagnostics = "All paired LocalMCPChatClient tokens were revoked.";
+        }
+        else if (action == L"mcp.pairing.revoke")
+        {
+            const std::string clientId = Utf8(Wide(command.value));
+            m_mcpUiDiagnostics = m_mcpServer.RevokePairedClient(clientId)
+                ? "The selected LocalMCPChatClient token was revoked."
+                : "The selected paired client no longer exists.";
+        }
         else if (action == L"mcp.token.regenerate")
         {
             {
@@ -1932,6 +1956,15 @@ D3D12PathTracingBackend::CaptureEditorSnapshot() const
         static_cast<std::int64_t>(status.activeSubscriptions);
     values[L"mcp.activeRequests"] =
         static_cast<std::int64_t>(status.activeRequests);
+    values[L"mcp.pairing.code"] = Widen(status.pairingCode);
+    values[L"mcp.pairing.seconds"] = static_cast<std::int64_t>(status.pairingSecondsRemaining);
+    values[L"mcp.pairing.clients"] = static_cast<std::int64_t>(status.pairedClients.size());
+    for (size_t index = 0; index < status.pairedClients.size(); ++index)
+    {
+        const std::wstring prefix = L"mcp.pairing.client." + std::to_wstring(index);
+        values[prefix + L".id"] = Widen(status.pairedClients[index].first);
+        values[prefix + L".name"] = Widen(status.pairedClients[index].second);
+    }
     values[L"mcp.pendingCommands"] =
         static_cast<std::int64_t>(
             m_mcpDispatcher.PendingCount());

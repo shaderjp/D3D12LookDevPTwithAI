@@ -58,6 +58,8 @@
     <PlatformToolset>$(LookDevPtPlatformToolset)</PlatformToolset>
     <WholeProgramOptimization>true</WholeProgramOptimization>
     <CharacterSet>Unicode</CharacterSet>
+    <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
+    <UseHybridCRT>true</UseHybridCRT>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
   <PropertyGroup>
@@ -73,7 +75,7 @@
     <AssimpZlibName>zlib-lookdevpt.lib</AssimpZlibName>
     <DirectXTexProject>$(ProjectDir)ThirdParty\DirectXTex\DirectXTex\DirectXTex_Desktop_$(LookDevPtVsFamily).vcxproj</DirectXTexProject>
     <DirectXTexLibDir>$(ProjectDir)ThirdParty\DirectXTex\DirectXTex\Bin\Desktop_$(LookDevPtVsFamily)\x64\$(Configuration)</DirectXTexLibDir>
-    <EnableDLSS Condition="'$(EnableDLSS)'==''">true</EnableDLSS>
+    <EnableDLSS Condition="'$(EnableDLSS)'==''">false</EnableDLSS>
     <D3D12LookDevPtWithDlss Condition="'$(EnableDLSS)'=='true' Or '$(EnableDLSS)'=='True' Or '$(EnableDLSS)'=='1'">1</D3D12LookDevPtWithDlss>
     <D3D12LookDevPtWithDlss Condition="'$(D3D12LookDevPtWithDlss)'==''">0</D3D12LookDevPtWithDlss>
     <EnableNRD Condition="'$(EnableNRD)'==''">true</EnableNRD>
@@ -272,12 +274,26 @@
     <ClInclude Include="Source\WinUI\WinUIEditor.h" />
   </ItemGroup>
   <ItemGroup>
+    <None Include=".vsconfig" />
+    <None Include="suite.lock.json" />
+    <None Include=".github\workflows\release-portable.yml" />
     <None Include="BuildThirdParty.ps1" />
     <None Include="CMake\RtxdiRuntime\CMakeLists.txt" />
+    <None Include="config\development.dsc.yaml" />
     <None Include="config\LocalMCPChatClient.mcp.json" />
     <None Include="Scripts\TestLocalMcpChatClientIntegration.ps1" />
     <None Include="Scripts\TestMcpServerHttp.ps1" />
     <None Include="Scripts\TestMcpReviewAnalysis.ps1" />
+    <None Include="Scripts\BootstrapSuite.ps1" />
+    <None Include="Scripts\BuildPortableSuite.ps1" />
+    <None Include="Scripts\BuildOfflinePack.ps1" />
+    <None Include="Scripts\InstallOfflinePack.ps1" />
+    <None Include="Scripts\InstallPortableSuite.ps1" />
+    <None Include="Scripts\LookDevBundle.ps1" />
+    <None Include="Scripts\TestLookDevBundle.ps1" />
+    <None Include="Scripts\TestOfflinePack.ps1" />
+    <None Include="Scripts\TestPortablePrerequisites.ps1" />
+    <None Include="Scripts\UninstallPortableSuite.ps1" />
     <None Include="Shaders\PathTracingABI.hlsli" />
     <None Include="Shaders\PathTracingDebugViews.hlsli" />
     <None Include="Shaders\PathTracingSampling.hlsli" />

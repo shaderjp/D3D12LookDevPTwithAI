@@ -49,6 +49,18 @@ if (-not (Test-Path -LiteralPath $PackageRunner)) {
     throw "Package runner was not found: $PackageRunner"
 }
 
+# Some portable pnpm launchers invoke Node by absolute path themselves, while
+# packages downloaded by pnpm still resolve `node` through PATH. Make that
+# bundled runtime discoverable without requiring a machine-wide Node install.
+$originalPath = $env:PATH
+if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
+    $runnerDirectory = Split-Path -Parent $PackageRunner
+    $bundledNode = [System.IO.Path]::GetFullPath((Join-Path $runnerDirectory '..\..\node\bin\node.exe'))
+    if (Test-Path -LiteralPath $bundledNode) {
+        $env:PATH = "$(Split-Path -Parent $bundledNode);$env:PATH"
+    }
+}
+
 $d3dInclude = Join-Path $env:USERPROFILE '.nuget\packages\microsoft.direct3d.d3d12\1.619.3\build\native\include'
 $d3dxInclude = Join-Path $d3dInclude 'd3dx12'
 if (-not (Test-Path -LiteralPath (Join-Path $d3dxInclude 'd3dx12.h'))) {
@@ -121,6 +133,7 @@ try {
     $completed = $true
 }
 finally {
+    $env:PATH = $originalPath
     if ($hostProcess -and -not $hostProcess.HasExited) {
         Stop-Process -Id $hostProcess.Id -Force
         $hostProcess.WaitForExit()

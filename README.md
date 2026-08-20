@@ -101,8 +101,10 @@ beside the executable.
 
 ## Reproducible and portable suite
 
-`suite.lock.json` pins the compatible D3D12 and LocalMCPChatClient revisions,
-SDKs, packages, model/projector, and llama runtime versions. `.vsconfig` and
+`suite.lock.json` schema v2 pins the compatible LocalMCPChatClient revision,
+SDKs, packages, model/projector, and llama runtime versions. D3D12 uses
+`source: self`; the generated suite manifest records the exact commits built
+for both repositories. `.vsconfig` and
 `config/development.dsc.yaml` describe the Visual Studio and WinGet
 Configuration prerequisites. The bootstrap is idempotent and modifies the
 machine only when `-InstallPrerequisites` is explicitly supplied:
@@ -115,7 +117,7 @@ Build an xcopy-deployable suite with `DLSS=false / NRD=true / RTXDI=false`:
 
 ```powershell
 .\Scripts\BuildPortableSuite.ps1 -LocalMcpRepository ..\LocalMCPChatClient `
-  -OutputDirectory .\artifacts\D3D12LookDevSuite
+  -OutputDirectory .\artifacts\D3D12LookDevSuite-0.2.0-beta.1-win-x64
 ```
 
 The ZIP contains both self-contained applications, Agility SDK, Windows App
@@ -123,6 +125,10 @@ SDK, launch/bootstrap/uninstall scripts, licenses, a version-locked manifest,
 and SHA-256 for every file and the archive. Installation defaults to the
 current user's `%LocalAppData%\Programs`; Visual Studio, .NET, Windows App
 Runtime, and administrator rights are not required on the target PC. Use
+Version `0.2.0-beta.1` is an unsigned public beta. Verify the archive SHA-256
+and read `UNSIGNED-BETA.ja.txt` before running it. The launcher starts the MCP
+server and a 90-second pairing code so LocalMCPChatClient can pair before its
+model download. Use
 `BuildOfflinePack.ps1` to add selected model/projector and CPU/CUDA/Vulkan
 llama runtimes without including tokens, credentials, approval rules, or chat
 history.

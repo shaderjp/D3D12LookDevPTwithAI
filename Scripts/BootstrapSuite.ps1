@@ -10,6 +10,11 @@ $ErrorActionPreference = 'Stop'
 $repo = [System.IO.Path]::GetFullPath((Split-Path -Parent $PSScriptRoot))
 $lockPath = Join-Path $repo 'suite.lock.json'
 $lock = Get-Content -LiteralPath $lockPath -Raw | ConvertFrom-Json
+if ($lock.schemaVersion -ne 2 -or $lock.repositories.D3D12LookDevPTWinUI.source -ne 'self') {
+    throw 'suite.lock.json schema v2 with D3D12LookDevPTWinUI.source=self is required.'
+}
+$localCommit = [string]$lock.repositories.LocalMCPChatClient.commit
+if ($localCommit -notmatch '^[0-9a-f]{40}$') { throw 'LocalMCPChatClient must be pinned to a full 40-character commit hash.' }
 
 if ($InstallPrerequisites) {
     $winget = Get-Command winget.exe -ErrorAction Stop
@@ -31,6 +36,8 @@ if (-not (Test-Path -LiteralPath (Join-Path $LocalMcpRepository '.git'))) {
     if (-not (Test-Path -LiteralPath $parent)) { New-Item -ItemType Directory -Path $parent | Out-Null }
     & git clone https://github.com/shaderjp/LocalMCPChatClient.git $LocalMcpRepository
     if ($LASTEXITCODE -ne 0) { throw 'LocalMCPChatClient clone failed.' }
+    & git -C $LocalMcpRepository checkout --detach $localCommit
+    if ($LASTEXITCODE -ne 0) { throw "Could not checkout locked LocalMCPChatClient commit $localCommit." }
 }
 
 function Test-LockedCommit([string]$Path, [string]$Expected, [string]$Name) {
@@ -41,10 +48,17 @@ function Test-LockedCommit([string]$Path, [string]$Expected, [string]$Name) {
         Write-Warning $message
     }
 }
-Test-LockedCommit $repo $lock.repositories.D3D12LookDevPTWinUI.commit 'D3D12LookDevPTWinUI'
-Test-LockedCommit $LocalMcpRepository $lock.repositories.LocalMCPChatClient.commit 'LocalMCPChatClient'
+$d3dCommit = (& git -C $repo rev-parse HEAD).Trim()
+if ($d3dCommit -notmatch '^[0-9a-f]{40}$') { throw 'D3D12LookDevPTWinUI source commit could not be determined.' }
+Test-LockedCommit $LocalMcpRepository $localCommit 'LocalMCPChatClient'
+if ($EnforceLock) {
+    foreach ($source in @(@{ Name = 'D3D12LookDevPTWinUI'; Path = $repo }, @{ Name = 'LocalMCPChatClient'; Path = $LocalMcpRepository })) {
+        $trackedChanges = @(& git -C $source.Path status --porcelain --untracked-files=no)
+        if ($trackedChanges.Count -ne 0) { throw "$($source.Name) has uncommitted tracked changes." }
+    }
+}
 
-& git -C $repo submodule update --init --recursive
+& git -C $repo submodule update --init
 if ($LASTEXITCODE -ne 0) { throw 'D3D12 submodule restore failed.' }
 & dotnet restore (Join-Path $LocalMcpRepository 'LocalMCPChatClient.sln')
 if ($LASTEXITCODE -ne 0) { throw 'LocalMCPChatClient restore failed.' }
@@ -54,7 +68,7 @@ if (-not $SkipBuild) {
     if (-not (Test-Path -LiteralPath $vswhere)) { throw 'Visual Studio 2026 is required. Apply .vsconfig after installation.' }
     $vsRoot = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
     $msbuild = Join-Path $vsRoot 'MSBuild\Current\Bin\MSBuild.exe'
-    & $msbuild (Join-Path $repo 'D3D12LookDevPTWinUI.vcxproj') /t:Build /p:Configuration=Debug /p:Platform=x64 /m
+    & $msbuild (Join-Path $repo 'D3D12LookDevPTWinUI.vcxproj') /restore /t:Build /p:Configuration=Debug /p:Platform=x64 /m
     if ($LASTEXITCODE -ne 0) { throw 'D3D12 Debug|x64 build failed.' }
     & dotnet test (Join-Path $LocalMcpRepository 'LocalMCPChatClient.sln') -c Debug --no-restore
     if ($LASTEXITCODE -ne 0) { throw 'LocalMCPChatClient tests failed.' }

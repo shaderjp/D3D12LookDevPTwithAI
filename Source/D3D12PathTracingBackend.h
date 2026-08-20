@@ -1038,6 +1038,7 @@ private:
         mcp::AuthenticationMode::BearerToken;
     mcp::AccessMode m_startupMcpAccessMode = mcp::AccessMode::ConfirmMutations;
     bool m_startupMcpServer = false;
+    bool m_startupMcpPairing = false;
     bool m_hasStartupSettingsPath = false;
     bool m_hasCommandLineProjectPath = false;
     bool m_hasCommandLineScenePath = false;

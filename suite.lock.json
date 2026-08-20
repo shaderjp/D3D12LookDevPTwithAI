@@ -1,12 +1,13 @@
 {
-  "schemaVersion": 1,
-  "suiteVersion": "0.1.0",
+  "schemaVersion": 2,
+  "suiteVersion": "0.2.0-beta.1",
   "repositories": {
     "D3D12LookDevPTWinUI": {
-      "commit": "deb440cfef454b4d6f3d11a2d31c98c71b4a1bb7"
+      "source": "self"
     },
     "LocalMCPChatClient": {
-      "commit": "35abef43837b8f52838b46c0778a14ae0aa747e7",
+      "commit": "63da7a8d47d992a88d8d90e6294b61ff103aadaf",
+      "repository": "shaderjp/LocalMCPChatClient",
       "relativePath": "../LocalMCPChatClient"
     }
   },

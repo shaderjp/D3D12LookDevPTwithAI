@@ -1349,6 +1349,11 @@ void D3D12PathTracingBackend::OnInit()
     if (m_startupMcpServer)
     {
         StartMcpServer();
+        if (m_startupMcpPairing && m_mcpServer.IsRunning())
+        {
+            m_mcpServer.BeginPairing();
+            m_mcpUiDiagnostics = "MCP server started with a 90-second pairing code.";
+        }
     }
     UpdateMcpSnapshots();
     m_lastUpdate = std::chrono::steady_clock::now();
@@ -4487,7 +4492,9 @@ mcp::ResourceResult D3D12PathTracingBackend::ReadMcpResource(const std::string& 
     {
         result.ok = true;
         result.mimeType = "application/json";
-        result.text = R"json({"application":{"name":"D3D12LookDevPTWinUI","version":"0.1.0"},"contractVersion":"1.0","features":{"imageArtifacts":true,"structuredContent":true,"resourceTemplates":true,"prompts":true,"resourceSubscriptions":true,"sceneAudit":true,"viewportCapture":true,"asyncReview":true,"comparisonHeatmap":true,"surfaceProbe":true,"pairing":true,"checkpoints":true,"benchmarks":true},"artifactLimits":{"maxImageBytes":16777216,"maxImagesPerToolCall":8,"maxTurnBytes":67108864,"maxDecodedPixels":64000000}})json";
+        result.text = "{\"application\":{\"name\":\"D3D12LookDevPTWinUI\",\"version\":\"" +
+            std::string(mcp::ApplicationVersion) + "\"},\"contractVersion\":\"" + mcp::ContractVersion +
+            R"json(","features":{"imageArtifacts":true,"structuredContent":true,"resourceTemplates":true,"prompts":true,"resourceSubscriptions":true,"sceneAudit":true,"viewportCapture":true,"asyncReview":true,"comparisonHeatmap":true,"surfaceProbe":true,"pairing":true,"checkpoints":true,"benchmarks":true},"artifactLimits":{"maxImageBytes":16777216,"maxImagesPerToolCall":8,"maxTurnBytes":67108864,"maxDecodedPixels":64000000}})json";
         return result;
     }
     if (uri == "lookdevpt://actions/schema")
@@ -4937,6 +4944,9 @@ void D3D12PathTracingBackend::StartMcpServer()
 void D3D12PathTracingBackend::StopMcpServer()
 {
     m_mcpDispatcher.CancelAll("MCP server stopped.");
+    bool cancelBenchmark = false;
+    McpCheckpoint restoreCheckpoint;
+    std::vector<std::filesystem::path> checkpointPaths;
     {
         std::lock_guard<std::mutex> lock(m_mcpSnapshotMutex);
         if (m_activeMcpReviewId != 0)
@@ -4945,10 +4955,10 @@ void D3D12PathTracingBackend::StopMcpServer()
             {
                 if (review.id == m_activeMcpReviewId)
                 {
-                    review.state = "failed";
-                    review.stage = "failed";
-                    review.errorCode = "server_stopped";
-                    review.diagnostics = "MCP server stopped during review.";
+                    review.state = "cancelled";
+                    review.stage = "cancelled";
+                    review.errorCode.clear();
+                    review.diagnostics = "Review cancelled because the MCP server stopped.";
                     for (const uint64_t id : review.captureIds)
                         for (auto& capture : m_mcpCaptures)
                             if (capture.id == id && capture.pinCount != 0u) --capture.pinCount;
@@ -4961,6 +4971,44 @@ void D3D12PathTracingBackend::StopMcpServer()
             m_activeMcpReviewId = 0;
             EnforceMcpArtifactBudget();
         }
+        if (m_activeMcpBenchmarkId != 0)
+        {
+            const auto benchmark = std::find_if(m_mcpBenchmarks.begin(), m_mcpBenchmarks.end(),
+                [&](const McpBenchmark& value) { return value.id == m_activeMcpBenchmarkId; });
+            if (benchmark != m_mcpBenchmarks.end())
+            {
+                benchmark->cancelRequested = true;
+                benchmark->diagnostics = "Benchmark cancelled because the MCP server stopped.";
+                cancelBenchmark = true;
+            }
+        }
+        if (!m_mcpCheckpoints.empty()) restoreCheckpoint = m_mcpCheckpoints.back();
+        for (const McpCheckpoint& checkpoint : m_mcpCheckpoints) checkpointPaths.push_back(checkpoint.snapshotPath);
+    }
+    if (cancelBenchmark) ProcessMcpBenchmark();
+    if (restoreCheckpoint.id != 0 && SceneFingerprint() == restoreCheckpoint.sceneFingerprint)
+    {
+        std::string diagnostics;
+        if (LoadProjectFromDisk(restoreCheckpoint.snapshotPath.wstring(), diagnostics))
+        {
+            m_projectPath = restoreCheckpoint.projectPath;
+            m_projectDiagnostics = restoreCheckpoint.projectDiagnostics;
+            m_projectDirty = restoreCheckpoint.projectDirty;
+            m_mcpUiDiagnostics = "Unfinished MCP change restored from its checkpoint.";
+        }
+        else
+        {
+            m_mcpUiDiagnostics = "MCP checkpoint restoration failed: " + diagnostics;
+        }
+    }
+    {
+        std::lock_guard<std::mutex> lock(m_mcpSnapshotMutex);
+        m_mcpCheckpoints.clear();
+    }
+    for (const auto& path : checkpointPaths)
+    {
+        std::error_code error;
+        std::filesystem::remove(path, error);
     }
     if (m_mcpServer.IsRunning())
     {
@@ -11786,6 +11834,11 @@ void D3D12PathTracingBackend::ParseCommandLineArgs(WCHAR* argv[], int argc)
         else if (_wcsicmp(argument.c_str(), L"--mcp-server") == 0 || _wcsicmp(argument.c_str(), L"-mcp-server") == 0 || _wcsicmp(argument.c_str(), L"/mcp-server") == 0)
         {
             m_startupMcpServer = true;
+        }
+        else if (_wcsicmp(argument.c_str(), L"--mcp-pair") == 0 || _wcsicmp(argument.c_str(), L"-mcp-pair") == 0 || _wcsicmp(argument.c_str(), L"/mcp-pair") == 0)
+        {
+            m_startupMcpServer = true;
+            m_startupMcpPairing = true;
         }
         else if (matchesPathArgument(argument, L"--mcp-port") || matchesPathArgument(argument, L"-mcp-port") || matchesPathArgument(argument, L"/mcp-port"))
         {

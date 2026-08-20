@@ -71,8 +71,18 @@ try {
     if ($manifest.Count -ne 1) { throw 'Portable suite must contain exactly one suite-manifest.json.' }
     $suiteRoot = Split-Path -Parent $manifest[0].FullName
     $manifestJson = Get-Content -LiteralPath $manifest[0].FullName -Raw | ConvertFrom-Json
-    if ($manifestJson.schemaVersion -ne 1 -or $manifestJson.platform -ne 'windows-11-x64') {
+    if ($manifestJson.schemaVersion -notin @(1, 2) -or $manifestJson.platform -ne 'windows-11-x64') {
         throw 'Unsupported portable suite manifest.'
+    }
+    if ($manifestJson.schemaVersion -eq 2) {
+        if ([string]::IsNullOrWhiteSpace($manifestJson.suiteVersion) -or
+            $manifestJson.mcpProtocolVersion -ne '2026-07-28' -or
+            @($manifestJson.components).Count -ne 2) {
+            throw 'Portable suite v2 identity metadata is incomplete.'
+        }
+        foreach ($component in $manifestJson.components) {
+            if (([string]$component.commit) -notmatch '^[0-9a-f]{40}$') { throw "Invalid component commit: $($component.name)" }
+        }
     }
     $manifestPaths = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
     foreach ($record in $manifestJson.files) {

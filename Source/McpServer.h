@@ -16,6 +16,10 @@
 
 namespace mcp
 {
+inline constexpr const char* ApplicationVersion = "0.2.0-beta.1";
+inline constexpr const char* ContractVersion = "1.0";
+inline constexpr const char* ProtocolVersion = "2026-07-28";
+
 enum class AuthenticationMode
 {
     BearerToken = 0,

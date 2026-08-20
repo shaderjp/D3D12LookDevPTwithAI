@@ -98,8 +98,9 @@ Assimp、DirectXTex、NRD、RTXDI は `BuildThirdParty.ps1` が必要時に buil
 
 ## 再現可能な開発環境とPortableスイート
 
-`suite.lock.json`で両repositoryの互換commit、SDK、package、model/projector、
-llama runtimeを固定します。`.vsconfig`と`config/development.dsc.yaml`はVisual
+`suite.lock.json` schema v2でLocalMCPChatClientの互換commit、SDK、package、
+model/projector、llama runtimeを固定します。D3D12自身は`source: self`とし、実際に
+buildした両repositoryのcommitは生成済みsuite manifestへ記録します。`.vsconfig`と`config/development.dsc.yaml`はVisual
 StudioとWinGet Configurationの前提を定義します。bootstrapは冪等で、
 `-InstallPrerequisites`を明示した場合だけsystemを変更します。
 
@@ -111,13 +112,16 @@ StudioとWinGet Configurationの前提を定義します。bootstrapは冪等で
 
 ```powershell
 .\Scripts\BuildPortableSuite.ps1 -LocalMcpRepository ..\LocalMCPChatClient `
-  -OutputDirectory .\artifacts\D3D12LookDevSuite
+  -OutputDirectory .\artifacts\D3D12LookDevSuite-0.2.0-beta.1-win-x64
 ```
 
 ZIPにはself-containedな両application、Agility SDK、Windows App SDK、launcher、
 online install、clean uninstall、license、version固定manifest、全fileとarchiveの
 SHA-256が入ります。target PCでは現在userの`%LocalAppData%\Programs`へ展開し、
 Visual Studio、.NET、Windows App Runtime、管理者権限を要求しません。
+`0.2.0-beta.1`はコード署名のない公開ベータです。ZIP内の
+`UNSIGNED-BETA.ja.txt`とarchiveのSHA-256を確認してください。launcherはMCP serverと
+90秒のpairing codeを開始し、LocalMCPChatClientの初回画面からmodel取得前に交換します。
 `BuildOfflinePack.ps1`ではmodel/projectorと選択したCPU/CUDA/Vulkan llama runtimeを
 追加できますが、token、資格情報、承認rule、会話履歴は含めません。
 

@@ -42,6 +42,30 @@ namespace
             {
                 result.structuredJson = "{\"ok\":true,\"reviewId\":1,\"state\":\"completed\",\"progress\":1,\"capture\":\"lookdevpt://captures/1.png\",\"heatmap\":\"lookdevpt://comparisons/1/heatmap.png\"}";
             }
+            else if (name == "lookdevpt.create_checkpoint")
+            {
+                result.structuredJson = "{\"ok\":true,\"checkpointId\":1,\"sceneFingerprint\":\"scene-1\",\"resource\":\"lookdevpt://checkpoints/1\"}";
+            }
+            else if (name == "lookdevpt.run_actions")
+            {
+                result.structuredJson = "{\"ok\":true,\"validateOnly\":true,\"appliedCount\":0}";
+            }
+            else if (name == "lookdevpt.restore_checkpoint" || name == "lookdevpt.delete_checkpoint")
+            {
+                result.structuredJson = "{\"ok\":true,\"checkpointId\":1}";
+            }
+            else if (name == "lookdevpt.start_benchmark")
+            {
+                result.structuredJson = "{\"ok\":true,\"benchmarkId\":1,\"state\":\"running\",\"resource\":\"lookdevpt://benchmarks/1\"}";
+            }
+            else if (name == "lookdevpt.get_benchmark")
+            {
+                result.structuredJson = "{\"ok\":true,\"benchmarkId\":1,\"state\":\"completed\",\"progress\":1}";
+            }
+            else if (name == "lookdevpt.cancel_benchmark")
+            {
+                result.structuredJson = "{\"ok\":true,\"benchmarkId\":1,\"state\":\"cancelling\"}";
+            }
             return result;
         }
 
@@ -415,7 +439,10 @@ namespace
         const std::string code = server.BeginPairing();
         Require(code.size() == 8 && std::all_of(code.begin(), code.end(), [](unsigned char ch) { return std::isdigit(ch) != 0; }), "pairing code is not eight digits");
         const std::string discovery = Exchange(port, PairingRequestText(port, "GET", "/.well-known/lookdevpt/v1"));
-        Require(discovery.find("HTTP/1.1 200 OK") != std::string::npos && discovery.find("\"contractVersion\":\"1.0\"") != std::string::npos, "pairing discovery failed");
+        Require(discovery.find("HTTP/1.1 200 OK") != std::string::npos &&
+            discovery.find("\"version\":\"0.2.0-beta.1\"") != std::string::npos &&
+            discovery.find("\"contractVersion\":\"1.0\"") != std::string::npos,
+            "pairing discovery identity failed");
         Require(discovery.find(code) == std::string::npos, "pairing discovery disclosed the code");
         const std::string remote = Exchange(port, PairingRequestText(port, "POST", "/pair", "{\"code\":\"" + code + "\",\"clientName\":\"remote\"}", "https://example.com"));
         Require(remote.find("HTTP/1.1 403 Forbidden") != std::string::npos, "pairing accepted a remote Origin");

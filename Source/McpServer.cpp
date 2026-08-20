@@ -21,7 +21,7 @@
 
 namespace
 {
-    constexpr const char* ModernProtocolVersion = "2026-07-28";
+    constexpr const char* ModernProtocolVersion = mcp::ProtocolVersion;
     constexpr const char* LegacyProtocolVersion = "2025-11-25";
     constexpr const char* CompatProtocolVersion = "2025-06-18";
     constexpr size_t MaxHttpBodyBytes = 16u * 1024u * 1024u;
@@ -149,14 +149,16 @@ namespace
             std::to_string(code) + ",\"message\":\"" + cld::EscapeJson(message) + "\",\"data\":" + dataJson + "}}";
     }
 
-    const char* ServerInfoJson()
+    std::string ServerInfoJson()
     {
-        return R"json({"name":"d3d12lookdevpt","title":"D3D12LookDevPT","version":"0.1.0"})json";
+        return "{\"name\":\"d3d12lookdevpt\",\"title\":\"D3D12LookDevPT\",\"version\":\"" +
+            std::string(mcp::ApplicationVersion) + "\"}";
     }
 
-    const char* LookDevExperimentalJson()
+    std::string LookDevExperimentalJson()
     {
-        return R"json({"lookdevpt":{"contractVersion":"1.0","features":{"imageArtifacts":true,"structuredContent":true,"resourceTemplates":true,"prompts":true,"resourceSubscriptions":true,"sceneAudit":true,"viewportCapture":true,"asyncReview":true,"comparisonHeatmap":true,"surfaceProbe":true,"pairing":true,"checkpoints":true,"benchmarks":true},"artifactLimits":{"maxImageBytes":16777216,"maxImagesPerToolCall":8,"maxTurnBytes":67108864,"maxDecodedPixels":64000000}}})json";
+        return "{\"lookdevpt\":{\"contractVersion\":\"" + std::string(mcp::ContractVersion) +
+            R"json(","features":{"imageArtifacts":true,"structuredContent":true,"resourceTemplates":true,"prompts":true,"resourceSubscriptions":true,"sceneAudit":true,"viewportCapture":true,"asyncReview":true,"comparisonHeatmap":true,"surfaceProbe":true,"pairing":true,"checkpoints":true,"benchmarks":true},"artifactLimits":{"maxImageBytes":16777216,"maxImagesPerToolCall":8,"maxTurnBytes":67108864,"maxDecodedPixels":64000000}}})json";
     }
 
     std::string ModernResultJson(const std::string& resultJson, int64_t ttlMs = -1)
@@ -1490,7 +1492,8 @@ Server::HttpResponse Server::HandleHttpRequest(const HttpRequest& request)
     {
         if (request.method != "GET") return JsonResponse(405, "Method Not Allowed", MakeHttpErrorBody(-32000, "Discovery requires GET."));
         const ServerStatus status = GetStatus();
-        return JsonResponse(200, "OK", "{\"name\":\"D3D12LookDevPTWinUI\",\"version\":\"0.1.0\",\"contractVersion\":\"1.0\",\"endpoint\":\"" +
+        return JsonResponse(200, "OK", "{\"name\":\"D3D12LookDevPTWinUI\",\"version\":\"" + std::string(ApplicationVersion) +
+            "\",\"contractVersion\":\"" + ContractVersion + "\",\"endpoint\":\"" +
             cld::EscapeJson(status.endpoint) + "\",\"pairing\":{\"available\":true,\"active\":" + (status.pairingSecondsRemaining > 0 ? "true" : "false") +
             ",\"expiresInSeconds\":" + std::to_string(status.pairingSecondsRemaining) + "}}");
     }
@@ -1651,7 +1654,7 @@ Server::HttpResponse Server::HandlePairRequest(const HttpRequest& request)
     m_recentRequests.push_back("paired client: " + clientName);
     if (m_recentRequests.size() > 12) m_recentRequests.erase(m_recentRequests.begin());
     return JsonResponse(200, "OK", "{\"clientId\":\"" + clientId + "\",\"clientName\":\"" + cld::EscapeJson(clientName) +
-        "\",\"endpoint\":\"http://127.0.0.1:" + std::to_string(m_settings.port) + "/mcp\",\"token\":\"" + token + "\",\"contractVersion\":\"1.0\"}");
+        "\",\"endpoint\":\"http://127.0.0.1:" + std::to_string(m_settings.port) + "/mcp\",\"token\":\"" + token + "\",\"contractVersion\":\"" + ContractVersion + "\"}");
 }
 
 Server::HttpResponse Server::HandleJsonRpc(const HttpRequest& request, const cld::JsonValue& rpc, bool modern)

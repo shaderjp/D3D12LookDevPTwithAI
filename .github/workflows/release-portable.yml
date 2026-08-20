@@ -5,38 +5,128 @@ on:
   push:
     tags: ['v*']
 
+permissions:
+  contents: read
+
 jobs:
   build:
-    runs-on: windows-2025
+    runs-on: windows-2025-vs2026
     steps:
       - uses: actions/checkout@v4
         with:
-          submodules: recursive
+          submodules: true
+      - name: Read suite lock
+        id: suite-lock
+        shell: pwsh
+        run: |
+          $lock = Get-Content ./suite.lock.json -Raw | ConvertFrom-Json
+          if ($lock.schemaVersion -ne 2) { throw 'suite.lock.json schema v2 is required.' }
+          if (([string]$lock.repositories.LocalMCPChatClient.commit) -notmatch '^[0-9a-f]{40}$') { throw 'LocalMCPChatClient lock is invalid.' }
+          if ($env:GITHUB_REF_TYPE -eq 'tag' -and $env:GITHUB_REF_NAME -ne "v$($lock.suiteVersion)") {
+            throw "Tag $env:GITHUB_REF_NAME does not match suite version v$($lock.suiteVersion)."
+          }
+          "local_commit=$($lock.repositories.LocalMCPChatClient.commit)" >> $env:GITHUB_OUTPUT
+          "suite_version=$($lock.suiteVersion)" >> $env:GITHUB_OUTPUT
       - uses: actions/checkout@v4
         with:
           repository: shaderjp/LocalMCPChatClient
+          ref: ${{ steps.suite-lock.outputs.local_commit }}
           path: LocalMCPChatClient
       - uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: 10.0.x
+          dotnet-version: 10.0.300
       - name: Build and test integration
         shell: pwsh
         run: |
-          ./Scripts/BootstrapSuite.ps1 -LocalMcpRepository "$env:GITHUB_WORKSPACE/LocalMCPChatClient"
+          ./Scripts/BootstrapSuite.ps1 -LocalMcpRepository "$env:GITHUB_WORKSPACE/LocalMCPChatClient" -EnforceLock
+      - name: Validate Visual Studio filters and beta contracts
+        shell: pwsh
+        run: |
+          [xml]$project = Get-Content ./D3D12LookDevPTWinUI.vcxproj -Raw
+          [xml]$filters = Get-Content ./D3D12LookDevPTWinUI.vcxproj.filters -Raw
+          $itemTypes = @('ClCompile','ClInclude','ApplicationDefinition','Page','Midl','None','Manifest')
+          $projectItems = @($project.Project.ItemGroup.ChildNodes | Where-Object { $_.LocalName -in $itemTypes -and $_.Include } | ForEach-Object { "$($_.LocalName)|$($_.Include)" })
+          $filterNodes = @($filters.Project.ItemGroup.ChildNodes | Where-Object { $_.LocalName -in $itemTypes -and $_.Include })
+          $filterItems = @($filterNodes | ForEach-Object { "$($_.LocalName)|$($_.Include)" })
+          $declared = @($filters.Project.ItemGroup.Filter | ForEach-Object Include)
+          $invalid = @(
+            $projectItems | Where-Object { $_ -notin $filterItems }
+            $filterItems | Where-Object { $_ -notin $projectItems }
+            $filterItems | Group-Object | Where-Object Count -ne 1
+            $filterNodes | Where-Object { -not $_.Filter -or $_.Filter -notin $declared }
+          )
+          if ($invalid) { $invalid | Format-List | Out-String | Write-Error; throw 'vcxproj/filter validation failed.' }
+          ./Scripts/TestMcpServerHttp.ps1
+          ./Scripts/TestMcpReviewAnalysis.ps1
+          ./Scripts/TestLookDevBundle.ps1
+          ./Scripts/TestOfflinePack.ps1
+          ./Scripts/TestPortablePrerequisites.ps1 -OutputJson "$env:RUNNER_TEMP/suite-diagnostics.json"
       - name: Build portable suite
         shell: pwsh
         run: |
-          ./Scripts/BuildPortableSuite.ps1 -OutputDirectory "$env:RUNNER_TEMP/D3D12LookDevSuite" -LocalMcpRepository "$env:GITHUB_WORKSPACE/LocalMCPChatClient"
+          $output = "$env:RUNNER_TEMP/D3D12LookDevSuite-${{ steps.suite-lock.outputs.suite_version }}-win-x64"
+          ./Scripts/BuildPortableSuite.ps1 -OutputDirectory $output -LocalMcpRepository "$env:GITHUB_WORKSPACE/LocalMCPChatClient"
       - name: Audit dependency and license payload
         shell: pwsh
         run: |
-          $suite = "$env:RUNNER_TEMP/D3D12LookDevSuite"
-          if (-not (Test-Path "$suite/suite-manifest.json")) { throw 'suite manifest missing' }
-          if (-not (Get-ChildItem $suite -Recurse -Filter '*LICENSE*')) { throw 'license payload missing' }
+          $suite = "$env:RUNNER_TEMP/D3D12LookDevSuite-${{ steps.suite-lock.outputs.suite_version }}-win-x64"
+          $manifestPath = "$suite/suite-manifest.json"
+          if (-not (Test-Path $manifestPath)) { throw 'suite manifest missing' }
+          $manifest = Get-Content $manifestPath -Raw | ConvertFrom-Json
+          if ($manifest.schemaVersion -ne 2 -or $manifest.codeSigned -ne $false -or
+              $manifest.mcpProtocolVersion -ne '2026-07-28' -or @($manifest.components).Count -ne 2) {
+            throw 'suite identity/signing metadata is invalid'
+          }
+          foreach ($record in $manifest.files) {
+            $path = Join-Path $suite ([string]$record.path).Replace('/', '\')
+            if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "manifest file missing: $($record.path)" }
+            if ((Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant() -ne $record.sha256) {
+              throw "manifest hash mismatch: $($record.path)"
+            }
+          }
+          foreach ($required in @('LICENSE', 'THIRD-PARTY-NOTICES.txt', 'UNSIGNED-BETA.ja.txt', 'Launch-LookDevSuite.ps1')) {
+            if (-not (Test-Path (Join-Path $suite $required))) { throw "required disclosure missing: $required" }
+          }
+          $forbidden = Get-ChildItem $suite -Recurse -File | Where-Object {
+            $_.Name -match '\.(gguf|db)$' -or $_.Name -in @('settings.json','history.db') -or
+            $_.Name -match '^(nvngx|sl\.|rtxdi)'
+          }
+          if ($forbidden) { throw "forbidden user/model payload: $($forbidden.FullName -join ', ')" }
           Get-ChildItem $suite -Recurse -Filter *.dll | ForEach-Object { $_.FullName }
+      - name: Verify per-user install and clean uninstall
+        shell: pwsh
+        run: |
+          $version = '${{ steps.suite-lock.outputs.suite_version }}'
+          $zip = "$env:RUNNER_TEMP/D3D12LookDevSuite-$version-win-x64.zip"
+          $hash = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash
+          $install = Join-Path $env:LOCALAPPDATA 'Programs/D3D12LookDevSuite'
+          if (Test-Path $install) { throw "test install target already exists: $install" }
+          ./Scripts/InstallPortableSuite.ps1 -PackageUri ([uri]$zip) -Sha256 $hash -InstallDirectory $install
+          if (-not (Test-Path "$install/Launch-LookDevSuite.ps1")) { throw 'installed launcher missing' }
+          & "$install/UninstallPortableSuite.ps1" -InstallDirectory $install -Confirm:$false
+          if (Test-Path $install) { throw 'uninstall left application files behind' }
       - uses: actions/upload-artifact@v4
         with:
           name: D3D12LookDevSuite-win-x64
           path: |
-            ${{ runner.temp }}/D3D12LookDevSuite.zip
-            ${{ runner.temp }}/D3D12LookDevSuite.zip.sha256
+            ${{ runner.temp }}/D3D12LookDevSuite-${{ steps.suite-lock.outputs.suite_version }}-win-x64.zip
+            ${{ runner.temp }}/D3D12LookDevSuite-${{ steps.suite-lock.outputs.suite_version }}-win-x64.zip.sha256
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: D3D12LookDevSuite-win-x64
+          path: release
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: release/*
+          name: D3D12 LookDev Suite ${{ github.ref_name }}
+          generate_release_notes: true
+          draft: false
+          prerelease: true

@@ -68,7 +68,7 @@ if (-not $SkipBuild) {
     if (-not (Test-Path -LiteralPath $vswhere)) { throw 'Visual Studio 2026 is required. Apply .vsconfig after installation.' }
     $vsRoot = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
     $msbuild = Join-Path $vsRoot 'MSBuild\Current\Bin\MSBuild.exe'
-    & $msbuild (Join-Path $repo 'D3D12LookDevPTWinUI.vcxproj') /t:Build /p:Configuration=Debug /p:Platform=x64 /m
+    & $msbuild (Join-Path $repo 'D3D12LookDevPTWinUI.vcxproj') /restore /t:Build /p:Configuration=Debug /p:Platform=x64 /m
     if ($LASTEXITCODE -ne 0) { throw 'D3D12 Debug|x64 build failed.' }
     & dotnet test (Join-Path $LocalMcpRepository 'LocalMCPChatClient.sln') -c Debug --no-restore
     if ($LASTEXITCODE -ne 0) { throw 'LocalMCPChatClient tests failed.' }

@@ -38,7 +38,7 @@ if (-not $SkipBuild) {
     $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
     $vsRoot = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
     $msbuild = Join-Path $vsRoot 'MSBuild\Current\Bin\MSBuild.exe'
-    & $msbuild (Join-Path $repo 'D3D12LookDevPTWinUI.vcxproj') /t:Build /p:Configuration=Release /p:Platform=x64 /p:WindowsAppSDKSelfContained=true /p:UseHybridCRT=true /p:EnableDLSS=false /p:EnableNRD=true /p:EnableRTXDI=false /m
+    & $msbuild (Join-Path $repo 'D3D12LookDevPTWinUI.vcxproj') /restore /t:Build /p:Configuration=Release /p:Platform=x64 /p:WindowsAppSDKSelfContained=true /p:UseHybridCRT=true /p:EnableDLSS=false /p:EnableNRD=true /p:EnableRTXDI=false /m
     if ($LASTEXITCODE -ne 0) { throw 'Portable D3D12 build failed.' }
     & dotnet publish (Join-Path $LocalMcpRepository 'src\LocalMCPChatClient.App\LocalMCPChatClient.App.csproj') -c Release -r win-x64 --self-contained true -o $chatOutput
     if ($LASTEXITCODE -ne 0) { throw 'Portable LocalMCPChatClient publish failed.' }

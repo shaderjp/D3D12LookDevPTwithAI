@@ -77,7 +77,7 @@ $d3dAppLicenses += @(
     'licenses/D3D12LookDevPTWinUI/CPPWINRT-LICENSE.txt'
 ) + $windowsAppSdkLicenses + $webViewLicenses + $agilityLicenses + $dxcLicenses
 $localLicenseFiles = @(
-    'LocalMCPChatClient/LICENSE',
+    'LocalMCPChatClient/LICENSE.txt',
     'LocalMCPChatClient/THIRD-PARTY-NOTICES.txt'
 ) + @(Get-ChildItem -LiteralPath (Join-Path $suite 'LocalMCPChatClient\licenses') -File -ErrorAction SilentlyContinue | ForEach-Object { Get-RelativePath $_.FullName })
 
@@ -86,7 +86,9 @@ $dependencyAssets = @()
 $depsFiles = @(Get-ChildItem -LiteralPath $localRoot -File -Filter '*.deps.json')
 if ($depsFiles.Count -ne 1) { throw "Expected one LocalMCPChatClient deps file, found $($depsFiles.Count)." }
 $deps = Get-Content -LiteralPath $depsFiles[0].FullName -Raw | ConvertFrom-Json
-$target = $deps.targets.PSObject.Properties | Select-Object -First 1
+$ridTargets = @($deps.targets.PSObject.Properties | Where-Object { $_.Name -match '/win-x64$' })
+if ($ridTargets.Count -ne 1) { throw "Expected one win-x64 deps target, found $($ridTargets.Count)." }
+$target = $ridTargets[0]
 foreach ($library in $target.Value.PSObject.Properties) {
     foreach ($groupName in @('runtime', 'native', 'resources', 'runtimeTargets')) {
         $group = $library.Value.PSObject.Properties[$groupName]
@@ -108,7 +110,7 @@ function Resolve-LocalComponent([string]$RelativePath) {
         $localPath -match '^LocalMCPChatClient\.(App|Core|Infrastructure)\.dll$') {
         return 'LocalMCPChatClient'
     }
-    if ($localPath -eq 'LICENSE' -or $localPath -eq 'THIRD-PARTY-NOTICES.txt' -or $localPath.StartsWith('licenses/', [StringComparison]::OrdinalIgnoreCase)) {
+    if ($localPath -eq 'LICENSE.txt' -or $localPath -eq 'THIRD-PARTY-NOTICES.txt' -or $localPath.StartsWith('licenses/', [StringComparison]::OrdinalIgnoreCase)) {
         return 'LocalMCPChatClient license documents'
     }
     $candidates = @($dependencyAssets | Where-Object {
@@ -118,6 +120,10 @@ function Resolve-LocalComponent([string]$RelativePath) {
     if ($candidates.Count -eq 0) {
         $fileName = [IO.Path]::GetFileName($localPath)
         $candidates = @($dependencyAssets | Where-Object { $_.FileName.Equals($fileName, [StringComparison]::OrdinalIgnoreCase) })
+    }
+    if ($candidates.Count -eq 0 -and $localPath -match '^[^/]+/(?<neutral>.+)\.resources\.dll$') {
+        $neutralFileName = $Matches.neutral + '.dll'
+        $candidates = @($dependencyAssets | Where-Object { $_.FileName.Equals($neutralFileName, [StringComparison]::OrdinalIgnoreCase) })
     }
     $components = @($candidates.Component | Sort-Object -Unique)
     if ($components.Count -ne 1) { throw "LocalMCPChatClient payload is not uniquely mapped by its deps file: $RelativePath" }

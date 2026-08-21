@@ -36,6 +36,7 @@ ui.user.json
 /projects/startup.lookdevpt.json
 Assets/Models/**/*.gguf
 /dist/
+/artifacts/
 /benchmark-output/
 
 build/

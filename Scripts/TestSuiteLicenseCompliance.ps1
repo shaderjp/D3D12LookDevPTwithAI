@@ -177,7 +177,7 @@ if ($forbidden.Count -gt 0) { throw "Forbidden release payload: $($forbidden.Ful
 
 $licenseTexts = @($allFiles | Where-Object {
     $path = Get-RelativePath $_.FullName
-    $path -match '(^|/)licenses?/' -or $_.Name -match 'LICENSE|NOTICE'
+    $path -match '(^|/)licenses?/' -or $_.Name -match '(?i)(^LICENSE($|\.)|(?:LICENSE|NOTICE|NOTICES)\.txt$)'
 })
 $prohibitedLicensePhrases = @(
     'WINDOWS APP SDK ENGINEERING PREVIEW',

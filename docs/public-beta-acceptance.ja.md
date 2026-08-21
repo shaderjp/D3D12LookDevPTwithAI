@@ -13,7 +13,8 @@
 ## 15分導入シナリオ
 
 1. ZIPと`.sha256`を照合してユーザーフォルダーへ展開する。
-2. `Launch-LookDevSuite.ps1`を実行し、診断JSONが作成されることを確認する。
+2. `Launch-LookDevSuite.ps1`を実行し、Microsoft公式Windows App Runtime 2.4.0の取得、
+   SHA-256／署名検証、現在userへの導入、診断JSON作成が完了することを確認する。
 3. D3D12側に表示された8桁コードをLocalMCPChatClient初回画面へ入力する。
 4. 推奨runtime、Gemma 4、mmprojを取得し、hash検証が完了することを確認する。
 5. モデルdownload時間を除き、展開開始から15分以内にquick reviewが完了することを確認する。
@@ -28,6 +29,8 @@
 - 2時間反復後に孤立したllama/D3D12 process、秘密情報を含む設定・log・診断、再現可能なcrashがない。
 - uninstall既定動作で設定、会話、artifact、Credential Manager項目が保持され、
   `-RemoveLocalApplicationData`指定時だけlocal dataが削除される。
+- ZIPに`D3D12SDKLayers.dll`、DLSS、NRD、RTXDIのSDK binary/object codeがなく、
+  `suite-license-map.json`と`suite-sbom.spdx.json`が全payload fileを対応付ける。
 
 ## 記録
 

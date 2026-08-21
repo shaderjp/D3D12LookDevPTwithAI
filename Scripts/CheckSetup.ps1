@@ -249,17 +249,12 @@ if (Test-Path -LiteralPath $agilityCore -PathType Leaf) {
     Add-Result -Status "WARN" -Check "D3D12 Agility SDK" -Message "D3D12 Agility SDK runtime was not found in the NuGet package cache." -Fix $restoreFix
 }
 
-$windowsAppRuntime = @(
-    Get-AppxPackage -Name "Microsoft.WindowsAppRuntime.2" -ErrorAction SilentlyContinue |
-        Where-Object {
-            ($_.Architecture -eq 'X64' -or $_.Architecture -eq 'Neutral') -and
-            $_.Version -ge [version]'2.3.0.0'
-        }
-)
+$windowsAppRuntime = @(Get-AppxPackage -Name "Microsoft.WindowsAppRuntime.2.4" -ErrorAction SilentlyContinue |
+    Where-Object { $_.Architecture -eq 'X64' -or $_.Architecture -eq 'Neutral' })
 if ($windowsAppRuntime.Count -gt 0) {
-    Add-Result -Status "OK" -Check "Windows App Runtime x64" -Message "Windows App Runtime 2.3 is installed for the current user."
+    Add-Result -Status "OK" -Check "Windows App Runtime x64" -Message "Windows App Runtime 2.4 is installed for the current user."
 } else {
-    Add-Result -Status "FAIL" -Check "Windows App Runtime x64" -Message "Windows App Runtime 2.3 was not found for the current user." -Fix "Install the Windows App Runtime 2.3 x64 redistributable, then rerun this checker."
+    Add-Result -Status "FAIL" -Check "Windows App Runtime x64" -Message "Windows App Runtime 2.4 was not found for the current user." -Fix "Run Scripts/InstallWindowsAppRuntime.ps1 or install the official Windows App Runtime 2.4 x64 redistributable, then rerun this checker."
 }
 
 if ($CheckAssets) {

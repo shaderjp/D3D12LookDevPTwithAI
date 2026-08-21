@@ -61,6 +61,7 @@ jobs:
           ./Scripts/TestLookDevBundle.ps1
           ./Scripts/TestOfflinePack.ps1
           ./Scripts/TestPortablePrerequisites.ps1 -OutputJson "$env:RUNNER_TEMP/suite-diagnostics.json"
+          ./Scripts/InstallWindowsAppRuntime.ps1 -VerifyMetadataOnly
       - name: Build portable suite
         shell: pwsh
         run: |
@@ -74,7 +75,8 @@ jobs:
           if (-not (Test-Path $manifestPath)) { throw 'suite manifest missing' }
           $manifest = Get-Content $manifestPath -Raw | ConvertFrom-Json
           if ($manifest.schemaVersion -ne 2 -or $manifest.codeSigned -ne $false -or
-              $manifest.mcpProtocolVersion -ne '2026-07-28' -or @($manifest.components).Count -ne 2) {
+              $manifest.mcpProtocolVersion -ne '2026-07-28' -or @($manifest.components).Count -ne 2 -or
+              $manifest.backends.nrd -ne $false -or $manifest.windowsAppRuntime.bundled -ne $false) {
             throw 'suite identity/signing metadata is invalid'
           }
           foreach ($record in $manifest.files) {
@@ -84,15 +86,18 @@ jobs:
               throw "manifest hash mismatch: $($record.path)"
             }
           }
-          foreach ($required in @('LICENSE', 'THIRD-PARTY-NOTICES.txt', 'UNSIGNED-BETA.ja.txt', 'Launch-LookDevSuite.ps1')) {
+          foreach ($required in @('LICENSE', 'THIRD-PARTY-NOTICES.txt', 'REDISTRIBUTION-NOTES.txt',
+              'UNSIGNED-BETA.ja.txt', 'Launch-LookDevSuite.ps1', 'InstallWindowsAppRuntime.ps1',
+              'suite-license-map.json', 'suite-sbom.spdx.json')) {
             if (-not (Test-Path (Join-Path $suite $required))) { throw "required disclosure missing: $required" }
           }
           $forbidden = Get-ChildItem $suite -Recurse -File | Where-Object {
             $_.Name -match '\.(gguf|db)$' -or $_.Name -in @('settings.json','history.db') -or
-            $_.Name -match '^(nvngx|sl\.|rtxdi)'
+            $_.Name -ieq 'D3D12SDKLayers.dll' -or $_.Name -match '^(nvngx|sl\.)' -or
+            $_.Name -match '^(NRD|RTXDI).*\.(dll|lib)$'
           }
           if ($forbidden) { throw "forbidden user/model payload: $($forbidden.FullName -join ', ')" }
-          Get-ChildItem $suite -Recurse -Filter *.dll | ForEach-Object { $_.FullName }
+          ./Scripts/TestSuiteLicenseCompliance.ps1 -SuiteDirectory $suite
       - name: Verify per-user install and clean uninstall
         shell: pwsh
         run: |

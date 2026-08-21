@@ -38,7 +38,8 @@
     <TargetFrameworkVersion>v0.0</TargetFrameworkVersion>
     <BaseIntermediateOutputPath>Obj\NuGet\D3D12LookDevPTWinUI\</BaseIntermediateOutputPath>
     <Microsoft_Direct3D_D3D12_SkipLibraryCopy>false</Microsoft_Direct3D_D3D12_SkipLibraryCopy>
-    <Microsoft_Direct3D_D3D12_SkipDebugLayerCopy>false</Microsoft_Direct3D_D3D12_SkipDebugLayerCopy>
+    <Microsoft_Direct3D_D3D12_SkipDebugLayerCopy Condition="'$(Configuration)'!='Release'">false</Microsoft_Direct3D_D3D12_SkipDebugLayerCopy>
+    <Microsoft_Direct3D_D3D12_SkipDebugLayerCopy Condition="'$(Configuration)'=='Release'">true</Microsoft_Direct3D_D3D12_SkipDebugLayerCopy>
     <Microsoft_Direct3D_D3D12_SkipIncludeDir>false</Microsoft_Direct3D_D3D12_SkipIncludeDir>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
@@ -58,7 +59,7 @@
     <PlatformToolset>$(LookDevPtPlatformToolset)</PlatformToolset>
     <WholeProgramOptimization>true</WholeProgramOptimization>
     <CharacterSet>Unicode</CharacterSet>
-    <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
+    <WindowsAppSDKSelfContained>false</WindowsAppSDKSelfContained>
     <UseHybridCRT>true</UseHybridCRT>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
@@ -289,10 +290,12 @@
     <None Include="Scripts\BuildOfflinePack.ps1" />
     <None Include="Scripts\InstallOfflinePack.ps1" />
     <None Include="Scripts\InstallPortableSuite.ps1" />
+    <None Include="Scripts\InstallWindowsAppRuntime.ps1" />
     <None Include="Scripts\LookDevBundle.ps1" />
     <None Include="Scripts\TestLookDevBundle.ps1" />
     <None Include="Scripts\TestOfflinePack.ps1" />
     <None Include="Scripts\TestPortablePrerequisites.ps1" />
+    <None Include="Scripts\TestSuiteLicenseCompliance.ps1" />
     <None Include="Scripts\UninstallPortableSuite.ps1" />
     <None Include="Shaders\PathTracingABI.hlsli" />
     <None Include="Shaders\PathTracingDebugViews.hlsli" />
@@ -332,7 +335,7 @@
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.WindowsAppSDK">
-      <Version>2.3.1</Version>
+      <Version>2.4.0</Version>
     </PackageReference>
     <PackageReference Include="Microsoft.Windows.CppWinRT">
       <Version>2.0.250303.1</Version>
@@ -403,7 +406,8 @@
   <Target Name="CopyAgilitySdk" AfterTargets="Build">
     <MakeDir Directories="$(OutDir)D3D12" />
     <Error Condition="!Exists('$(AgilitySdkBinDir)D3D12Core.dll')" Text="D3D12 Agility SDK DLLs were not found at $(AgilitySdkBinDir). Restore NuGet packages first." />
-    <Copy SourceFiles="$(AgilitySdkBinDir)D3D12Core.dll;$(AgilitySdkBinDir)d3d12SDKLayers.dll" DestinationFolder="$(OutDir)D3D12\" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="$(AgilitySdkBinDir)D3D12Core.dll" DestinationFolder="$(OutDir)D3D12\" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="$(AgilitySdkBinDir)d3d12SDKLayers.dll" DestinationFolder="$(OutDir)D3D12\" SkipUnchangedFiles="true" Condition="'$(Configuration)'!='Release'" />
   </Target>
   <Target Name="CopyOptionalDlssRuntime" AfterTargets="Build" Condition="'$(D3D12LookDevPtWithDlss)'=='1'">
     <MakeDir Directories="$(OutDir)Streamline" />

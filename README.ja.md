@@ -31,18 +31,18 @@ slot、RTXDI / DLSS の詳細 status を操作・確認できます。
 - Visual Studio 2026、Desktop development with C++ および C++ WinUI tooling
 - MSVC `v145`
 - Windows SDK `10.0.26100.0`
-- Windows App Runtime 2.3 x64
+- Windows App Runtime 2.4 x64
 - submodule 対応 Git
 
-Debug build は unpackaged、framework-dependent です。Release は unpackaged、
-Windows App SDK self-contained、Hybrid CRT の portable build に対応します。
+Debug / Release build は unpackaged、Windows App SDK framework-dependent です。
+Release は Hybrid CRT を使用します。
 VS 2022 / `v143`、MSIX、ARM64 は対象外です。
 
 Visual Studio project は次の NuGet package を固定します。
 
 | Package | Version |
 |---|---:|
-| Microsoft.WindowsAppSDK | 2.3.1 |
+| Microsoft.WindowsAppSDK | 2.4.0 |
 | Microsoft.Windows.CppWinRT | 2.0.250303.1 |
 | Microsoft.Direct3D.D3D12 | 1.619.3 |
 | Microsoft.Direct3D.DXC | 1.9.2602.17 |
@@ -53,7 +53,7 @@ Visual Studio project は次の NuGet package を固定します。
 .\Scripts\CheckSetup.ps1 -CheckDLSS -CheckNRD
 ```
 
-Windows App Runtime 2.3 x64 や build component が不足している場合は、checker
+Windows App Runtime 2.4 x64 や build component が不足している場合は、checker
 が具体的な不足項目を表示します。unpackaged executable の起動前に、対応する
 Windows App Runtime redistributable をインストールしてください。
 
@@ -78,7 +78,7 @@ $msbuild = "C:\Program Files\Microsoft Visual Studio\18\Insiders\MSBuild\Current
 & $msbuild .\D3D12LookDevPTWinUI.sln /m /restore /p:Configuration=Debug /p:Platform=x64
 ```
 
-既定 backend は `DLSS=true`、`NRD=true`、`RTXDI=false` です。各 backend は
+repository既定backendは`DLSS=false`、`NRD=true`、`RTXDI=false`です。各backendは
 個別に上書きできます。
 
 ```powershell
@@ -108,17 +108,19 @@ StudioとWinGet Configurationの前提を定義します。bootstrapは冪等で
 .\Scripts\BootstrapSuite.ps1 -LocalMcpRepository ..\LocalMCPChatClient
 ```
 
-`DLSS=false / NRD=true / RTXDI=false`のxcopy可能なsuiteを生成します。
+公開ベータ用の`DLSS=false / NRD=false / RTXDI=false` suiteを生成します。
 
 ```powershell
 .\Scripts\BuildPortableSuite.ps1 -LocalMcpRepository ..\LocalMCPChatClient `
   -OutputDirectory .\artifacts\D3D12LookDevSuite-0.2.0-beta.1-win-x64
 ```
 
-ZIPにはself-containedな両application、Agility SDK、Windows App SDK、launcher、
-online install、clean uninstall、license、version固定manifest、全fileとarchiveの
-SHA-256が入ります。target PCでは現在userの`%LocalAppData%\Programs`へ展開し、
-Visual Studio、.NET、Windows App Runtime、管理者権限を要求しません。
+ZIPにはframework-dependentなD3D12 application、self-containedなLocalMCPChatClient、
+Agility SDK、launcher、online install、clean uninstall、license、file単位license map、
+SPDX SBOM、version固定manifest、全fileとarchiveのSHA-256が入ります。target PCでは
+現在userの`%LocalAppData%\Programs`へ展開し、Visual Studioと.NETを要求しません。
+初回起動時にMicrosoft署名済みWindows App Runtime 2.4.0 installerを公式URLから取得し、
+固定SHA-256とAuthenticode署名を検証します。非昇格時は現在userへruntimeを導入します。
 `0.2.0-beta.1`はコード署名のない公開ベータです。ZIP内の
 `UNSIGNED-BETA.ja.txt`とarchiveのSHA-256を確認してください。launcherはMCP serverと
 90秒のpairing codeを開始し、LocalMCPChatClientの初回画面からmodel取得前に交換します。

@@ -33,18 +33,17 @@ cancellation, the seventh alpha texture slot, and detailed RTXDI / DLSS status.
 - Visual Studio 2026 with Desktop development with C++ and C++ WinUI tooling
 - MSVC `v145`
 - Windows SDK `10.0.26100.0`
-- Windows App Runtime 2.3 x64
+- Windows App Runtime 2.4 x64
 - Git with submodule support
 
-Debug builds are unpackaged and framework-dependent. Release supports an
-unpackaged, Windows App SDK self-contained, Hybrid CRT portable build. VS 2022
-/ `v143`, MSIX, and ARM64 are not supported.
+Debug and Release builds are unpackaged and Windows App SDK framework-dependent;
+Release uses the Hybrid CRT. VS 2022 / `v143`, MSIX, and ARM64 are not supported.
 
 The Visual Studio project pins these NuGet packages:
 
 | Package | Version |
 |---|---:|
-| Microsoft.WindowsAppSDK | 2.3.1 |
+| Microsoft.WindowsAppSDK | 2.4.0 |
 | Microsoft.Windows.CppWinRT | 2.0.250303.1 |
 | Microsoft.Direct3D.D3D12 | 1.619.3 |
 | Microsoft.Direct3D.DXC | 1.9.2602.17 |
@@ -55,7 +54,7 @@ Run the setup checker before the first build:
 .\Scripts\CheckSetup.ps1 -CheckDLSS -CheckNRD
 ```
 
-The checker reports a clear failure if Windows App Runtime 2.3 x64 or a
+The checker reports a clear failure if Windows App Runtime 2.4 x64 or a
 required build component is missing. Install the matching Windows App Runtime
 redistributable before running the unpackaged executable.
 
@@ -80,7 +79,7 @@ $msbuild = "C:\Program Files\Microsoft Visual Studio\18\Insiders\MSBuild\Current
 & $msbuild .\D3D12LookDevPTWinUI.sln /m /restore /p:Configuration=Debug /p:Platform=x64
 ```
 
-The default backend configuration is `DLSS=true`, `NRD=true`, and
+The repository default backend configuration is `DLSS=false`, `NRD=true`, and
 `RTXDI=false`. Each backend can be overridden independently:
 
 ```powershell
@@ -113,19 +112,22 @@ machine only when `-InstallPrerequisites` is explicitly supplied:
 .\Scripts\BootstrapSuite.ps1 -LocalMcpRepository ..\LocalMCPChatClient
 ```
 
-Build an xcopy-deployable suite with `DLSS=false / NRD=true / RTXDI=false`:
+Build the public beta suite with `DLSS=false / NRD=false / RTXDI=false`:
 
 ```powershell
 .\Scripts\BuildPortableSuite.ps1 -LocalMcpRepository ..\LocalMCPChatClient `
   -OutputDirectory .\artifacts\D3D12LookDevSuite-0.2.0-beta.1-win-x64
 ```
 
-The ZIP contains both self-contained applications, Agility SDK, Windows App
-SDK, launch/bootstrap/uninstall scripts, licenses, a version-locked manifest,
-and SHA-256 for every file and the archive. Installation defaults to the
-current user's `%LocalAppData%\Programs`; Visual Studio, .NET, Windows App
-Runtime, and administrator rights are not required on the target PC. Use
-Version `0.2.0-beta.1` is an unsigned public beta. Verify the archive SHA-256
+The ZIP contains the framework-dependent D3D12 application, the self-contained
+LocalMCPChatClient, Agility SDK, launch/bootstrap/uninstall scripts, licenses,
+a file-level license map, an SPDX SBOM, a version-locked manifest, and SHA-256
+for every file and the archive. Installation defaults to the current user's
+`%LocalAppData%\Programs`; Visual Studio and .NET are not required. On first
+launch, the suite downloads Microsoft's signed Windows App Runtime 2.4.0
+installer, verifies the pinned SHA-256 and Authenticode signature, and installs
+the runtime for the current user when not elevated. Version `0.2.0-beta.1` is
+an unsigned public beta. Verify the archive SHA-256
 and read `UNSIGNED-BETA.ja.txt` before running it. The launcher starts the MCP
 server and a 90-second pairing code so LocalMCPChatClient can pair before its
 model download. Use

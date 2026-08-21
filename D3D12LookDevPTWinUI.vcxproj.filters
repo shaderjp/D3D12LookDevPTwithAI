@@ -344,6 +344,9 @@
     <None Include="Scripts\InstallPortableSuite.ps1">
       <Filter>Build Scripts</Filter>
     </None>
+    <None Include="Scripts\InstallWindowsAppRuntime.ps1">
+      <Filter>Build Scripts</Filter>
+    </None>
     <None Include="Scripts\LookDevBundle.ps1">
       <Filter>Build Scripts</Filter>
     </None>
@@ -354,6 +357,9 @@
       <Filter>Build Scripts</Filter>
     </None>
     <None Include="Scripts\TestPortablePrerequisites.ps1">
+      <Filter>Build Scripts</Filter>
+    </None>
+    <None Include="Scripts\TestSuiteLicenseCompliance.ps1">
       <Filter>Build Scripts</Filter>
     </None>
     <None Include="Scripts\UninstallPortableSuite.ps1">

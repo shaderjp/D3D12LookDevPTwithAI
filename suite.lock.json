@@ -6,7 +6,7 @@
       "source": "self"
     },
     "LocalMCPChatClient": {
-      "commit": "63da7a8d47d992a88d8d90e6294b61ff103aadaf",
+      "commit": "8760be156d218d7d32bc78bf53356b25c767208e",
       "repository": "shaderjp/LocalMCPChatClient",
       "relativePath": "../LocalMCPChatClient"
     }
@@ -18,7 +18,14 @@
     "dotnetSdk": "10.0.300"
   },
   "runtimes": {
-    "windowsAppSdk": "2.3.1",
+    "windowsAppSdk": "2.4.0",
+    "windowsAppRuntimeInstaller": {
+      "architecture": "x64",
+      "fileName": "WindowsAppRuntimeInstall-x64.exe",
+      "uri": "https://aka.ms/windowsappsdk/2.4/2.4.0/windowsappruntimeinstall-x64.exe",
+      "sha256": "851c35b0b0a59ce4c55f9171f601193322fc3413143b0dc3390ea11e14cfa7fc",
+      "silentArguments": ["--quiet"]
+    },
     "d3d12AgilitySdk": "1.619.3",
     "dxc": "1.9.2602.17",
     "llamaCpp": "b10205"
@@ -37,7 +44,7 @@
   },
   "standardBackends": {
     "dlss": false,
-    "nrd": true,
+    "nrd": false,
     "rtxdi": false
   }
 }

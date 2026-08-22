@@ -45,9 +45,13 @@ unauthorized requests before buffering their bodies, applies a 10-second
 receive deadline, and caps buffered bodies at 16 MiB per request and 32 MiB
 globally. Private legacy sessions are renewed after server restart or idle
 expiry and are best-effort deleted when ChatHost stops. The llama inference
-adapter does not yet emit or execute tool calls, so natural-language LookDev
-control remains the next milestone. The in-app model manager and integrated
-portable/offline exhibition pack are also still pending. See the
+adapter now exposes the live MCP catalog to the model and runs a bounded
+multi-round tool loop. Read-only tools execute automatically; every mutation
+shows its exact canonical arguments in the LookDev dock and requires a native
+one-time approval. Tool progress and results stay in the same window, while
+only the user message and final visible assistant response are persisted. The
+in-app model manager and integrated portable/offline exhibition pack are still
+pending. See the
 [integrated architecture](docs/integrated-ai-architecture.ja.md).
 
 ### Manual local inference setup
@@ -63,7 +67,7 @@ or Vulkan llama.cpp runtime directory:
   -RuntimePath 'D:\AI\llama-cpu\llama-server.exe' `
   -ModelId 'model-q4' `
   -Backend cpu `
-  -ContextSize 4096 `
+  -ContextSize 16384 `
   -MaxTokens 1024 `
   -Temperature 0.2 `
   -AcceptArtifactLicenses

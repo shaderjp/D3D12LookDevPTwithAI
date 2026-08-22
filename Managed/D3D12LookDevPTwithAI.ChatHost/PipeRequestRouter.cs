@@ -93,19 +93,45 @@ public sealed class PipeRequestRouter(
                         return;
                     }
                 case "cancelTurn":
-                    RequireInitialized();
-                    await peer.SendResponseAsync(
-                        request,
-                        coordinator.CancelTurn(Deserialize<CancelTurnRequest>(request)),
-                        cancellationToken: cancellationToken).ConfigureAwait(false);
-                    return;
+                    {
+                        RequireInitialized();
+                        var prepared = coordinator.PrepareCancelTurn(
+                            Deserialize<CancelTurnRequest>(request));
+                        try
+                        {
+                            await peer.SendResponseAsync(
+                                request,
+                                prepared.Result,
+                                cancellationToken: cancellationToken).ConfigureAwait(false);
+                            prepared.Commit();
+                        }
+                        catch
+                        {
+                            prepared.Abort();
+                            throw;
+                        }
+                        return;
+                    }
                 case "approval.respond":
-                    RequireInitialized();
-                    await peer.SendResponseAsync(
-                        request,
-                        coordinator.RespondToApproval(Deserialize<ApprovalRespondRequest>(request)),
-                        cancellationToken: cancellationToken).ConfigureAwait(false);
-                    return;
+                    {
+                        RequireInitialized();
+                        var prepared = coordinator.PrepareApprovalResponse(
+                            Deserialize<ApprovalRespondRequest>(request));
+                        try
+                        {
+                            await peer.SendResponseAsync(
+                                request,
+                                prepared.Result,
+                                cancellationToken: cancellationToken).ConfigureAwait(false);
+                            prepared.Commit();
+                        }
+                        catch
+                        {
+                            prepared.Abort();
+                            throw;
+                        }
+                        return;
+                    }
                 case "shutdown":
                     RequireInitialized();
                     await peer.SendResponseAsync(request, new { accepted = true }, cancellationToken: cancellationToken).ConfigureAwait(false);

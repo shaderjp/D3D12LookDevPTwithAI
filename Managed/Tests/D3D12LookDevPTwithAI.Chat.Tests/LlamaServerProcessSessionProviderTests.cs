@@ -57,6 +57,7 @@ public sealed class LlamaServerProcessSessionProviderTests
         Assert.Equal(expectedGpuLayers, ArgumentValue(request, "--n-gpu-layers"));
         Assert.Contains("--no-ui", request.Arguments);
         Assert.Contains("--offline", request.Arguments);
+        Assert.Contains("--jinja", request.Arguments);
         Assert.Contains("--no-cors-credentials", request.Arguments);
         Assert.Contains("--log-disable", request.Arguments);
         Assert.Equal("localhost", ArgumentValue(request, "--cors-origins"));

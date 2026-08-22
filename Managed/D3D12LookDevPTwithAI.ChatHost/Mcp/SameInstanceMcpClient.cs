@@ -152,6 +152,7 @@ public sealed class SameInstanceMcpClient : ISameInstanceMcpClient
     private const string ApprovalTokenProperty = "shaderjp.lookdevpt/approvalToken";
     private static readonly TimeSpan RequestTimeout = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan SessionDeleteTimeout = TimeSpan.FromMilliseconds(250);
+    private static readonly TimeSpan UsedApprovalGrantRetention = TimeSpan.FromMinutes(1);
     private readonly SameInstanceMcpCapability _capability;
     private readonly HttpClient _httpClient;
     private readonly SystemLlamaServerPlatform? _ownershipPlatform;
@@ -159,7 +160,8 @@ public sealed class SameInstanceMcpClient : ISameInstanceMcpClient
     private readonly bool _verifyProcessOwnership;
     private readonly CancellationTokenSource _lifetimeCancellation = new();
     private readonly SemaphoreSlim _gate = new(1, 1);
-    private readonly HashSet<string> _usedApprovalGrantHashes = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, long> _usedApprovalGrantHashes = new(StringComparer.Ordinal);
+    private readonly TimeProvider _timeProvider;
     private IReadOnlyDictionary<string, SameInstanceMcpTool>? _tools;
     private string? _sessionId;
     private long _nextRequestId;
@@ -168,13 +170,15 @@ public sealed class SameInstanceMcpClient : ISameInstanceMcpClient
     public SameInstanceMcpClient(
         SameInstanceMcpCapability capability,
         int expectedServerProcessId,
-        HttpMessageHandler? handler = null)
+        HttpMessageHandler? handler = null,
+        TimeProvider? timeProvider = null)
     {
         ArgumentNullException.ThrowIfNull(capability);
         if (expectedServerProcessId <= 0)
             throw new ArgumentOutOfRangeException(nameof(expectedServerProcessId));
 
         _capability = capability;
+        _timeProvider = timeProvider ?? TimeProvider.System;
         _expectedServerProcessId = expectedServerProcessId;
         _verifyProcessOwnership = handler is null;
         _ownershipPlatform = handler is null ? new SystemLlamaServerPlatform() : null;
@@ -242,9 +246,10 @@ public sealed class SameInstanceMcpClient : ISameInstanceMcpClient
                         throw new SameInstanceMcpException("approval_required", "This LookDev tool requires one-time approval.");
                     var grantHash = Convert.ToHexString(
                         SHA256.HashData(Encoding.UTF8.GetBytes(approvalGrant!)));
+                    PruneUsedApprovalGrants();
                     if (_usedApprovalGrantHashes.Count >= SameInstanceMcpLimits.MaximumUsedApprovalGrants)
                         throw new SameInstanceMcpException("approval_limit", "The one-time approval budget has been exhausted.");
-                    if (!_usedApprovalGrantHashes.Add(grantHash))
+                    if (!_usedApprovalGrantHashes.TryAdd(grantHash, _timeProvider.GetTimestamp()))
                         throw new SameInstanceMcpException("approval_reused", "The one-time approval grant has already been used.");
                 }
 
@@ -295,6 +300,18 @@ public sealed class SameInstanceMcpClient : ISameInstanceMcpClient
         finally
         {
             _gate.Release();
+        }
+    }
+
+    private void PruneUsedApprovalGrants()
+    {
+        if (_usedApprovalGrantHashes.Count == 0) return;
+
+        var now = _timeProvider.GetTimestamp();
+        foreach (var entry in _usedApprovalGrantHashes.ToArray())
+        {
+            if (_timeProvider.GetElapsedTime(entry.Value, now) >= UsedApprovalGrantRetention)
+                _usedApprovalGrantHashes.Remove(entry.Key);
         }
     }
 
@@ -898,6 +915,15 @@ public static class SameInstanceMcpArgumentHash
                 Array.Sort(properties, static (left, right) => CompareUtf8(left.Name, right.Name));
                 for (var index = 0; index < properties.Length; index++)
                 {
+                    if (index != 0 && string.Equals(
+                        properties[index - 1].Name,
+                        properties[index].Name,
+                        StringComparison.Ordinal))
+                    {
+                        throw new ArgumentException(
+                            "MCP tool arguments contain a duplicate object property.",
+                            nameof(value));
+                    }
                     if (index != 0) output.Append(',');
                     AppendEscapedString(properties[index].Name, output);
                     output.Append(':');

@@ -196,6 +196,64 @@ struct AssistantApprovalBinding
     std::string argumentsHash;
 };
 
+constexpr std::size_t MaximumAssistantToolNameBytes = 256;
+constexpr std::size_t MaximumAssistantToolCallIdBytes = 256;
+constexpr std::size_t MaximumAssistantApprovalIdBytes = 64;
+constexpr std::size_t MaximumAssistantMcpSessionIdBytes = 256;
+constexpr std::size_t MaximumAssistantApprovalArgumentsBytes = 8 * 1024;
+constexpr std::size_t MaximumAssistantApprovalSummaryBytes = 4 * 1024;
+constexpr std::size_t MaximumAssistantToolCodeBytes = 64;
+
+bool IsSafeAssistantProtocolText(
+    std::string_view value,
+    std::size_t maximumBytes)
+{
+    return !value.empty() && value.size() <= maximumBytes &&
+        std::none_of(value.begin(), value.end(), [](unsigned char character)
+        {
+            return character < 0x20 || character == 0x7f;
+        });
+}
+
+bool IsLowerHexDigest(std::string_view value)
+{
+    return value.size() == 64 &&
+        std::all_of(value.begin(), value.end(), [](unsigned char character)
+        {
+            return (character >= '0' && character <= '9') ||
+                (character >= 'a' && character <= 'f');
+        });
+}
+
+bool ApprovalArgumentsMatchHash(
+    std::string const& value,
+    std::string_view expectedHash)
+{
+    if (value.empty() ||
+        value.size() > MaximumAssistantApprovalArgumentsBytes ||
+        !IsLowerHexDigest(expectedHash))
+    {
+        return false;
+    }
+    try
+    {
+        const auto arguments = cld::JsonParser(value).Parse();
+        return arguments.type == cld::JsonValue::Type::Object &&
+            mcp::CanonicalArgumentsJson(arguments) == value &&
+            mcp::CanonicalArgumentsSha256(arguments) == expectedHash;
+    }
+    catch (...)
+    {
+        return false;
+    }
+}
+
+bool IsToolCompletionStatus(std::string_view value)
+{
+    return value == "succeeded" || value == "failed" ||
+        value == "denied" || value == "unknown";
+}
+
 std::string NormalizeContextPath(std::wstring const& value)
 {
     if (value.empty())
@@ -370,6 +428,32 @@ std::wstring QuickPrompt(std::wstring const& identifier)
 
 namespace winrt::D3D12LookDevPTwithAI::implementation
 {
+struct AssistantApprovalUiEntry
+{
+    std::string turnId;
+    std::string toolCallId;
+    std::string toolName;
+    Button allow{ nullptr };
+    Button deny{ nullptr };
+    TextBlock status{ nullptr };
+    std::shared_ptr<AssistantApprovalBinding> binding;
+    bool pending = true;
+    bool allowed = false;
+    bool mutationStarted = false;
+    bool terminal = false;
+};
+
+struct AssistantToolUiEntry
+{
+    std::string turnId;
+    std::string toolName;
+    Border card{ nullptr };
+    TextBlock status{ nullptr };
+    bool started = false;
+    bool terminal = false;
+    bool mutation = false;
+};
+
 struct AssistantUiState
 {
     std::unique_ptr<lookdevpt::assistant::AssistantHostBridge> bridge;
@@ -390,7 +474,199 @@ struct AssistantUiState
     std::string activeTurnId;
     std::vector<std::string> conversationIds;
     std::unordered_map<std::string, TextBlock> messageBodies;
+    std::unordered_map<
+        std::string,
+        std::shared_ptr<AssistantApprovalUiEntry>> approvals;
+    std::unordered_map<std::string, std::string> approvalByToolCallId;
+    std::unordered_map<
+        std::string,
+        std::shared_ptr<AssistantToolUiEntry>> toolCards;
+    bool cancelRequested = false;
 };
+
+void SetAssistantToolStatus(
+    AssistantToolUiEntry& entry,
+    std::wstring const& text,
+    Color const& tint) noexcept
+{
+    try
+    {
+        if (entry.status)
+        {
+            entry.status.Text(text);
+        }
+        if (entry.card)
+        {
+            entry.card.Background(SolidColorBrush(tint));
+        }
+    }
+    catch (...)
+    {
+        // UI cleanup must not retain a capability if a visual was torn down.
+    }
+}
+
+void CloseAssistantApproval(
+    AssistantApprovalUiEntry& entry,
+    std::wstring const& status,
+    bool replaceStatus = true) noexcept
+{
+    entry.pending = false;
+    if (entry.binding)
+    {
+        entry.binding->Clear();
+    }
+    try
+    {
+        if (entry.allow)
+        {
+            entry.allow.IsEnabled(false);
+        }
+        if (entry.deny)
+        {
+            entry.deny.IsEnabled(false);
+        }
+        if (replaceStatus && entry.status)
+        {
+            entry.status.Text(status);
+        }
+    }
+    catch (...)
+    {
+        // The binding was already cleared before touching fallible UI state.
+    }
+}
+
+void CloseAssistantApprovals(
+    AssistantUiState& state,
+    std::wstring const& status,
+    bool replaceResolvedStatus = false) noexcept
+{
+    for (auto const& [id, entry] : state.approvals)
+    {
+        (void)id;
+        if (!entry)
+        {
+            continue;
+        }
+        const bool wasPending = entry->pending;
+        CloseAssistantApproval(
+            *entry,
+            status,
+            wasPending || (replaceResolvedStatus && !entry->terminal));
+    }
+}
+
+void MarkAssistantCancellationRequested(AssistantUiState& state) noexcept
+{
+    state.cancelRequested = true;
+    CloseAssistantApprovals(
+        state,
+        L"Cancellation requested · approval closed.",
+        true);
+    for (auto const& [toolCallId, entry] : state.toolCards)
+    {
+        (void)toolCallId;
+        if (!entry || entry->terminal || !entry->started)
+        {
+            continue;
+        }
+        if (entry->mutation)
+        {
+            SetAssistantToolStatus(
+                *entry,
+                L"Cancellation requested · result may be unknown. Verify the LookDev state.",
+                ColorHelper::FromArgb(38, 255, 170, 0));
+        }
+        else
+        {
+            SetAssistantToolStatus(
+                *entry,
+                L"Cancellation requested · waiting for the tool outcome.",
+                ColorHelper::FromArgb(24, 128, 128, 128));
+        }
+    }
+}
+
+void FinishAssistantTurnUi(
+    AssistantUiState& state,
+    std::wstring const& approvalStatus,
+    std::wstring const& interruptedStatus) noexcept
+{
+    CloseAssistantApprovals(state, approvalStatus, true);
+    for (auto const& [toolCallId, entry] : state.toolCards)
+    {
+        (void)toolCallId;
+        if (!entry || entry->terminal || !entry->started)
+        {
+            continue;
+        }
+        SetAssistantToolStatus(
+            *entry,
+            entry->mutation
+                ? L"Result unknown · the turn ended after this change started. Verify the LookDev state."
+                : interruptedStatus,
+            entry->mutation
+                ? ColorHelper::FromArgb(38, 255, 170, 0)
+                : ColorHelper::FromArgb(28, 220, 64, 64));
+    }
+    state.approvals.clear();
+    state.approvalByToolCallId.clear();
+    state.toolCards.clear();
+    state.cancelRequested = false;
+}
+
+std::shared_ptr<AssistantToolUiEntry> EnsureAssistantToolCard(
+    AssistantUiState& state,
+    ListView const& transcript,
+    std::string const& turnId,
+    std::string const& toolCallId,
+    std::string const& toolName,
+    bool mutation)
+{
+    if (const auto found = state.toolCards.find(toolCallId);
+        found != state.toolCards.end())
+    {
+        if (!found->second || found->second->turnId != turnId ||
+            found->second->toolName != toolName)
+        {
+            return {};
+        }
+        found->second->mutation = found->second->mutation || mutation;
+        return found->second;
+    }
+
+    Border card;
+    card.Padding(Thickness{ 10, 8, 10, 8 });
+    card.Margin(Thickness{ 0, 0, 0, 7 });
+    card.CornerRadius(CornerRadius{ 6 });
+    card.HorizontalAlignment(HorizontalAlignment::Stretch);
+    card.Background(SolidColorBrush(
+        ColorHelper::FromArgb(24, 0, 120, 215)));
+    StackPanel panel;
+    panel.Spacing(4);
+    TextBlock heading;
+    heading.Text(L"LookDev tool · " + Utf8ToWide(toolName));
+    heading.Opacity(0.78);
+    TextBlock status;
+    status.Text(L"Preparing…");
+    status.TextWrapping(TextWrapping::Wrap);
+    status.IsTextSelectionEnabled(true);
+    panel.Children().Append(heading);
+    panel.Children().Append(status);
+    card.Child(panel);
+    transcript.Items().Append(card);
+    transcript.ScrollIntoView(card);
+
+    auto entry = std::make_shared<AssistantToolUiEntry>();
+    entry->turnId = turnId;
+    entry->toolName = toolName;
+    entry->card = card;
+    entry->status = status;
+    entry->mutation = mutation;
+    state.toolCards.emplace(toolCallId, entry);
+    return entry;
+}
 
 void RestoreActiveConversationSelection(
     AssistantUiState& state,
@@ -604,6 +880,10 @@ void MainWindow::StopAssistant() noexcept
     {
         return;
     }
+    FinishAssistantTurnUi(
+        *state,
+        L"Assistant stopped · approval closed.",
+        L"Assistant stopped before the tool outcome was received.");
     if (state->initialized && state->connected && state->bridge)
     {
         // StopAndJoin gives a successfully queued shutdown request a bounded
@@ -741,6 +1021,10 @@ void MainWindow::HandleAssistantHostState(
         TryInitializeAssistant();
         break;
     case State::Failed:
+        FinishAssistantTurnUi(
+            *m_assistant,
+            L"Assistant disconnected · approval closed.",
+            L"Assistant disconnected before the tool outcome was received.");
         m_assistant->connected = false;
         m_assistant->initializing = false;
         m_assistant->initialized = false;
@@ -759,6 +1043,10 @@ void MainWindow::HandleAssistantHostState(
         UpdateAssistantInteractionState();
         break;
     case State::Stopped:
+        FinishAssistantTurnUi(
+            *m_assistant,
+            L"Assistant stopped · approval closed.",
+            L"Assistant stopped before the tool outcome was received.");
         m_assistant->connected = false;
         m_assistant->initializing = false;
         m_assistant->initialized = false;
@@ -928,6 +1216,10 @@ void MainWindow::HandleAssistantEvent(
             }
             if (method == "sendTurn")
             {
+                FinishAssistantTurnUi(
+                    *state,
+                    L"Turn rejected · approval closed.",
+                    L"The turn was rejected before the tool outcome was received.");
                 state->turnActive = false;
                 state->activeTurnId.clear();
                 AiStopButton().IsEnabled(false);
@@ -1269,6 +1561,213 @@ void MainWindow::HandleAssistantEvent(
         }
         return;
     }
+    if (method == "toolStarted")
+    {
+        const std::string turnId =
+            cld::JsonStringOr(*payload, "turnId");
+        const std::string toolCallId =
+            cld::JsonStringOr(*payload, "toolCallId");
+        const std::string toolName =
+            cld::JsonStringOr(*payload, "tool");
+        if (state->activeTurnId.empty() ||
+            turnId != state->activeTurnId ||
+            !IsSafeAssistantProtocolText(
+                toolCallId, MaximumAssistantToolCallIdBytes) ||
+            !IsSafeAssistantProtocolText(
+                toolName, MaximumAssistantToolNameBytes))
+        {
+            return;
+        }
+
+        bool mutation = false;
+        if (const auto bindingId =
+                state->approvalByToolCallId.find(toolCallId);
+            bindingId != state->approvalByToolCallId.end())
+        {
+            const auto approval = state->approvals.find(bindingId->second);
+            if (approval == state->approvals.end() || !approval->second ||
+                approval->second->turnId != turnId ||
+                approval->second->toolName != toolName ||
+                !approval->second->allowed)
+            {
+                return;
+            }
+            mutation = true;
+            approval->second->mutationStarted = true;
+            CloseAssistantApproval(
+                *approval->second,
+                L"Allowed once · LookDev change is running.");
+        }
+
+        auto entry = EnsureAssistantToolCard(
+            *state,
+            AiTranscriptList(),
+            turnId,
+            toolCallId,
+            toolName,
+            mutation);
+        if (!entry || entry->terminal)
+        {
+            return;
+        }
+        entry->started = true;
+        if (state->cancelRequested)
+        {
+            SetAssistantToolStatus(
+                *entry,
+                mutation
+                    ? L"Cancellation requested · result may be unknown. Verify the LookDev state."
+                    : L"Cancellation requested · waiting for the tool outcome.",
+                mutation
+                    ? ColorHelper::FromArgb(38, 255, 170, 0)
+                    : ColorHelper::FromArgb(24, 128, 128, 128));
+        }
+        else
+        {
+            SetAssistantToolStatus(
+                *entry,
+                mutation
+                    ? L"Running approved LookDev change…"
+                    : L"Reading the current LookDev state…",
+                ColorHelper::FromArgb(24, 0, 120, 215));
+        }
+        return;
+    }
+    if (method == "toolCompleted")
+    {
+        const std::string turnId =
+            cld::JsonStringOr(*payload, "turnId");
+        const std::string toolCallId =
+            cld::JsonStringOr(*payload, "toolCallId");
+        const std::string toolName =
+            cld::JsonStringOr(*payload, "tool");
+        const std::string status =
+            cld::JsonStringOr(*payload, "status");
+        const bool isError =
+            cld::JsonBoolOr(*payload, "isError", false);
+        const std::string code =
+            cld::JsonStringOr(*payload, "code");
+        if (state->activeTurnId.empty() ||
+            turnId != state->activeTurnId ||
+            !IsSafeAssistantProtocolText(
+                toolCallId, MaximumAssistantToolCallIdBytes) ||
+            !IsSafeAssistantProtocolText(
+                toolName, MaximumAssistantToolNameBytes) ||
+            !IsToolCompletionStatus(status))
+        {
+            return;
+        }
+        if ((status == "succeeded" && (isError || !code.empty())) ||
+            (status != "succeeded" && !isError) ||
+            (status == "denied" && code != "user_denied") ||
+            (status == "unknown" && code != "cancelled_after_start") ||
+            (status == "failed" &&
+                !IsSafeAssistantProtocolText(
+                    code, MaximumAssistantToolCodeBytes)))
+        {
+            return;
+        }
+
+        std::shared_ptr<AssistantApprovalUiEntry> approval;
+        if (const auto bindingId =
+                state->approvalByToolCallId.find(toolCallId);
+            bindingId != state->approvalByToolCallId.end())
+        {
+            if (const auto found = state->approvals.find(bindingId->second);
+                found != state->approvals.end())
+            {
+                approval = found->second;
+            }
+            if (!approval || approval->turnId != turnId ||
+                approval->toolName != toolName)
+            {
+                return;
+            }
+        }
+
+        auto entry = EnsureAssistantToolCard(
+            *state,
+            AiTranscriptList(),
+            turnId,
+            toolCallId,
+            toolName,
+            approval != nullptr);
+        if (!entry || entry->terminal ||
+            ((status == "succeeded" || status == "unknown") &&
+                !entry->started))
+        {
+            return;
+        }
+        entry->terminal = true;
+        if (approval)
+        {
+            approval->terminal = true;
+        }
+        if (status == "succeeded")
+        {
+            SetAssistantToolStatus(
+                *entry,
+                entry->mutation
+                    ? L"Completed · LookDev change applied."
+                    : L"Completed.",
+                ColorHelper::FromArgb(28, 20, 150, 80));
+            if (approval)
+            {
+                CloseAssistantApproval(
+                    *approval, L"Allowed once · completed.");
+            }
+        }
+        else if (status == "denied")
+        {
+            SetAssistantToolStatus(
+                *entry,
+                L"Denied · the LookDev change was not started.",
+                ColorHelper::FromArgb(24, 128, 128, 128));
+            if (approval)
+            {
+                CloseAssistantApproval(*approval, L"Denied.");
+            }
+        }
+        else if (status == "unknown")
+        {
+            SetAssistantToolStatus(
+                *entry,
+                L"Result unknown · cancellation occurred after start. Verify the LookDev state.",
+                ColorHelper::FromArgb(38, 255, 170, 0));
+            if (approval)
+            {
+                CloseAssistantApproval(
+                    *approval,
+                    L"Allowed once · result unknown after cancellation.");
+            }
+        }
+        else if (entry->mutation && entry->started)
+        {
+            SetAssistantToolStatus(
+                *entry,
+                L"Result unknown · the call failed after this change started. Verify the LookDev state.",
+                ColorHelper::FromArgb(38, 255, 170, 0));
+            if (approval)
+            {
+                CloseAssistantApproval(
+                    *approval,
+                    L"Allowed once · result unknown after the call failed.");
+            }
+        }
+        else
+        {
+            SetAssistantToolStatus(
+                *entry,
+                L"Failed · " + Utf8ToWide(code),
+                ColorHelper::FromArgb(28, 220, 64, 64));
+            if (approval)
+            {
+                CloseAssistantApproval(
+                    *approval, L"Approved call failed · " + Utf8ToWide(code));
+            }
+        }
+        return;
+    }
     if (method == "completed")
     {
         const std::string turnId =
@@ -1276,6 +1775,16 @@ void MainWindow::HandleAssistantEvent(
         if (!state->activeTurnId.empty() &&
             turnId == state->activeTurnId)
         {
+            const std::string turnStatus =
+                cld::JsonStringOr(*payload, "status", "completed");
+            FinishAssistantTurnUi(
+                *state,
+                turnStatus == "cancelled"
+                    ? L"Turn cancelled · approval closed."
+                    : L"Turn ended · approval closed.",
+                turnStatus == "cancelled"
+                    ? L"Turn cancelled before the tool outcome was received."
+                    : L"Turn ended before the tool outcome was received.");
             state->turnActive = false;
             state->activeTurnId.clear();
             AiStopButton().IsEnabled(false);
@@ -1300,36 +1809,55 @@ void MainWindow::HandleAssistantEvent(
         AddTranscriptCard(
             AiTranscriptList(), L"Error",
             code + L": " + message, true);
+        FinishAssistantTurnUi(
+            *state,
+            L"Turn failed · approval closed.",
+            L"The turn failed before the tool outcome was received.");
         state->turnActive = false;
         state->activeTurnId.clear();
         AiStopButton().IsEnabled(false);
         UpdateAssistantInteractionState();
         return;
     }
-    if (method == "toolApprovalRequired" ||
-        method == "approvalRequested")
+    if (method == "toolApprovalRequired")
     {
         const std::string turnId =
             cld::JsonStringOr(*payload, "turnId");
+        const std::string approvalId =
+            cld::JsonStringOr(*payload, "approvalId");
+        const std::string toolCallId =
+            cld::JsonStringOr(*payload, "toolCallId");
+        const std::string toolName =
+            cld::JsonStringOr(*payload, "tool");
+        const std::string summaryText =
+            cld::JsonStringOr(*payload, "summary");
+        const std::string argumentsJson =
+            cld::JsonStringOr(*payload, "argumentsJson");
+        ScopedSecret mcpSessionId{
+            cld::JsonStringOr(*payload, "mcpSessionId") };
+        ScopedSecret argumentsHash{
+            cld::JsonStringOr(*payload, "argumentsHash") };
         if (state->activeTurnId.empty() ||
-            turnId != state->activeTurnId)
+            turnId != state->activeTurnId ||
+            !IsSafeAssistantProtocolText(
+                approvalId, MaximumAssistantApprovalIdBytes) ||
+            !IsSafeAssistantProtocolText(
+                toolCallId, MaximumAssistantToolCallIdBytes) ||
+            !IsSafeAssistantProtocolText(
+                toolName, MaximumAssistantToolNameBytes) ||
+            !IsSafeAssistantProtocolText(
+                summaryText, MaximumAssistantApprovalSummaryBytes) ||
+            !IsSafeAssistantProtocolText(
+                mcpSessionId.value, MaximumAssistantMcpSessionIdBytes) ||
+            !ApprovalArgumentsMatchHash(
+                argumentsJson, argumentsHash.value) ||
+            state->approvals.contains(approvalId) ||
+            state->approvalByToolCallId.contains(toolCallId))
         {
             return;
         }
-        const std::string approvalId =
-            cld::JsonStringOr(*payload, "approvalId");
-        const std::string toolName =
-            cld::JsonStringOr(*payload, "tool");
-        const std::string mcpSessionId =
-            cld::JsonStringOr(*payload, "mcpSessionId");
-        const std::string argumentsHash =
-            cld::JsonStringOr(*payload, "argumentsHash");
-        const std::wstring tool = Utf8ToWide(
-            toolName.empty() ? "LookDev tool" : toolName);
-        const std::wstring summary = Utf8ToWide(
-            cld::JsonStringOr(
-                *payload, "summary", "Approval is required."));
 
+        const std::wstring tool = Utf8ToWide(toolName);
         Border card;
         card.Padding(Thickness{ 10 });
         card.Margin(Thickness{ 0, 0, 0, 7 });
@@ -1341,96 +1869,216 @@ void MainWindow::HandleAssistantEvent(
         TextBlock heading;
         heading.Text(L"Approval required · " + tool);
         TextBlock detail;
-        detail.Text(summary + L"\n\nAllow once applies only to this exact tool call and expires in 30 seconds.");
+        detail.Text(
+            Utf8ToWide(summaryText) +
+            L"\nAllow once applies only to the exact arguments below and expires in 30 seconds.");
         detail.TextWrapping(TextWrapping::Wrap);
+        TextBlock argumentsLabel;
+        argumentsLabel.Text(L"Exact arguments");
+        argumentsLabel.Opacity(0.72);
+        TextBox arguments;
+        arguments.Text(Utf8ToWide(argumentsJson));
+        arguments.IsReadOnly(true);
+        arguments.AcceptsReturn(true);
+        arguments.TextWrapping(TextWrapping::Wrap);
+        arguments.FontFamily(FontFamily{ L"Consolas" });
+        arguments.IsSpellCheckEnabled(false);
+        arguments.MaxHeight(180);
+        ScrollViewer::SetHorizontalScrollBarVisibility(
+            arguments, ScrollBarVisibility::Disabled);
+        ScrollViewer::SetVerticalScrollBarVisibility(
+            arguments, ScrollBarVisibility::Auto);
+        TextBlock approvalStatus;
+        approvalStatus.Text(L"Waiting for your decision.");
+        approvalStatus.TextWrapping(TextWrapping::Wrap);
+        approvalStatus.IsTextSelectionEnabled(true);
         StackPanel actions;
         actions.Orientation(Orientation::Horizontal);
         actions.Spacing(6);
         Button allow;
         allow.Content(box_value(L"Allow once"));
-        allow.IsEnabled(
-            !approvalId.empty() && !toolName.empty() &&
-            !mcpSessionId.empty() && !argumentsHash.empty());
         Button deny;
         deny.Content(box_value(L"Deny"));
-        deny.IsEnabled(!approvalId.empty());
+
+        auto binding = std::make_shared<AssistantApprovalBinding>();
+        binding->approvalId = approvalId;
+        binding->turnId = turnId;
+        binding->toolName = toolName;
+        binding->mcpSessionId = std::move(mcpSessionId.value);
+        binding->argumentsHash = std::move(argumentsHash.value);
+        auto entry = std::make_shared<AssistantApprovalUiEntry>();
+        entry->turnId = turnId;
+        entry->toolCallId = toolCallId;
+        entry->toolName = toolName;
+        entry->allow = allow;
+        entry->deny = deny;
+        entry->status = approvalStatus;
+        entry->binding = std::move(binding);
+        state->approvals.emplace(approvalId, entry);
+        state->approvalByToolCallId.emplace(toolCallId, approvalId);
+
         const auto weakWindow = get_weak();
         const std::weak_ptr<AssistantUiState> weakState = state;
-        const auto weakAllow = winrt::make_weak(allow);
-        const auto weakDeny = winrt::make_weak(deny);
-        const auto binding = std::make_shared<AssistantApprovalBinding>(
-            AssistantApprovalBinding{
-                approvalId, turnId, toolName,
-                mcpSessionId, argumentsHash });
-        allow.Click([
-            weakWindow, weakState, weakAllow, weakDeny, binding](
+        const std::weak_ptr<AssistantApprovalUiEntry> weakApproval = entry;
+        allow.Click([weakWindow, weakState, weakApproval](
             IInspectable const&, RoutedEventArgs const&)
         {
             auto session = weakState.lock();
-            if (auto self = weakWindow.get();
-                self && session && self->m_assistant == session &&
-                session->activeTurnId == binding->turnId && !self->m_closing)
+            auto approval = weakApproval.lock();
+            if (!session || !approval)
             {
-                try
-                {
-                    ScopedSecret grant{
-                        mcp::ApprovalGrantBroker::Instance().Issue(
-                            binding->mcpSessionId,
-                            binding->toolName,
-                            binding->argumentsHash) };
-                    const bool posted = self->PostAssistantRequest(
-                        "approval.respond",
-                        "{\"approvalId\":\"" +
-                            cld::EscapeJson(binding->approvalId) +
-                            "\",\"decision\":\"allowOnce\"," +
-                            "\"approvalGrant\":\"" + grant.value + "\"}");
-                    SecureClear(grant.value);
-                    if (posted)
-                    {
-                        if (auto button = weakAllow.get()) button.IsEnabled(false);
-                        if (auto button = weakDeny.get()) button.IsEnabled(false);
-                        binding->Clear();
-                    }
-                }
-                catch (...)
-                {
-                    AddTranscriptCard(
-                        self->AiTranscriptList(), L"Approval",
-                        L"The one-time approval could not be issued.", true);
-                }
+                return;
             }
-        });
-        deny.Click([weakWindow, weakState, weakAllow, weakDeny, binding](
-            IInspectable const&, RoutedEventArgs const&)
-        {
-            auto session = weakState.lock();
-            if (auto self = weakWindow.get();
-                self && session &&
-                self->m_assistant == session &&
-                session->activeTurnId == binding->turnId &&
-                !self->m_closing)
+            const auto bindingId =
+                session->approvalByToolCallId.find(approval->toolCallId);
+            if (bindingId == session->approvalByToolCallId.end())
             {
+                return;
+            }
+            const auto tracked = session->approvals.find(bindingId->second);
+            if (tracked == session->approvals.end() ||
+                tracked->second != approval)
+            {
+                return;
+            }
+            auto self = weakWindow.get();
+            if (!self || self->m_assistant != session || self->m_closing ||
+                !approval->pending || session->cancelRequested ||
+                session->activeTurnId != approval->turnId ||
+                !approval->binding)
+            {
+                return;
+            }
+
+            approval->pending = false;
+            try
+            {
+                approval->allow.IsEnabled(false);
+                approval->deny.IsEnabled(false);
+                approval->status.Text(L"Issuing one-time approval…");
+            }
+            catch (...)
+            {
+                CloseAssistantApproval(
+                    *approval, L"Approval controls are unavailable.");
+                return;
+            }
+
+            try
+            {
+                ScopedSecret grant{
+                    mcp::ApprovalGrantBroker::Instance().Issue(
+                        approval->binding->mcpSessionId,
+                        approval->binding->toolName,
+                        approval->binding->argumentsHash) };
                 const bool posted = self->PostAssistantRequest(
                     "approval.respond",
                     "{\"approvalId\":\"" +
-                        cld::EscapeJson(binding->approvalId) +
-                        "\",\"decision\":\"deny\"}");
-                if (posted)
+                        cld::EscapeJson(approval->binding->approvalId) +
+                        "\",\"decision\":\"allowOnce\"," +
+                        "\"approvalGrant\":\"" + grant.value + "\"}");
+                approval->allowed = posted;
+                SecureClear(grant.value);
+                CloseAssistantApproval(
+                    *approval,
+                    posted
+                        ? L"Allowed once · waiting for the tool to start."
+                        : L"Approval could not be sent.");
+                if (!posted)
                 {
-                    if (auto button = weakAllow.get()) button.IsEnabled(false);
-                    if (auto button = weakDeny.get()) button.IsEnabled(false);
-                    binding->Clear();
+                    AddTranscriptCard(
+                        self->AiTranscriptList(), L"Approval",
+                        L"The one-time approval could not be sent.", true);
                 }
             }
+            catch (...)
+            {
+                CloseAssistantApproval(
+                    *approval, L"Approval could not be issued.");
+                AddTranscriptCard(
+                    self->AiTranscriptList(), L"Approval",
+                    L"The one-time approval could not be issued.", true);
+            }
+        });
+        deny.Click([weakWindow, weakState, weakApproval](
+            IInspectable const&, RoutedEventArgs const&)
+        {
+            auto session = weakState.lock();
+            auto approval = weakApproval.lock();
+            if (!session || !approval)
+            {
+                return;
+            }
+            const auto bindingId =
+                session->approvalByToolCallId.find(approval->toolCallId);
+            if (bindingId == session->approvalByToolCallId.end())
+            {
+                return;
+            }
+            const auto tracked = session->approvals.find(bindingId->second);
+            if (tracked == session->approvals.end() ||
+                tracked->second != approval)
+            {
+                return;
+            }
+            auto self = weakWindow.get();
+            if (!self || self->m_assistant != session || self->m_closing ||
+                !approval->pending ||
+                session->activeTurnId != approval->turnId ||
+                !approval->binding)
+            {
+                return;
+            }
+
+            approval->pending = false;
+            try
+            {
+                approval->allow.IsEnabled(false);
+                approval->deny.IsEnabled(false);
+                approval->status.Text(L"Denying…");
+            }
+            catch (...)
+            {
+                CloseAssistantApproval(
+                    *approval, L"Approval controls are unavailable.");
+                return;
+            }
+            const bool posted = self->PostAssistantRequest(
+                "approval.respond",
+                "{\"approvalId\":\"" +
+                    cld::EscapeJson(approval->binding->approvalId) +
+                    "\",\"decision\":\"deny\"}");
+            CloseAssistantApproval(
+                *approval,
+                posted ? L"Denied." : L"Denial could not be sent.");
         });
         actions.Children().Append(allow);
         actions.Children().Append(deny);
         panel.Children().Append(heading);
         panel.Children().Append(detail);
+        panel.Children().Append(argumentsLabel);
+        panel.Children().Append(arguments);
+        panel.Children().Append(approvalStatus);
         panel.Children().Append(actions);
         card.Child(panel);
         AiTranscriptList().Items().Append(card);
         AiTranscriptList().ScrollIntoView(card);
+
+        if (state->cancelRequested)
+        {
+            entry->pending = false;
+            const bool posted = PostAssistantRequest(
+                "approval.respond",
+                "{\"approvalId\":\"" +
+                    cld::EscapeJson(entry->binding->approvalId) +
+                    "\",\"decision\":\"deny\"}");
+            CloseAssistantApproval(
+                *entry,
+                posted
+                    ? L"Cancellation requested · denied automatically."
+                    : L"Cancellation requested · approval closed.");
+        }
+        return;
     }
 }
 
@@ -1471,6 +2119,7 @@ void MainWindow::SendAssistantTurn(
 
     state->activeTurnId = turnId;
     state->turnActive = true;
+    state->cancelRequested = false;
     AiPromptBox().Text(L"");
     UpdateAssistantInteractionState();
     AiStopButton().IsEnabled(true);
@@ -1492,6 +2141,7 @@ void MainWindow::OnAiStopClick(
     {
         return;
     }
+    MarkAssistantCancellationRequested(*m_assistant);
     if (PostAssistantRequest(
             "cancelTurn",
             "{\"turnId\":\"" +
@@ -1500,6 +2150,14 @@ void MainWindow::OnAiStopClick(
     {
         AiStopButton().IsEnabled(false);
         AiRuntimeStatusText().Text(L"Stopping the current turn\u2026");
+    }
+    else
+    {
+        AddTranscriptCard(
+            AiTranscriptList(),
+            L"Error",
+            L"The cancellation request could not be sent. Pending approvals remain closed.",
+            true);
     }
 }
 

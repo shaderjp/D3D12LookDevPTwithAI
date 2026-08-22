@@ -24,8 +24,9 @@ public sealed class LlamaServerChatInferenceRuntimeTests
             Assert.Equal("application/json", request.Content?.Headers.ContentType?.MediaType);
             requestBody = await request.Content!.ReadAsStringAsync(cancellationToken);
             return SseResponse(
-                "data: {\"choices\":[{\"delta\":{\"content\":\"こん\"}}]}\n\n" +
-                "data: {\"choices\":[{\"delta\":{\"content\":\"にちは\"}}]}\n\n" +
+                "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"こん\"}}]}\n\n" +
+                "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"にちは\"}}]}\n\n" +
+                Data(StopPayload()) +
                 "data: [DONE]\n\n");
         });
         using var runtime = Runtime(handler);
@@ -34,7 +35,8 @@ public sealed class LlamaServerChatInferenceRuntimeTests
             [
                 new ChatInferenceMessage(ChatInferenceRole.System, "system instruction"),
                 new ChatInferenceMessage(ChatInferenceRole.Assistant, "前の回答"),
-            ]);
+            ],
+            allowToolCalls: false);
 
         var chunks = await CollectAsync(runtime.StreamAsync(request));
         var status = await runtime.GetStatusAsync();
@@ -51,6 +53,7 @@ public sealed class LlamaServerChatInferenceRuntimeTests
         using var document = JsonDocument.Parse(requestBody);
         var root = document.RootElement;
         Assert.Equal("gemma-test", root.GetProperty("model").GetString());
+        Assert.Equal(1, root.GetProperty("n").GetInt32());
         Assert.True(root.GetProperty("stream").GetBoolean());
         Assert.True(root.GetProperty("stream_options").GetProperty("include_usage").GetBoolean());
         Assert.Equal(0.25, root.GetProperty("temperature").GetDouble());
@@ -59,6 +62,8 @@ public sealed class LlamaServerChatInferenceRuntimeTests
         Assert.False(root.GetProperty("chat_template_kwargs").GetProperty("enable_thinking").GetBoolean());
         Assert.False(root.TryGetProperty("tools", out _));
         Assert.False(root.TryGetProperty("tool_choice", out _));
+        Assert.False(root.TryGetProperty("parse_tool_calls", out _));
+        Assert.False(root.TryGetProperty("parallel_tool_calls", out _));
 
         var messages = root.GetProperty("messages");
         Assert.Equal(4, messages.GetArrayLength());
@@ -72,6 +77,9 @@ public sealed class LlamaServerChatInferenceRuntimeTests
         Assert.Contains("camera", messages[0].GetProperty("content").GetString(), StringComparison.Ordinal);
         Assert.Contains("rendering", messages[0].GetProperty("content").GetString(), StringComparison.Ordinal);
         Assert.Contains("tool result", messages[0].GetProperty("content").GetString(), StringComparison.Ordinal);
+        Assert.Contains("untrusted data", messages[0].GetProperty("content").GetString(), StringComparison.Ordinal);
+        Assert.Contains("not instructions", messages[0].GetProperty("content").GetString(), StringComparison.Ordinal);
+        Assert.Contains("live tools", messages[0].GetProperty("content").GetString(), StringComparison.Ordinal);
         Assert.Contains("never claim", messages[0].GetProperty("content").GetString(), StringComparison.Ordinal);
         Assert.Equal("system", messages[1].GetProperty("role").GetString());
         Assert.Equal("system instruction", messages[1].GetProperty("content").GetString());
@@ -79,6 +87,587 @@ public sealed class LlamaServerChatInferenceRuntimeTests
         Assert.Equal("前の回答", messages[2].GetProperty("content").GetString());
         Assert.Equal("user", messages[3].GetProperty("role").GetString());
         Assert.Equal("現在の質問", messages[3].GetProperty("content").GetString());
+    }
+
+    [Fact]
+    public async Task Serializes_tools_and_a_tool_result_continuation_in_openai_format()
+    {
+        string? requestBody = null;
+        var handler = new DelegateHandler(async (request, cancellationToken) =>
+        {
+            requestBody = await request.Content!.ReadAsStringAsync(cancellationToken);
+            return SseResponse(Data(StopPayload()) + "data: [DONE]\n\n");
+        });
+        using var runtime = Runtime(handler);
+        var call = new ChatInferenceToolCall(
+            "call_camera",
+            "set_camera",
+            "{\"fov\":45}");
+        var tool = new ChatInferenceToolDefinition(
+            "set_camera",
+            "カメラを更新します",
+            "{\"type\":\"object\",\"properties\":{\"fov\":{\"type\":\"number\"}}}");
+        var request = Request(
+            string.Empty,
+            [
+                new ChatInferenceMessage(ChatInferenceRole.User, "FOVを変えて"),
+                new ChatInferenceMessage(
+                    ChatInferenceRole.Assistant,
+                    string.Empty,
+                    ToolCalls: [call]),
+                new ChatInferenceMessage(
+                    ChatInferenceRole.Tool,
+                    "{\"ok\":true}",
+                    "set_camera",
+                    "call_camera"),
+            ],
+            [tool],
+            appendUserMessage: false);
+
+        var chunks = await CollectChunksAsync(runtime.StreamAsync(request));
+
+        Assert.Empty(chunks);
+        Assert.NotNull(requestBody);
+        Assert.DoesNotContain("test-api-key", requestBody, StringComparison.Ordinal);
+        using var document = JsonDocument.Parse(requestBody);
+        var root = document.RootElement;
+        Assert.Equal("auto", root.GetProperty("tool_choice").GetString());
+        Assert.True(root.GetProperty("parse_tool_calls").GetBoolean());
+        Assert.False(root.GetProperty("parallel_tool_calls").GetBoolean());
+        var tools = root.GetProperty("tools");
+        Assert.Single(tools.EnumerateArray());
+        Assert.Equal("function", tools[0].GetProperty("type").GetString());
+        var function = tools[0].GetProperty("function");
+        Assert.Equal("set_camera", function.GetProperty("name").GetString());
+        Assert.Equal("カメラを更新します", function.GetProperty("description").GetString());
+        Assert.Equal("object", function.GetProperty("parameters").GetProperty("type").GetString());
+
+        var messages = root.GetProperty("messages");
+        Assert.Equal(4, messages.GetArrayLength());
+        Assert.Equal("user", messages[1].GetProperty("role").GetString());
+        Assert.Equal("assistant", messages[2].GetProperty("role").GetString());
+        Assert.Equal(JsonValueKind.Null, messages[2].GetProperty("content").ValueKind);
+        var serializedCall = messages[2].GetProperty("tool_calls")[0];
+        Assert.Equal("call_camera", serializedCall.GetProperty("id").GetString());
+        Assert.Equal("function", serializedCall.GetProperty("type").GetString());
+        Assert.Equal(
+            "set_camera",
+            serializedCall.GetProperty("function").GetProperty("name").GetString());
+        Assert.Equal(
+            "{\"fov\":45}",
+            serializedCall.GetProperty("function").GetProperty("arguments").GetString());
+        Assert.Equal("tool", messages[3].GetProperty("role").GetString());
+        Assert.Equal("call_camera", messages[3].GetProperty("tool_call_id").GetString());
+        Assert.Equal("set_camera", messages[3].GetProperty("name").GetString());
+        Assert.Equal("{\"ok\":true}", messages[3].GetProperty("content").GetString());
+        Assert.DoesNotContain(
+            "{\"fov\":45}",
+            call.ToString(),
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("properties", tool.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Disabled_tool_calls_keep_the_catalog_but_reject_returned_calls()
+    {
+        string? requestBody = null;
+        var call = ToolCallPayload("call_a", "set_camera", "{}");
+        var finish = new
+        {
+            choices = new[]
+            {
+                new { index = 0, delta = new { }, finish_reason = "tool_calls" },
+            },
+        };
+        var handler = new DelegateHandler(async (request, cancellationToken) =>
+        {
+            requestBody = await request.Content!.ReadAsStringAsync(cancellationToken);
+            return SseResponse(Data(call) + Data(finish) + "data: [DONE]\n\n");
+        });
+        using var runtime = Runtime(handler);
+        var request = Request(
+            "summarize",
+            tools:
+            [
+                new ChatInferenceToolDefinition(
+                    "set_camera",
+                    null,
+                    "{\"type\":\"object\"}"),
+            ],
+            allowToolCalls: false);
+
+        var exception = await Assert.ThrowsAsync<ChatInferenceException>(
+            () => CollectChunksAsync(runtime.StreamAsync(request)));
+
+        Assert.Equal("inference_protocol_error", exception.Code);
+        Assert.NotNull(requestBody);
+        using var document = JsonDocument.Parse(requestBody);
+        Assert.Equal("none", document.RootElement.GetProperty("tool_choice").GetString());
+        Assert.True(document.RootElement.GetProperty("parse_tool_calls").GetBoolean());
+        Assert.False(document.RootElement.GetProperty("parallel_tool_calls").GetBoolean());
+        Assert.Single(document.RootElement.GetProperty("tools").EnumerateArray());
+    }
+
+    [Fact]
+    public async Task Assembles_fragmented_parallel_calls_and_emits_them_only_after_done()
+    {
+        var first = new
+        {
+            choices = new[]
+            {
+                new
+                {
+                    index = 0,
+                    delta = new
+                    {
+                        role = "assistant",
+                        content = "調整します。",
+                        tool_calls = new[]
+                        {
+                            new
+                            {
+                                index = 0,
+                                id = "call_",
+                                type = "function",
+                                function = new { name = "set_", arguments = "{\"fov\":" },
+                            },
+                            new
+                            {
+                                index = 1,
+                                id = "read_",
+                                type = "function",
+                                function = new { name = "get_", arguments = "{" },
+                            },
+                        },
+                    },
+                    finish_reason = (string?)null,
+                },
+            },
+        };
+        var second = new
+        {
+            choices = new[]
+            {
+                new
+                {
+                    index = 0,
+                    delta = new
+                    {
+                        tool_calls = new[]
+                        {
+                            new
+                            {
+                                index = 0,
+                                id = "camera",
+                                type = "function",
+                                function = new { name = "camera", arguments = "45}" },
+                            },
+                            new
+                            {
+                                index = 1,
+                                id = "state",
+                                type = "function",
+                                function = new { name = "state", arguments = "}" },
+                            },
+                        },
+                    },
+                    finish_reason = (string?)null,
+                },
+            },
+        };
+        var finish = new
+        {
+            choices = new[]
+            {
+                new { index = 0, delta = new { }, finish_reason = "tool_calls" },
+            },
+        };
+        var usage = new { choices = Array.Empty<object>(), usage = new { completion_tokens = 8 } };
+        var handler = new DelegateHandler((_, _) => Task.FromResult(SseResponse(
+            Data(first) + Data(second) + Data(finish) + Data(usage) + "data: [DONE]\n\n")));
+        using var runtime = Runtime(handler);
+
+        var chunks = await CollectChunksAsync(runtime.StreamAsync(Request("adjust")));
+
+        Assert.Equal(2, chunks.Count);
+        Assert.Equal("調整します。", chunks[0].Text);
+        Assert.Null(chunks[0].ToolCalls);
+        Assert.Equal(string.Empty, chunks[1].Text);
+        Assert.NotNull(chunks[1].ToolCalls);
+        Assert.Collection(
+            chunks[1].ToolCalls!,
+            call =>
+            {
+                Assert.Equal("call_camera", call.Id);
+                Assert.Equal("set_camera", call.Name);
+                Assert.Equal("{\"fov\":45}", call.ArgumentsJson);
+            },
+            call =>
+            {
+                Assert.Equal("read_state", call.Id);
+                Assert.Equal("get_state", call.Name);
+                Assert.Equal("{}", call.ArgumentsJson);
+            });
+    }
+
+    [Fact]
+    public async Task Finished_or_truncated_partial_calls_are_never_exposed()
+    {
+        var fragment = ToolCallPayload("call_partial", "set_camera", "{\"fov\":");
+        var finish = new
+        {
+            choices = new[]
+            {
+                new { index = 0, delta = new { }, finish_reason = "tool_calls" },
+            },
+        };
+        var blockingStream = new BlockingSseStream(Data(fragment) + Data(finish));
+        var blockingContent = new StreamContent(blockingStream);
+        blockingContent.Headers.ContentType = new MediaTypeHeaderValue("text/event-stream");
+        using var blockingRuntime = Runtime(new DelegateHandler((_, _) => Task.FromResult(
+            new HttpResponseMessage(HttpStatusCode.OK) { Content = blockingContent })));
+        using var cancellation = new CancellationTokenSource();
+        await using var enumerator = blockingRuntime.StreamAsync(
+            Request("adjust"),
+            cancellation.Token).GetAsyncEnumerator();
+        var moveNext = enumerator.MoveNextAsync().AsTask();
+        await blockingStream.BlockingReadStarted.WaitAsync(TimeSpan.FromSeconds(5));
+        cancellation.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => moveNext);
+
+        using var truncatedRuntime = Runtime(new DelegateHandler((_, _) => Task.FromResult(
+            SseResponse(Data(fragment) + Data(finish)))));
+        var truncated = await Assert.ThrowsAsync<ChatInferenceException>(
+            () => CollectChunksAsync(truncatedRuntime.StreamAsync(Request("adjust"))));
+        Assert.Equal("inference_stream_truncated", truncated.Code);
+    }
+
+    [Fact]
+    public async Task Rejects_conflicting_or_incomplete_tool_call_streams_safely()
+    {
+        var duplicateIndex = new
+        {
+            choices = new[]
+            {
+                new
+                {
+                    index = 0,
+                    delta = new
+                    {
+                        tool_calls = new[]
+                        {
+                            new
+                            {
+                                index = 0,
+                                id = "call_a",
+                                type = "function",
+                                function = new { name = "set_camera", arguments = "{}" },
+                            },
+                            new
+                            {
+                                index = 0,
+                                id = "call_b",
+                                type = "function",
+                                function = new { name = "set_camera", arguments = "{}" },
+                            },
+                        },
+                    },
+                },
+            },
+        };
+        var wrongType = new
+        {
+            choices = new[]
+            {
+                new
+                {
+                    index = 0,
+                    delta = new
+                    {
+                        tool_calls = new[]
+                        {
+                            new
+                            {
+                                index = 0,
+                                id = "call_a",
+                                type = "command",
+                                function = new { name = "set_camera", arguments = "{}" },
+                            },
+                        },
+                    },
+                },
+            },
+        };
+        var missingType = new
+        {
+            choices = new[]
+            {
+                new
+                {
+                    index = 0,
+                    delta = new
+                    {
+                        tool_calls = new[]
+                        {
+                            new
+                            {
+                                index = 0,
+                                id = "call_a",
+                                function = new { name = "set_camera", arguments = "{}" },
+                            },
+                        },
+                    },
+                },
+            },
+        };
+        var toolFinish = new
+        {
+            choices = new[]
+            {
+                new { index = 0, delta = new { }, finish_reason = "tool_calls" },
+            },
+        };
+        foreach (var payload in new[] { Data(duplicateIndex), Data(wrongType), Data(missingType) })
+        {
+            using var runtime = Runtime(new DelegateHandler((_, _) => Task.FromResult(
+                SseResponse(payload + Data(toolFinish) + "data: [DONE]\n\n"))));
+            var exception = await Assert.ThrowsAsync<ChatInferenceException>(
+                () => CollectChunksAsync(runtime.StreamAsync(Request("adjust"))));
+            Assert.Equal("inference_protocol_error", exception.Code);
+            Assert.DoesNotContain("call_a", exception.ToString(), StringComparison.Ordinal);
+        }
+
+        var noFinish = ToolCallPayload("call_a", "set_camera", "{}");
+        using var unfinishedRuntime = Runtime(new DelegateHandler((_, _) => Task.FromResult(
+            SseResponse(Data(noFinish) + "data: [DONE]\n\n"))));
+        var unfinished = await Assert.ThrowsAsync<ChatInferenceException>(
+            () => CollectChunksAsync(unfinishedRuntime.StreamAsync(Request("adjust"))));
+        Assert.Equal("inference_protocol_error", unfinished.Code);
+
+        var stop = new
+        {
+            choices = new[]
+            {
+                new { index = 0, delta = new { }, finish_reason = "stop" },
+            },
+        };
+        using var mismatchedRuntime = Runtime(new DelegateHandler((_, _) => Task.FromResult(
+            SseResponse(Data(noFinish) + Data(stop) + "data: [DONE]\n\n"))));
+        var mismatched = await Assert.ThrowsAsync<ChatInferenceException>(
+            () => CollectChunksAsync(mismatchedRuntime.StreamAsync(Request("adjust"))));
+        Assert.Equal("inference_protocol_error", mismatched.Code);
+    }
+
+    [Theory]
+    [InlineData("[]")]
+    [InlineData("{\"x\":1,\"x\":2}")]
+    [InlineData("{\"x\":")]
+    public async Task Completed_tool_arguments_must_be_one_unambiguous_json_object(
+        string arguments)
+    {
+        var call = ToolCallPayload("call_a", "set_camera", arguments);
+        var finish = new
+        {
+            choices = new[]
+            {
+                new { index = 0, delta = new { }, finish_reason = "tool_calls" },
+            },
+        };
+        using var runtime = Runtime(new DelegateHandler((_, _) => Task.FromResult(
+            SseResponse(Data(call) + Data(finish) + "data: [DONE]\n\n"))));
+
+        var exception = await Assert.ThrowsAsync<ChatInferenceException>(
+            () => CollectChunksAsync(runtime.StreamAsync(Request("adjust"))));
+
+        Assert.Equal("inference_protocol_error", exception.Code);
+        Assert.DoesNotContain(arguments, exception.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Length_finish_reason_does_not_publish_a_partial_tool_call()
+    {
+        var call = ToolCallPayload("call_a", "set_camera", "{\"fov\":");
+        var finish = new
+        {
+            choices = new[]
+            {
+                new { index = 0, delta = new { }, finish_reason = "length" },
+            },
+        };
+        using var runtime = Runtime(new DelegateHandler((_, _) => Task.FromResult(
+            SseResponse(Data(call) + Data(finish) + "data: [DONE]\n\n"))));
+
+        var exception = await Assert.ThrowsAsync<ChatInferenceException>(
+            () => CollectChunksAsync(runtime.StreamAsync(Request("adjust"))));
+
+        Assert.Equal("inference_stream_truncated", exception.Code);
+        Assert.True(exception.Retryable);
+    }
+
+    [Fact]
+    public async Task Duplicate_ids_and_excessive_parallel_call_indices_are_rejected()
+    {
+        var duplicateIds = new
+        {
+            choices = new[]
+            {
+                new
+                {
+                    index = 0,
+                    delta = new
+                    {
+                        tool_calls = new[]
+                        {
+                            new
+                            {
+                                index = 0,
+                                id = "duplicate_id",
+                                type = "function",
+                                function = new { name = "set_camera", arguments = "{}" },
+                            },
+                            new
+                            {
+                                index = 1,
+                                id = "duplicate_id",
+                                type = "function",
+                                function = new { name = "get_state", arguments = "{}" },
+                            },
+                        },
+                    },
+                },
+            },
+        };
+        var finish = new
+        {
+            choices = new[]
+            {
+                new { index = 0, delta = new { }, finish_reason = "tool_calls" },
+            },
+        };
+        using var duplicateRuntime = Runtime(new DelegateHandler((_, _) => Task.FromResult(
+            SseResponse(Data(duplicateIds) + Data(finish) + "data: [DONE]\n\n"))));
+        var duplicateException = await Assert.ThrowsAsync<ChatInferenceException>(
+            () => CollectChunksAsync(duplicateRuntime.StreamAsync(Request("adjust"))));
+        Assert.Equal("inference_protocol_error", duplicateException.Code);
+
+        var excessiveIndex = ToolCallPayload(
+            "call_too_many",
+            "set_camera",
+            "{}",
+            ChatInferenceLimits.MaximumToolCalls);
+        using var excessiveRuntime = Runtime(new DelegateHandler((_, _) => Task.FromResult(
+            SseResponse(Data(excessiveIndex) + "data: [DONE]\n\n"))));
+        var excessiveException = await Assert.ThrowsAsync<ChatInferenceException>(
+            () => CollectChunksAsync(excessiveRuntime.StreamAsync(Request("adjust"))));
+        Assert.Equal("inference_protocol_error", excessiveException.Code);
+    }
+
+    [Fact]
+    public async Task Tool_argument_output_budget_is_enforced_before_call_exposure()
+    {
+        var oversizedArguments = "{\"value\":\"" +
+            new string('x', ChatInferenceLimits.MaximumOutputCharacters) +
+            "\"}";
+        var payload = ToolCallPayload("call_a", "set_camera", oversizedArguments);
+        using var runtime = Runtime(new DelegateHandler((_, _) => Task.FromResult(
+            SseResponse(Data(payload) + "data: [DONE]\n\n"))));
+
+        var exception = await Assert.ThrowsAsync<ChatInferenceException>(
+            () => CollectChunksAsync(runtime.StreamAsync(Request("adjust"))));
+
+        Assert.Equal("inference_output_too_large", exception.Code);
+        Assert.DoesNotContain(oversizedArguments, exception.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Rejects_invalid_catalog_and_mismatched_tool_result_before_http()
+    {
+        const string malformedSchema = "{\"secret-schema-marker\":1,\"secret-schema-marker\":2}";
+        var handler = new DelegateHandler((_, _) =>
+            throw new InvalidOperationException("HTTP must not be attempted."));
+        using var runtime = Runtime(handler);
+        var invalidCatalog = Request(
+            "question",
+            tools:
+            [
+                new ChatInferenceToolDefinition("set_camera", null, malformedSchema),
+            ]);
+        var call = new ChatInferenceToolCall("call_a", "set_camera", "{}");
+        var mismatchedResult = Request(
+            string.Empty,
+            [
+                new ChatInferenceMessage(ChatInferenceRole.User, "question"),
+                new ChatInferenceMessage(
+                    ChatInferenceRole.Assistant,
+                    string.Empty,
+                    ToolCalls: [call]),
+                new ChatInferenceMessage(
+                    ChatInferenceRole.Tool,
+                    "{}",
+                    "another_tool",
+                    "call_a"),
+            ],
+            [new ChatInferenceToolDefinition("set_camera", null, "{\"type\":\"object\"}")],
+            appendUserMessage: false);
+
+        var catalogException = await Assert.ThrowsAsync<ChatInferenceException>(
+            () => CollectChunksAsync(runtime.StreamAsync(invalidCatalog)));
+        var resultException = await Assert.ThrowsAsync<ChatInferenceException>(
+            () => CollectChunksAsync(runtime.StreamAsync(mismatchedResult)));
+
+        Assert.Equal("invalid_inference_request", catalogException.Code);
+        Assert.Equal("invalid_inference_request", resultException.Code);
+        Assert.DoesNotContain(malformedSchema, catalogException.ToString(), StringComparison.Ordinal);
+        Assert.Equal(0, handler.RequestCount);
+    }
+
+    [Fact]
+    public async Task Inference_catalog_caps_count_fields_and_aggregate_utf8_bytes()
+    {
+        Assert.Equal(128, ChatInferenceLimits.MaximumTools);
+        Assert.Equal(4 * 1024, ChatInferenceLimits.MaximumToolDescriptionCharacters);
+        Assert.Equal(64 * 1024, ChatInferenceLimits.MaximumToolSchemaCharacters);
+        Assert.Equal(512 * 1024, ChatInferenceLimits.MaximumToolCatalogBytes);
+        var handler = new DelegateHandler((_, _) =>
+            throw new InvalidOperationException("HTTP must not be attempted."));
+        using var runtime = Runtime(handler);
+        var tooMany = Enumerable.Range(0, ChatInferenceLimits.MaximumTools + 1)
+            .Select(index => new ChatInferenceToolDefinition(
+                $"tool_{index}",
+                null,
+                "{\"type\":\"object\"}"))
+            .ToArray();
+        var longDescription = new ChatInferenceToolDefinition(
+            "long_description",
+            new string('d', ChatInferenceLimits.MaximumToolDescriptionCharacters + 1),
+            "{\"type\":\"object\"}");
+        var oversizedSchema = new ChatInferenceToolDefinition(
+            "large_schema",
+            null,
+            "{\"description\":\"" +
+                new string('s', ChatInferenceLimits.MaximumToolSchemaCharacters) +
+                "\"}");
+        var utf8HeavyCatalog = Enumerable.Range(0, 43)
+            .Select(index => new ChatInferenceToolDefinition(
+                $"unicode_tool_{index}",
+                new string('界', ChatInferenceLimits.MaximumToolDescriptionCharacters),
+                "{\"type\":\"object\"}"))
+            .ToArray();
+        var invalidRequests = new[]
+        {
+            Request("question", tools: tooMany),
+            Request("question", tools: [longDescription]),
+            Request("question", tools: [oversizedSchema]),
+            Request("question", tools: utf8HeavyCatalog),
+        };
+
+        foreach (var request in invalidRequests)
+        {
+            var exception = await Assert.ThrowsAsync<ChatInferenceException>(
+                () => CollectChunksAsync(runtime.StreamAsync(request)));
+            Assert.Equal("invalid_inference_request", exception.Code);
+        }
+        Assert.Equal(0, handler.RequestCount);
     }
 
     [Fact]
@@ -127,7 +716,7 @@ public sealed class LlamaServerChatInferenceRuntimeTests
     public async Task Cancellation_interrupts_an_open_sse_stream()
     {
         var stream = new BlockingSseStream(
-            "data: {\"choices\":[{\"delta\":{\"content\":\"partial\"}}]}\n\n");
+            "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"partial\"}}]}\n\n");
         var streamContent = new StreamContent(stream);
         streamContent.Headers.ContentType = new MediaTypeHeaderValue("text/event-stream");
         var handler = new DelegateHandler((_, _) => Task.FromResult(
@@ -150,7 +739,7 @@ public sealed class LlamaServerChatInferenceRuntimeTests
     public async Task End_of_stream_before_done_is_reported_as_truncated()
     {
         var handler = new DelegateHandler((_, _) => Task.FromResult(SseResponse(
-            "data: {\"choices\":[{\"delta\":{\"content\":\"partial\"}}]}\n\n")));
+            "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"partial\"}}]}\n\n")));
         using var runtime = Runtime(handler);
         await using var enumerator = runtime.StreamAsync(Request("question")).GetAsyncEnumerator();
 
@@ -160,6 +749,19 @@ public sealed class LlamaServerChatInferenceRuntimeTests
 
         Assert.Equal("inference_stream_truncated", exception.Code);
         Assert.True(exception.Retryable);
+    }
+
+    [Fact]
+    public async Task Done_without_an_explicit_finish_reason_is_a_protocol_error()
+    {
+        var handler = new DelegateHandler((_, _) => Task.FromResult(SseResponse(
+            "data: [DONE]\n\n")));
+        using var runtime = Runtime(handler);
+
+        var exception = await Assert.ThrowsAsync<ChatInferenceException>(
+            () => CollectChunksAsync(runtime.StreamAsync(Request("question"))));
+
+        Assert.Equal("inference_protocol_error", exception.Code);
     }
 
     [Fact]
@@ -347,7 +949,7 @@ public sealed class LlamaServerChatInferenceRuntimeTests
             ChatInferenceLimits.MaximumOutputCharacters + 1);
         var payload = JsonSerializer.Serialize(new
         {
-            choices = new[] { new { delta = new { content = oversizedDelta } } },
+            choices = new[] { new { index = 0, delta = new { content = oversizedDelta } } },
         });
         var handler = new DelegateHandler((_, _) => Task.FromResult(SseResponse(
             $"data: {payload}\n\ndata: [DONE]\n\n")));
@@ -383,11 +985,57 @@ public sealed class LlamaServerChatInferenceRuntimeTests
 
     private static ChatInferenceRequest Request(
         string text,
-        IReadOnlyList<ChatInferenceMessage>? history = null) => new(
+        IReadOnlyList<ChatInferenceMessage>? history = null,
+        IReadOnlyList<ChatInferenceToolDefinition>? tools = null,
+        bool appendUserMessage = true,
+        bool allowToolCalls = true) => new(
             Guid.NewGuid(),
             "test-project",
             history ?? Array.Empty<ChatInferenceMessage>(),
-            text);
+            text,
+            tools,
+            appendUserMessage,
+            allowToolCalls);
+
+    private static string Data(object payload) =>
+        $"data: {JsonSerializer.Serialize(payload)}\n\n";
+
+    private static object StopPayload() => new
+    {
+        choices = new[]
+        {
+            new { index = 0, delta = new { }, finish_reason = "stop" },
+        },
+    };
+
+    private static object ToolCallPayload(
+        string id,
+        string name,
+        string arguments,
+        int index = 0) => new
+        {
+            choices = new[]
+            {
+                new
+                {
+                    index = 0,
+                    delta = new
+                    {
+                        tool_calls = new[]
+                        {
+                            new
+                            {
+                                index,
+                                id,
+                                type = "function",
+                                function = new { name, arguments },
+                            },
+                        },
+                    },
+                    finish_reason = (string?)null,
+                },
+            },
+        };
 
     private static HttpResponseMessage SseResponse(string content) => new(HttpStatusCode.OK)
     {
@@ -400,6 +1048,15 @@ public sealed class LlamaServerChatInferenceRuntimeTests
         var result = new List<string>();
         await foreach (var chunk in source)
             result.Add(chunk.Text);
+        return result;
+    }
+
+    private static async Task<List<ChatInferenceChunk>> CollectChunksAsync(
+        IAsyncEnumerable<ChatInferenceChunk> source)
+    {
+        var result = new List<ChatInferenceChunk>();
+        await foreach (var chunk in source)
+            result.Add(chunk);
         return result;
     }
 
@@ -442,7 +1099,11 @@ public sealed class LlamaServerChatInferenceRuntimeTests
     private sealed class BlockingSseStream(string initialContent) : Stream
     {
         private readonly byte[] _initialBytes = Encoding.UTF8.GetBytes(initialContent);
+        private readonly TaskCompletionSource _blockingReadStarted = new(
+            TaskCreationOptions.RunContinuationsAsynchronously);
         private int _offset;
+
+        public Task BlockingReadStarted => _blockingReadStarted.Task;
 
         public override bool CanRead => true;
         public override bool CanSeek => false;
@@ -476,6 +1137,7 @@ public sealed class LlamaServerChatInferenceRuntimeTests
                 return count;
             }
 
+            _blockingReadStarted.TrySetResult();
             await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
             return 0;
         }

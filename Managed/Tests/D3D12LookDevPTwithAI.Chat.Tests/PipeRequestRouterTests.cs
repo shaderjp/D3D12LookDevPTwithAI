@@ -385,17 +385,59 @@ public sealed class PipeRequestRouterTests
         await using var fixture = new RouterFixture();
         _ = await fixture.InitializeAsync();
         var approvalId = Guid.NewGuid();
+        var approvalGrant = new string('a', 64);
         var pending = fixture.Coordinator.WaitForApprovalAsync(approvalId);
 
         await fixture.Router.HandleAsync(
-            fixture.Request("approval.respond", new ApprovalRespondRequest(approvalId, "allowOnce", "one-time-grant")),
+            fixture.Request("approval.respond", new ApprovalRespondRequest(approvalId, "allowOnce", approvalGrant)),
             fixture.Peer);
 
         var response = await fixture.Peer.ReadAsync();
         var resolution = await pending;
         Assert.True(response.Payload.GetProperty("accepted").GetBoolean());
         Assert.True(resolution.Allowed);
-        Assert.Equal("one-time-grant", resolution.ApprovalGrant);
+        Assert.Equal(approvalGrant, resolution.ApprovalGrant);
+
+        await fixture.Router.HandleAsync(
+            fixture.Request("approval.respond", new ApprovalRespondRequest(approvalId, "allowOnce", approvalGrant)),
+            fixture.Peer);
+        var replay = await fixture.Peer.ReadAsync();
+        Assert.False(replay.Payload.GetProperty("accepted").GetBoolean());
+    }
+
+    [Fact]
+    public async Task Approval_allow_once_rejects_malformed_grants_without_resolving_the_prompt()
+    {
+        await using var fixture = new RouterFixture();
+        _ = await fixture.InitializeAsync();
+
+        foreach (var invalidGrant in new[]
+        {
+            string.Empty,
+            new string('a', 63),
+            new string('a', 65),
+            new string('A', 64),
+            new string('g', 64),
+        })
+        {
+            var approvalId = Guid.NewGuid();
+            using var cancellation = new CancellationTokenSource();
+            var pending = fixture.Coordinator.WaitForApprovalAsync(
+                approvalId,
+                cancellation.Token);
+
+            await fixture.Router.HandleAsync(
+                fixture.Request(
+                    "approval.respond",
+                    new ApprovalRespondRequest(approvalId, "allowOnce", invalidGrant)),
+                fixture.Peer);
+            var response = await fixture.Peer.ReadAsync();
+            Assert.Equal("invalid_approval", response.Error?.Code);
+            Assert.False(pending.IsCompleted);
+
+            cancellation.Cancel();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => pending);
+        }
     }
 
     [Fact]

@@ -202,5 +202,22 @@ public sealed record ApprovalResolution(bool Allowed, string? ApprovalGrant);
 public sealed record RuntimeStateEvent(string Status, string Backend = "placeholder");
 public sealed record MessageAddedEvent(Guid TurnId, ConversationMessage Message);
 public sealed record TextDeltaEvent(Guid TurnId, Guid MessageId, string Delta);
+public sealed record ToolApprovalRequiredEvent(
+    Guid ApprovalId,
+    Guid TurnId,
+    string ToolCallId,
+    string Tool,
+    string Summary,
+    string McpSessionId,
+    string ArgumentsHash,
+    string ArgumentsJson);
+public sealed record ToolStartedEvent(Guid TurnId, string ToolCallId, string Tool);
+public sealed record ToolCompletedEvent(
+    Guid TurnId,
+    string ToolCallId,
+    string Tool,
+    string Status,
+    bool IsError,
+    string? Code = null);
 public sealed record TurnCompletedEvent(Guid TurnId, string Status);
 public sealed record ErrorEvent(Guid? TurnId, string Code, string Message);

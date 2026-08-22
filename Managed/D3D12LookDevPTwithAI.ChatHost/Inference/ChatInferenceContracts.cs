@@ -15,6 +15,13 @@ public static class ChatInferenceLimits
     public const int MaximumNameCharacters = 128;
     public const int MaximumRuntimeIdentifierCharacters = 64;
     public const int MaximumRuntimeStateCharacters = 32;
+    public const int MaximumTools = 128;
+    public const int MaximumToolNameCharacters = 256;
+    public const int MaximumToolDescriptionCharacters = 4 * 1024;
+    public const int MaximumToolSchemaCharacters = 64 * 1024;
+    public const int MaximumToolCatalogBytes = 512 * 1024;
+    public const int MaximumToolCalls = 32;
+    public const int MaximumToolCallIdCharacters = 256;
 }
 
 public enum ChatInferenceRole
@@ -28,15 +35,53 @@ public enum ChatInferenceRole
 public sealed record ChatInferenceMessage(
     ChatInferenceRole Role,
     string Content,
-    string? Name = null);
+    string? Name = null,
+    string? ToolCallId = null,
+    IReadOnlyList<ChatInferenceToolCall>? ToolCalls = null);
 
+public sealed record ChatInferenceToolDefinition(
+    string Name,
+    string? Description,
+    string InputSchemaJson)
+{
+    public override string ToString() => "[chat inference tool definition]";
+}
+
+/// <summary>
+/// A completed OpenAI-compatible function call. <see cref="ArgumentsJson"/>
+/// is always one validated JSON object when produced by an inference runtime.
+/// </summary>
+public sealed record ChatInferenceToolCall(
+    string Id,
+    string Name,
+    string ArgumentsJson)
+{
+    public override string ToString() => "[chat inference tool call]";
+}
+
+/// <summary>
+/// Describes either an initial user round or a continuation after tool
+/// results. A continuation sets <see cref="AppendUserMessage"/> to false,
+/// supplies an empty <see cref="UserText"/>, and ends history with tool
+/// results. <see cref="AllowToolCalls"/> controls tool choice without removing
+/// the catalog needed to interpret prior tool-call messages.
+/// </summary>
 public sealed record ChatInferenceRequest(
     Guid ConversationId,
     string ContextKey,
     IReadOnlyList<ChatInferenceMessage> History,
-    string UserText);
+    string UserText,
+    IReadOnlyList<ChatInferenceToolDefinition>? Tools = null,
+    bool AppendUserMessage = true,
+    bool AllowToolCalls = true);
 
-public sealed record ChatInferenceChunk(string Text);
+/// <summary>
+/// A text delta or one terminal batch of completed tool calls. Runtimes must
+/// not expose partial tool calls before the provider completion marker.
+/// </summary>
+public sealed record ChatInferenceChunk(
+    string Text,
+    IReadOnlyList<ChatInferenceToolCall>? ToolCalls = null);
 
 public sealed record ChatInferenceRuntimeStatus(
     string RuntimeId,

@@ -37,9 +37,12 @@ ChatHost は親 Native process が所有する `127.0.0.1` endpoint だけへ接
 束縛した30秒・一回限りの grant を必須とします。Native endpoint は不正・未認証要求を
 body の buffer 前に拒否し、受信全体を10秒、body buffer を1 request 16 MiB・全体
 32 MiB に制限します。専用 legacy session は server 再起動または idle expiry 後に
-再交渉し、ChatHost 終了時には best-effort で削除します。llama 推論 adapter はまだ
-Tool call を生成・実行しないため、自然言語からの LookDev 制御は次の milestone です。
-アプリ内 model manager と一体型 portable / offline 展示 pack も未実装です。設計と境界は
+再交渉し、ChatHost 終了時には best-effort で削除します。llama 推論 adapter は live MCP
+catalog を model へ渡し、上限付きの複数 round Tool loop を実行します。read-only Tool は
+自動実行し、変更 Tool は LookDev dock に canonical 引数全文を表示して Native の一回承認を
+必須とします。Tool の進行と結果は同じ画面へ表示し、SQLite へ保存するのは user message と
+最終的な assistant 応答だけです。アプリ内 model manager と一体型 portable / offline 展示
+pack は未実装です。設計と境界は
 [統合アーキテクチャ](docs/integrated-ai-architecture.ja.md)を参照してください。
 
 ### ローカル推論の手動 setup
@@ -54,7 +57,7 @@ Vulkan の llama.cpp runtime directory にある `llama-server.exe` を import �
   -RuntimePath 'D:\AI\llama-cpu\llama-server.exe' `
   -ModelId 'model-q4' `
   -Backend cpu `
-  -ContextSize 4096 `
+  -ContextSize 16384 `
   -MaxTokens 1024 `
   -Temperature 0.2 `
   -AcceptArtifactLicenses

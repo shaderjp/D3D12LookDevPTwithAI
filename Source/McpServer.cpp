@@ -772,12 +772,17 @@ namespace
 
 namespace mcp
 {
-std::string CanonicalArgumentsSha256(const cld::JsonValue& arguments)
+std::string CanonicalArgumentsJson(const cld::JsonValue& arguments)
 {
     std::string canonical;
     canonical.reserve(256);
     AppendCanonicalJson(arguments, canonical);
-    return Sha256Hex(canonical);
+    return canonical;
+}
+
+std::string CanonicalArgumentsSha256(const cld::JsonValue& arguments)
+{
+    return Sha256Hex(CanonicalArgumentsJson(arguments));
 }
 
 ApprovalGrantBroker& ApprovalGrantBroker::Instance()

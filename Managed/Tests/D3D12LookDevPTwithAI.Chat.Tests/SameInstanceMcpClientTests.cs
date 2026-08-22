@@ -200,6 +200,39 @@ public sealed class SameInstanceMcpClientTests
     }
 
     [Fact]
+    public async Task Used_grant_ledger_expires_without_exhausting_a_long_running_exhibition()
+    {
+        const string grant =
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        var timeProvider = new ManualTimeProvider();
+        var handler = new ScriptedHandler(
+            request => JsonResponse(
+                request,
+                1,
+                """{"protocolVersion":"2025-11-25"}""",
+                sessionId: "dedicated-session"),
+            NotificationResponse,
+            request => JsonResponse(
+                request,
+                2,
+                """{"tools":[{"name":"lookdevpt.set_camera","description":"camera","inputSchema":{"type":"object"}}]}"""),
+            request => JsonResponse(request, 3, """{"content":[{"type":"text","text":"changed"}]}"""),
+            request => JsonResponse(request, 4, """{"content":[{"type":"text","text":"changed again"}]}"""));
+        await using var client = CreateClient(handler, timeProvider);
+        using var arguments = JsonDocument.Parse("""{"yaw":20}""");
+
+        _ = await client.CallToolAsync("lookdevpt.set_camera", arguments.RootElement, grant);
+        var reused = await Assert.ThrowsAsync<SameInstanceMcpException>(() =>
+            client.CallToolAsync("lookdevpt.set_camera", arguments.RootElement, grant));
+        Assert.Equal("approval_reused", reused.Code);
+
+        timeProvider.Advance(TimeSpan.FromMinutes(1));
+        _ = await client.CallToolAsync("lookdevpt.set_camera", arguments.RootElement, grant);
+
+        Assert.Equal(5, handler.RequestCount);
+    }
+
+    [Fact]
     public async Task Approval_binding_uses_dedicated_session_external_tool_id_and_canonical_hash()
     {
         var handler = new ScriptedHandler(
@@ -374,12 +407,26 @@ public sealed class SameInstanceMcpClientTests
         Assert.Equal(expectedSha256, SameInstanceMcpArgumentHash.Compute(document.RootElement));
     }
 
+    [Fact]
+    public void Canonical_argument_hash_rejects_duplicate_object_properties()
+    {
+        using var document = JsonDocument.Parse("""{"value":1,"value":2}""");
+
+        Assert.Throws<ArgumentException>(() =>
+            SameInstanceMcpArgumentHash.Canonicalize(document.RootElement));
+        Assert.Throws<ArgumentException>(() =>
+            SameInstanceMcpArgumentHash.Compute(document.RootElement));
+    }
+
     private const string ProtocolVersion = "2025-11-25";
 
-    private static SameInstanceMcpClient CreateClient(HttpMessageHandler handler) => new(
+    private static SameInstanceMcpClient CreateClient(
+        HttpMessageHandler handler,
+        TimeProvider? timeProvider = null) => new(
         SameInstanceMcpCapability.Create("http://127.0.0.1:8777/mcp", "memory-only-token"),
         Environment.ProcessId,
-        handler);
+        handler,
+        timeProvider);
 
     private static HttpResponseMessage NotificationResponse(HttpRequestMessage request)
         => NotificationResponse(request, "dedicated-session");
@@ -451,6 +498,18 @@ public sealed class SameInstanceMcpClientTests
             Assert.NotEmpty(_responses);
             return Task.FromResult(_responses.Dequeue()(request));
         }
+    }
+
+    private sealed class ManualTimeProvider : TimeProvider
+    {
+        private long _timestamp;
+
+        public override long TimestampFrequency => TimeSpan.TicksPerSecond;
+
+        public override long GetTimestamp() => Volatile.Read(ref _timestamp);
+
+        public void Advance(TimeSpan elapsed) =>
+            Interlocked.Add(ref _timestamp, elapsed.Ticks);
     }
 
     private sealed class BlockingContent : HttpContent

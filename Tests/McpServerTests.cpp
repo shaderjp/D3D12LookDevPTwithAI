@@ -312,6 +312,11 @@ namespace
             "{\"b\":1,\"a\":-0}",
             "2f954b957c86ae054ee0935643ad1f0dd7522789a6490bd06a116978447b012b",
             "sorted canonical argument hash changed");
+        Require(
+            mcp::CanonicalArgumentsJson(
+                cld::JsonParser("{\"b\":1,\"a\":-0}").Parse()) ==
+                "{\"a\":0,\"b\":1e0}",
+            "canonical argument JSON changed");
         requireHash(
             "{\"text\":\"line\\n" + japanese +
                 "\",\"values\":[true,null,0.5]}",

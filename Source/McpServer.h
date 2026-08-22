@@ -104,6 +104,7 @@ private:
 };
 
 std::string CanonicalArgumentsSha256(const cld::JsonValue& arguments);
+std::string CanonicalArgumentsJson(const cld::JsonValue& arguments);
 
 struct ResourceResult
 {

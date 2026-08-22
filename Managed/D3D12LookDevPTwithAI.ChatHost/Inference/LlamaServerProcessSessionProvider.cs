@@ -493,6 +493,7 @@ internal sealed class LlamaServerProcessSessionProvider :
             apiKeyFilePath,
             "--no-ui",
             "--offline",
+            "--jinja",
             "--cors-origins",
             "localhost",
             "--no-cors-credentials",

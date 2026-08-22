@@ -110,7 +110,9 @@ struct EditorSnapshot
     bool mcpRunning = false;
     bool renderOnly = false;
     std::wstring sceneName = L"Preview cube";
+    std::wstring scenePath;
     std::wstring projectName;
+    std::wstring projectPath;
     std::wstring status = L"Renderer starting";
     std::wstring diagnostics;
     std::wstring stats;

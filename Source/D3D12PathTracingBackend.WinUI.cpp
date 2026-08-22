@@ -1467,9 +1467,11 @@ D3D12PathTracingBackend::CaptureEditorSnapshot() const
     snapshot.sceneName = m_scenePath.empty()
         ? L"Preview cube"
         : std::filesystem::path(m_scenePath).filename().wstring();
+    snapshot.scenePath = m_scenePath;
     snapshot.projectName = m_projectPath.empty()
         ? std::wstring{}
         : std::filesystem::path(m_projectPath).filename().wstring();
+    snapshot.projectPath = m_projectPath;
     const SceneLoadStage sceneLoadStage =
         m_sceneLoadStage.load(std::memory_order_relaxed);
     const bool sceneLoading =

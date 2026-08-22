@@ -117,6 +117,7 @@ void MainWindow::OnLoaded(
     }
     UpdateTitleBarTheme();
     ApplyPanelVisibility();
+    StartAssistant();
     OnViewportHostSizeChanged(nullptr, nullptr);
     ViewportInputSurface().Focus(FocusState::Programmatic);
 }
@@ -144,6 +145,10 @@ void MainWindow::OnClosed(
     {
         m_timer.Stop();
     }
+
+    // The assistant can have an in-flight MCP request. Stop it before the
+    // renderer so its pipe and HTTP work cannot race renderer shutdown.
+    StopAssistant();
 
     // Stop the renderer first so no more presents can race the UI-thread
     // SetSwapChain(nullptr) detach.
@@ -634,13 +639,15 @@ void MainWindow::OnResetLayout(
     RoutedEventArgs const&)
 {
     m_leftWidth = 330.0;
-    m_rightWidth = 380.0;
+    m_rightWidth = 420.0;
     m_bottomHeight = 250.0;
+    m_rightDockMode = RightDockMode::Assistant;
     OnShowAllPanels(nullptr, nullptr);
     LeftTabs().SelectedItem(SceneTab());
     MaterialEditorTabs().SelectedIndex(0);
     RightTabs().SelectedItem(ViewportSettingsTab());
     BottomTabs().SelectedItem(DiagnosticsTab());
+    ApplyRightDockMode();
 }
 
 void MainWindow::OnRenderOnlyClick(
@@ -1495,6 +1502,7 @@ void MainWindow::RefreshSnapshot()
         ApplyRenderOnly(snapshot->renderOnly);
     }
     m_refreshing = false;
+    UpdateAssistantContext(*snapshot);
     if (snapshot->benchmarkFinished)
     {
         Close();
@@ -1540,11 +1548,18 @@ void MainWindow::ApplyPanelVisibility()
         Checked(ScenePanelMenu()) ||
         Checked(MaterialPanelMenu()) ||
         Checked(LightingPanelMenu());
-    m_showRight =
+    const bool inspectorAvailable =
         Checked(ViewportPanelMenu()) ||
         Checked(PathPanelMenu()) ||
         Checked(DenoisePanelMenu()) ||
         Checked(RestirPanelMenu());
+    if (!inspectorAvailable &&
+        m_rightDockMode == RightDockMode::Inspector)
+    {
+        m_rightDockMode = RightDockMode::Assistant;
+    }
+    m_showRight = inspectorAvailable ||
+        m_rightDockMode == RightDockMode::Assistant;
     m_showBottom =
         Checked(DiagnosticsPanelMenu()) ||
         Checked(McpPanelMenu());
@@ -1585,6 +1600,8 @@ void MainWindow::ApplyPanelVisibility()
         Checked(McpPanelMenu())
             ? Visibility::Visible
             : Visibility::Collapsed);
+    InspectorModeButton().IsEnabled(inspectorAvailable);
+    ApplyRightDockMode();
 
     LeftPane().Visibility(
         m_showLeft ? Visibility::Visible : Visibility::Collapsed);
@@ -1708,6 +1725,11 @@ void MainWindow::LoadLayout()
         {
             m_themeMode = EditorThemeMode::System;
         }
+        m_rightDockMode =
+            cld::JsonStringOr(
+                root, "rightDockMode", "assistant") == "inspector"
+                ? RightDockMode::Inspector
+                : RightDockMode::Assistant;
         m_leftWidth = Clamp(
             cld::JsonNumberOr(root, "leftWidth", m_leftWidth),
             220.0, 600.0);
@@ -1781,6 +1803,10 @@ void MainWindow::SaveLayout()
     }
     file << "{\n"
          << "  \"theme\": \"" << theme << "\",\n"
+         << "  \"rightDockMode\": \""
+         << (m_rightDockMode == RightDockMode::Assistant
+                 ? "assistant" : "inspector")
+         << "\",\n"
          << "  \"leftWidth\": " << m_leftWidth << ",\n"
          << "  \"rightWidth\": " << m_rightWidth << ",\n"
          << "  \"bottomHeight\": " << m_bottomHeight << ",\n"
@@ -2082,6 +2108,21 @@ LRESULT CALLBACK MainWindow::WindowSubclassProc(
         {
             self->ToggleRenderOnly();
         }
+        return 0;
+    }
+    if (self && wparam == VK_F9 &&
+        (message == WM_KEYDOWN || message == WM_SYSKEYDOWN))
+    {
+        constexpr LPARAM PreviousKeyState = 1LL << 30;
+        if ((lparam & PreviousKeyState) == 0)
+        {
+            self->ToggleAssistant();
+        }
+        return 0;
+    }
+    if (wparam == VK_F9 &&
+        (message == WM_KEYUP || message == WM_SYSKEYUP))
+    {
         return 0;
     }
     if (wparam == VK_F10 &&

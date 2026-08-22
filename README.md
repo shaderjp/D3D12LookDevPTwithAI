@@ -17,6 +17,21 @@ dynamic internal resolution with TAAU, compact secondary work dispatch, BLAS
 compaction / instancing, shader ray counters, asynchronous scene loading, and
 the MCP `2026-07-28` transport.
 
+## Integrated AI Assistant (in progress)
+
+This branch adds a single-window workflow: the user controls LookDev from an
+AI Assistant dock instead of switching to a separate chat application. The
+first vertical slice includes the Inspector / AI Assistant switch, F9, a
+hidden local ChatHost, a current-user-only named pipe, streaming, cancellation,
+and project-scoped SQLite conversation history. The only executable window the
+user launches or operates is `D3D12LookDevPTwithAI.exe`.
+
+The current ChatHost produces deterministic placeholder responses so the IPC
+and UI can be exercised. Real llama.cpp inference, same-instance MCP tool
+execution, one-time approval grants, model download, and the integrated
+portable/offline pack are subsequent milestones. See the
+[integrated architecture](docs/integrated-ai-architecture.ja.md).
+
 ## Screenshots
 
 | Bistro Interior | Bistro Exterior |
@@ -34,6 +49,7 @@ cancellation, the seventh alpha texture slot, and detailed RTXDI / DLSS status.
 - MSVC `v145`
 - Windows SDK `10.0.26100.0`
 - Windows App Runtime 2.4 x64
+- .NET 9 SDK for builds and .NET 9 Runtime x64 for the current ChatHost
 - Git with submodule support
 
 Debug and Release builds are unpackaged and Windows App SDK framework-dependent;
@@ -99,6 +115,10 @@ Agility SDK, DXC-produced shaders, and available Streamline / DLSS runtimes
 beside the executable.
 
 ## Reproducible and portable suite
+
+> The scripts in this section are the existing transition pipeline that pairs
+> an external `LocalMCPChatClient`; they are not yet the integrated Assistant
+> distribution.
 
 `suite.lock.json` schema v2 pins the compatible LocalMCPChatClient revision,
 SDKs, packages, model/projector, and llama runtime versions. D3D12 uses

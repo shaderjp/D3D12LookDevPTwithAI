@@ -4,6 +4,12 @@
 #include "EditorViewModel.h"
 #include "RendererController.h"
 
+namespace lookdevpt::assistant
+{
+struct AssistantEnvelope;
+struct AssistantHostBridgeStateUpdate;
+}
+
 namespace winrt::D3D12LookDevPTwithAI::implementation
 {
 enum class EditorThemeMode
@@ -12,6 +18,14 @@ enum class EditorThemeMode
     Light,
     Dark,
 };
+
+enum class RightDockMode
+{
+    Inspector,
+    Assistant,
+};
+
+struct AssistantUiState;
 
 struct MainWindow : MainWindowT<MainWindow>
 {
@@ -101,6 +115,36 @@ struct MainWindow : MainWindowT<MainWindow>
     void OnRenderOnlyClick(
         Windows::Foundation::IInspectable const&,
         Microsoft::UI::Xaml::RoutedEventArgs const&);
+    void OnRightDockModeChanged(
+        Windows::Foundation::IInspectable const&,
+        Microsoft::UI::Xaml::RoutedEventArgs const&);
+    void OnAiAssistantMenuClick(
+        Windows::Foundation::IInspectable const&,
+        Microsoft::UI::Xaml::RoutedEventArgs const&);
+    void OnAiSendClick(
+        Windows::Foundation::IInspectable const&,
+        Microsoft::UI::Xaml::RoutedEventArgs const&);
+    void OnAiStopClick(
+        Windows::Foundation::IInspectable const&,
+        Microsoft::UI::Xaml::RoutedEventArgs const&);
+    void OnAiQuickPromptClick(
+        Windows::Foundation::IInspectable const&,
+        Microsoft::UI::Xaml::RoutedEventArgs const&);
+    void OnAiPromptKeyDown(
+        Windows::Foundation::IInspectable const&,
+        Microsoft::UI::Xaml::Input::KeyRoutedEventArgs const&);
+    void OnAiConversationChanged(
+        Windows::Foundation::IInspectable const&,
+        Microsoft::UI::Xaml::Controls::SelectionChangedEventArgs const&);
+    void OnAiNewConversationClick(
+        Windows::Foundation::IInspectable const&,
+        Microsoft::UI::Xaml::RoutedEventArgs const&);
+    void OnAiSetupClick(
+        Windows::Foundation::IInspectable const&,
+        Microsoft::UI::Xaml::RoutedEventArgs const&);
+    void OnAiRetryClick(
+        Windows::Foundation::IInspectable const&,
+        Microsoft::UI::Xaml::RoutedEventArgs const&);
     void OnMaterialSelectionChanged(
         Windows::Foundation::IInspectable const&,
         Microsoft::UI::Xaml::Controls::SelectionChangedEventArgs const&);
@@ -148,6 +192,25 @@ private:
         Microsoft::UI::Xaml::Input::PointerRoutedEventArgs const& args);
     void ApplyRenderOnly(bool enabled);
     void ToggleRenderOnly();
+    void ApplyRightDockMode();
+    void ToggleAssistant();
+    void StartAssistant();
+    void StopAssistant() noexcept;
+    void UpdateAssistantContext(
+        lookdevpt::winui::EditorSnapshot const& snapshot);
+    void HandleAssistantEvent(
+        lookdevpt::assistant::AssistantEnvelope event);
+    void HandleAssistantHostState(
+        lookdevpt::assistant::AssistantHostBridgeStateUpdate update);
+    void TryInitializeAssistant();
+    void UpdateAssistantInteractionState();
+    bool PostAssistantRequest(
+        std::string method,
+        std::string payload,
+        std::string* queuedRequestId = nullptr);
+    void SendAssistantTurn(
+        std::wstring text,
+        std::wstring promptId = {});
     void ApplyPanelVisibility();
     void ApplyTheme(EditorThemeMode mode);
     void UpdateTitleBarTheme();
@@ -198,14 +261,17 @@ private:
     bool m_showRight = true;
     bool m_showBottom = true;
     EditorThemeMode m_themeMode = EditorThemeMode::System;
+    RightDockMode m_rightDockMode = RightDockMode::Assistant;
     double m_leftWidth = 330.0;
-    double m_rightWidth = 380.0;
+    double m_rightWidth = 420.0;
     double m_bottomHeight = 250.0;
     std::int32_t m_selectedVariant = -1;
     std::int32_t m_selectedPreset = -1;
     std::uint64_t m_selectedApproval = 0;
     std::vector<std::wstring> m_pairedClientIds;
     std::vector<std::wstring> m_pairedClientNames;
+    std::shared_ptr<AssistantUiState> m_assistant;
+    bool m_aiMcpStartRequested = false;
     HWND m_windowHandle = nullptr;
 };
 }

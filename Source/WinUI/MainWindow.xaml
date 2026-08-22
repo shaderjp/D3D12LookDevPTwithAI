@@ -26,7 +26,7 @@
             <ColumnDefinition x:Name="LeftSplitterColumn" Width="6" />
             <ColumnDefinition Width="*" MinWidth="320" />
             <ColumnDefinition x:Name="RightSplitterColumn" Width="6" />
-            <ColumnDefinition x:Name="RightPaneColumn" Width="380" MinWidth="260" />
+            <ColumnDefinition x:Name="RightPaneColumn" Width="420" MinWidth="260" />
         </Grid.ColumnDefinitions>
 
         <MenuBar x:Name="MainMenu" Grid.Row="0" Grid.ColumnSpan="5">
@@ -49,6 +49,7 @@
                 <ToggleMenuFlyoutItem x:Name="PathPanelMenu" Text="Path Tracing" Tag="PathTracingTab" IsChecked="True" Click="OnPanelToggleClick" />
                 <ToggleMenuFlyoutItem x:Name="DenoisePanelMenu" Text="Denoise" Tag="DenoiseTab" IsChecked="True" Click="OnPanelToggleClick" />
                 <ToggleMenuFlyoutItem x:Name="RestirPanelMenu" Text="ReSTIR" Tag="RestirTab" IsChecked="True" Click="OnPanelToggleClick" />
+                <MenuFlyoutItem Text="AI Assistant (F9)" Click="OnAiAssistantMenuClick" />
                 <ToggleMenuFlyoutItem x:Name="DiagnosticsPanelMenu" Text="Diagnostics / Stats" Tag="DiagnosticsTab" IsChecked="True" Click="OnPanelToggleClick" />
                 <ToggleMenuFlyoutItem x:Name="McpPanelMenu" Text="MCP Server" Tag="McpTab" IsChecked="True" Click="OnPanelToggleClick" />
                 <MenuFlyoutSeparator />
@@ -442,7 +443,39 @@
                 Background="{ThemeResource LayerFillColorDefaultBrush}"
                 BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
                 BorderThickness="1,0,0,0">
-            <TabView x:Name="RightTabs" IsAddTabButtonVisible="False" CanDragTabs="False">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
+                </Grid.RowDefinitions>
+                <Grid Grid.Row="0" Padding="8,6" ColumnSpacing="8"
+                      BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                      BorderThickness="0,0,0,1">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+                    <RadioButton x:Name="InspectorModeButton"
+                                 Grid.Column="0"
+                                 GroupName="RightDockMode"
+                                 Content="Inspector"
+                                 HorizontalAlignment="Stretch"
+                                 HorizontalContentAlignment="Center"
+                                 Click="OnRightDockModeChanged" />
+                    <RadioButton x:Name="AssistantModeButton"
+                                 Grid.Column="1"
+                                 GroupName="RightDockMode"
+                                 Content="AI Assistant"
+                                 HorizontalAlignment="Stretch"
+                                 HorizontalContentAlignment="Center"
+                                 IsChecked="True"
+                                 Click="OnRightDockModeChanged" />
+                </Grid>
+
+                <TabView x:Name="RightTabs" Grid.Row="1"
+                         IsAddTabButtonVisible="False"
+                         CanDragTabs="False"
+                         Visibility="Collapsed">
                 <TabViewItem x:Name="ViewportSettingsTab" Header="Viewport" IsClosable="False">
                     <ScrollViewer VerticalScrollBarVisibility="Auto">
                         <StackPanel Padding="12" Spacing="4">
@@ -780,7 +813,128 @@
                         </StackPanel>
                     </ScrollViewer>
                 </TabViewItem>
-            </TabView>
+                </TabView>
+
+                <Grid x:Name="AssistantPane" Grid.Row="1" Padding="10">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+
+                    <Border Grid.Row="0"
+                            Padding="10,8"
+                            Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                            BorderThickness="1"
+                            CornerRadius="6">
+                        <StackPanel Spacing="5">
+                            <TextBlock x:Name="AiRuntimeStatusText"
+                                       Text="Starting local AI host…"
+                                       FontWeight="SemiBold"
+                                       TextWrapping="Wrap"
+                                       AutomationProperties.LiveSetting="Polite" />
+                            <TextBlock x:Name="AiModelStatusText"
+                                       Text="Model: not configured"
+                                       TextWrapping="Wrap"
+                                       Opacity="0.72" />
+                            <ProgressBar x:Name="AiSetupProgress"
+                                         IsIndeterminate="True"
+                                         Visibility="Collapsed" />
+                            <ComboBox x:Name="AiModelCombo"
+                                      Header="Local model"
+                                      SelectedIndex="0"
+                                      HorizontalAlignment="Stretch">
+                                <ComboBoxItem Content="Gemma 4 E2B (Recommended)" Tag="gemma-4-e2b" />
+                                <ComboBoxItem Content="Gemma 4 E4B" Tag="gemma-4-e4b" />
+                            </ComboBox>
+                            <StackPanel Orientation="Horizontal" Spacing="6">
+                                <Button x:Name="AiSetupButton"
+                                        Content="Set up"
+                                        Click="OnAiSetupClick" />
+                                <Button x:Name="AiRetryButton"
+                                        Content="Retry"
+                                        Click="OnAiRetryClick" />
+                            </StackPanel>
+                        </StackPanel>
+                    </Border>
+
+                    <Grid Grid.Row="1" Margin="0,8,0,6" ColumnSpacing="6">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <ComboBox x:Name="AiConversationCombo"
+                                  Grid.Column="0"
+                                  PlaceholderText="Conversation history"
+                                  HorizontalAlignment="Stretch"
+                                  SelectionChanged="OnAiConversationChanged" />
+                        <Button x:Name="AiNewConversationButton"
+                                Grid.Column="1"
+                                Content="New"
+                                Click="OnAiNewConversationClick" />
+                    </Grid>
+
+                    <ScrollViewer Grid.Row="2"
+                                  HorizontalScrollBarVisibility="Auto"
+                                  VerticalScrollBarVisibility="Disabled"
+                                  Margin="0,0,0,6">
+                        <StackPanel x:Name="AiQuickPromptPanel"
+                                    Orientation="Horizontal"
+                                    Spacing="5">
+                            <Button Content="Describe scene" Tag="lookdev.scene.describe" Click="OnAiQuickPromptClick" />
+                            <Button Content="Review view" Tag="lookdev.view.review" Click="OnAiQuickPromptClick" />
+                            <Button Content="Frame camera" Tag="lookdev.camera.compose" Click="OnAiQuickPromptClick" />
+                            <Button Content="Suggest denoise" Tag="lookdev.denoise.suggest" Click="OnAiQuickPromptClick" />
+                            <Button Content="Compare" Tag="lookdev.compare" Click="OnAiQuickPromptClick" />
+                            <Button Content="Benchmark" Tag="lookdev.benchmark" Click="OnAiQuickPromptClick" />
+                        </StackPanel>
+                    </ScrollViewer>
+
+                    <ListView x:Name="AiTranscriptList"
+                              Grid.Row="3"
+                              SelectionMode="None"
+                              IsItemClickEnabled="False"
+                              HorizontalContentAlignment="Stretch"
+                              Margin="0,0,0,8">
+                        <ListView.ItemsPanel>
+                            <ItemsPanelTemplate>
+                                <ItemsStackPanel ItemsUpdatingScrollMode="KeepLastItemInView" />
+                            </ItemsPanelTemplate>
+                        </ListView.ItemsPanel>
+                    </ListView>
+
+                    <Grid Grid.Row="4" RowSpacing="6">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
+                        <TextBox x:Name="AiPromptBox"
+                                 Grid.Row="0"
+                                 MinHeight="72"
+                                 MaxHeight="160"
+                                 AcceptsReturn="True"
+                                 TextWrapping="Wrap"
+                                 PlaceholderText="Ask about or control this LookDev scene…"
+                                 KeyDown="OnAiPromptKeyDown" />
+                        <StackPanel Grid.Row="1"
+                                    Orientation="Horizontal"
+                                    HorizontalAlignment="Right"
+                                    Spacing="6">
+                            <Button x:Name="AiStopButton"
+                                    Content="Stop"
+                                    IsEnabled="False"
+                                    Click="OnAiStopClick" />
+                            <Button x:Name="AiSendButton"
+                                    Content="Send"
+                                    IsEnabled="False"
+                                    Click="OnAiSendClick" />
+                        </StackPanel>
+                    </Grid>
+                </Grid>
+            </Grid>
         </Border>
 
         <Thumb x:Name="BottomSplitter"

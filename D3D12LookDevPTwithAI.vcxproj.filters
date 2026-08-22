@@ -184,7 +184,19 @@
     <ClCompile Include="Source\QualitySettingsJson.cpp">
       <Filter>Source Files\Services</Filter>
     </ClCompile>
+    <ClCompile Include="Source\Services\AssistantHostBridge.cpp">
+      <Filter>Source Files\Services</Filter>
+    </ClCompile>
+    <ClCompile Include="Source\Services\AssistantProtocol.cpp">
+      <Filter>Source Files\Services</Filter>
+    </ClCompile>
     <ClCompile Include="Source\SimpleJson.cpp">
+      <Filter>Source Files\Services</Filter>
+    </ClCompile>
+    <ClCompile Include="Tests\AssistantProtocolTests.cpp">
+      <Filter>Source Files\Services</Filter>
+    </ClCompile>
+    <ClCompile Include="Tests\AssistantHostBridgeTests.cpp">
       <Filter>Source Files\Services</Filter>
     </ClCompile>
     <ClCompile Include="Source\WinUI\pch.cpp">
@@ -194,6 +206,9 @@
       <Filter>Source Files\WinUI</Filter>
     </ClCompile>
     <ClCompile Include="Source\WinUI\MainWindow.xaml.cpp">
+      <Filter>Source Files\WinUI</Filter>
+    </ClCompile>
+    <ClCompile Include="Source\WinUI\MainWindow.Assistant.cpp">
       <Filter>Source Files\WinUI</Filter>
     </ClCompile>
     <ClCompile Include="Source\WinUI\main.cpp">
@@ -289,6 +304,12 @@
       <Filter>Header Files\Services</Filter>
     </ClInclude>
     <ClInclude Include="Source\QualitySettingsJson.h">
+      <Filter>Header Files\Services</Filter>
+    </ClInclude>
+    <ClInclude Include="Source\Services\AssistantHostBridge.h">
+      <Filter>Header Files\Services</Filter>
+    </ClInclude>
+    <ClInclude Include="Source\Services\AssistantProtocol.h">
       <Filter>Header Files\Services</Filter>
     </ClInclude>
     <ClInclude Include="Source\SimpleJson.h">
@@ -443,6 +464,12 @@
       <Filter>Build Scripts</Filter>
     </None>
     <None Include="config\LocalMCPChatClient.mcp.json">
+      <Filter>Build Scripts</Filter>
+    </None>
+    <None Include="Scripts\TestAssistantHostBridge.ps1">
+      <Filter>Build Scripts</Filter>
+    </None>
+    <None Include="Scripts\TestAssistantProtocol.ps1">
       <Filter>Build Scripts</Filter>
     </None>
     <None Include="Scripts\TestLocalMcpChatClientIntegration.ps1">

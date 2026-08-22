@@ -15,6 +15,19 @@ PT、DLSS Ray Reconstruction evaluation、dynamic internal resolution / TAAU、c
 secondary work dispatch、BLAS compaction / instancing、shader ray counter、非同期
 scene load、MCP `2026-07-28` transport も合流しています。
 
+## 統合 AI Assistant（実装中）
+
+このブランチでは、別のチャットアプリへ移動せず LookDev の右ドックから操作する
+一体型 UI を実装しています。現在の最初の縦断実装には、`Inspector / AI Assistant`
+切替、F9、非表示のローカル ChatHost、current-user 限定 named pipe、ストリーミング、
+取消、project ごとの SQLite 会話履歴が含まれます。利用者が起動・操作するウィンドウは
+`D3D12LookDevPTwithAI.exe` だけです。
+
+現段階の ChatHost は IPC と UI を検証する deterministic placeholder 応答です。
+実際の llama.cpp 推論、同一アプリの MCP Tool 実行、一回承認 grant、model download、
+一体型 portable / offline pack は次の milestone です。設計と境界は
+[統合アーキテクチャ](docs/integrated-ai-architecture.ja.md)を参照してください。
+
 ## スクリーンショット
 
 | Bistro Interior | Bistro Exterior |
@@ -32,6 +45,7 @@ slot、RTXDI / DLSS の詳細 status を操作・確認できます。
 - MSVC `v145`
 - Windows SDK `10.0.26100.0`
 - Windows App Runtime 2.4 x64
+- .NET 9 SDK（build）および .NET 9 Runtime x64（現在の ChatHost 実行）
 - submodule 対応 Git
 
 Debug / Release build は unpackaged、Windows App SDK framework-dependent です。
@@ -97,6 +111,9 @@ Assimp、DirectXTex、NRD、RTXDI は `BuildThirdParty.ps1` が必要時に buil
 利用可能な Streamline / DLSS runtime も executable の横へコピーされます。
 
 ## 再現可能な開発環境とPortableスイート
+
+> この節の script は移行元の外部 `LocalMCPChatClient` を組み合わせる既存 pipeline
+> です。統合 Assistant の一体型配布としてはまだ使用しません。
 
 `suite.lock.json` schema v2でLocalMCPChatClientの互換commit、SDK、package、
 model/projector、llama runtimeを固定します。D3D12自身は`source: self`とし、実際に

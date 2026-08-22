@@ -180,6 +180,8 @@
     <ClCompile Include="Source\QualitySettingsJson.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="Source\RtxdiBackend.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="Source\SceneImporter.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="Source\Services\AssistantHostBridge.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="Source\Services\AssistantProtocol.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="Source\SimpleJson.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="Source\stdafx.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="Source\TextureLoader.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
@@ -232,6 +234,7 @@
     <ClCompile Include="Source\WinUI\MainWindow.xaml.cpp">
       <DependentUpon>MainWindow.xaml</DependentUpon>
     </ClCompile>
+    <ClCompile Include="Source\WinUI\MainWindow.Assistant.cpp" />
     <ClCompile Include="Source\WinUI\RendererController.cpp" />
     <ClCompile Include="Source\WinUI\main.cpp" />
     <ClCompile Include="Tests\McpServerHttpTests.cpp">
@@ -241,6 +244,12 @@
       <ExcludedFromBuild>true</ExcludedFromBuild>
     </ClCompile>
     <ClCompile Include="Tests\GltfSceneImporterTests.cpp">
+      <ExcludedFromBuild>true</ExcludedFromBuild>
+    </ClCompile>
+    <ClCompile Include="Tests\AssistantProtocolTests.cpp">
+      <ExcludedFromBuild>true</ExcludedFromBuild>
+    </ClCompile>
+    <ClCompile Include="Tests\AssistantHostBridgeTests.cpp">
       <ExcludedFromBuild>true</ExcludedFromBuild>
     </ClCompile>
     <ClCompile Include="$(GeneratedFilesDir)module.g.cpp" />
@@ -269,6 +278,8 @@
     <ClInclude Include="Source\RtxdiBackend.h" />
     <ClInclude Include="Source\SceneImporter.h" />
     <ClInclude Include="Source\SceneTypes.h" />
+    <ClInclude Include="Source\Services\AssistantHostBridge.h" />
+    <ClInclude Include="Source\Services\AssistantProtocol.h" />
     <ClInclude Include="Source\SimpleJson.h" />
     <ClInclude Include="Source\stdafx.h" />
     <ClInclude Include="Source\TextureLoader.h" />
@@ -295,6 +306,8 @@
     <None Include="CMake\RtxdiRuntime\CMakeLists.txt" />
     <None Include="config\development.dsc.yaml" />
     <None Include="config\LocalMCPChatClient.mcp.json" />
+    <None Include="Scripts\TestAssistantHostBridge.ps1" />
+    <None Include="Scripts\TestAssistantProtocol.ps1" />
     <None Include="Scripts\TestLocalMcpChatClientIntegration.ps1" />
     <None Include="Scripts\TestMcpServerHttp.ps1" />
     <None Include="Scripts\TestMcpReviewAnalysis.ps1" />

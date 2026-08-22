@@ -3,6 +3,17 @@ Microsoft Visual Studio Solution File, Format Version 12.00
 VisualStudioVersion = 18.0.0.0
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "D3D12LookDevPTwithAI", "D3D12LookDevPTwithAI.vcxproj", "{7A1DDF3B-1E0A-4DD8-A013-CF56A1048B91}"
+	ProjectSection(ProjectDependencies) = postProject
+		{51D02087-BAF3-4003-AE21-984A073A0626} = {51D02087-BAF3-4003-AE21-984A073A0626}
+	EndProjectSection
+EndProject
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "D3D12LookDevPTwithAI.Chat.Core", "Managed\D3D12LookDevPTwithAI.Chat.Core\D3D12LookDevPTwithAI.Chat.Core.csproj", "{59D9AE15-36C3-4A23-9CBA-AA7570FC6FAA}"
+EndProject
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "D3D12LookDevPTwithAI.Chat.Infrastructure", "Managed\D3D12LookDevPTwithAI.Chat.Infrastructure\D3D12LookDevPTwithAI.Chat.Infrastructure.csproj", "{F80A4303-93E6-4BEC-802E-08940AFCEC23}"
+EndProject
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "D3D12LookDevPTwithAI.ChatHost", "Managed\D3D12LookDevPTwithAI.ChatHost\D3D12LookDevPTwithAI.ChatHost.csproj", "{51D02087-BAF3-4003-AE21-984A073A0626}"
+EndProject
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "D3D12LookDevPTwithAI.Chat.Tests", "Managed\Tests\D3D12LookDevPTwithAI.Chat.Tests\D3D12LookDevPTwithAI.Chat.Tests.csproj", "{5B292F5C-1DB5-49BF-9167-BDE47382611F}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -14,6 +25,22 @@ Global
 		{7A1DDF3B-1E0A-4DD8-A013-CF56A1048B91}.Debug|x64.Build.0 = Debug|x64
 		{7A1DDF3B-1E0A-4DD8-A013-CF56A1048B91}.Release|x64.ActiveCfg = Release|x64
 		{7A1DDF3B-1E0A-4DD8-A013-CF56A1048B91}.Release|x64.Build.0 = Release|x64
+		{59D9AE15-36C3-4A23-9CBA-AA7570FC6FAA}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{59D9AE15-36C3-4A23-9CBA-AA7570FC6FAA}.Debug|x64.Build.0 = Debug|Any CPU
+		{59D9AE15-36C3-4A23-9CBA-AA7570FC6FAA}.Release|x64.ActiveCfg = Release|Any CPU
+		{59D9AE15-36C3-4A23-9CBA-AA7570FC6FAA}.Release|x64.Build.0 = Release|Any CPU
+		{F80A4303-93E6-4BEC-802E-08940AFCEC23}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{F80A4303-93E6-4BEC-802E-08940AFCEC23}.Debug|x64.Build.0 = Debug|Any CPU
+		{F80A4303-93E6-4BEC-802E-08940AFCEC23}.Release|x64.ActiveCfg = Release|Any CPU
+		{F80A4303-93E6-4BEC-802E-08940AFCEC23}.Release|x64.Build.0 = Release|Any CPU
+		{51D02087-BAF3-4003-AE21-984A073A0626}.Debug|x64.ActiveCfg = Debug|x64
+		{51D02087-BAF3-4003-AE21-984A073A0626}.Debug|x64.Build.0 = Debug|x64
+		{51D02087-BAF3-4003-AE21-984A073A0626}.Release|x64.ActiveCfg = Release|x64
+		{51D02087-BAF3-4003-AE21-984A073A0626}.Release|x64.Build.0 = Release|x64
+		{5B292F5C-1DB5-49BF-9167-BDE47382611F}.Debug|x64.ActiveCfg = Debug|x64
+		{5B292F5C-1DB5-49BF-9167-BDE47382611F}.Debug|x64.Build.0 = Debug|x64
+		{5B292F5C-1DB5-49BF-9167-BDE47382611F}.Release|x64.ActiveCfg = Release|x64
+		{5B292F5C-1DB5-49BF-9167-BDE47382611F}.Release|x64.Build.0 = Release|x64
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

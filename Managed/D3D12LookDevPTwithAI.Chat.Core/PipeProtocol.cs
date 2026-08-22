@@ -146,7 +146,11 @@ public static class PipeFraming
     }
 }
 
-public sealed record InitializeRequest(string InstanceId, string ProjectContextKey);
+public sealed record InitializeRequest(
+    string InstanceId,
+    string ProjectContextKey,
+    string? McpEndpoint = null,
+    string? McpBearerToken = null);
 public sealed record InitializeResult(
     string HostVersion,
     Guid ActiveConversationId,

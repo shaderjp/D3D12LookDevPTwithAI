@@ -34,9 +34,9 @@ public:
     JsonValue Parse();
 
 private:
-    JsonValue ParseValue();
-    JsonValue ParseObject();
-    JsonValue ParseArray();
+    JsonValue ParseValue(std::size_t containerDepth);
+    JsonValue ParseObject(std::size_t containerDepth);
+    JsonValue ParseArray(std::size_t containerDepth);
     JsonValue ParseLiteral(const char* literal, JsonValue::Type type, bool boolean);
     JsonValue ParseNumber();
     std::string ParseString();

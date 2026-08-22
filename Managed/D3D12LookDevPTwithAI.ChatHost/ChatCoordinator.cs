@@ -3,12 +3,14 @@ using System.Text;
 using System.Text.Json;
 using D3D12LookDevPTwithAI.Chat.Core;
 using D3D12LookDevPTwithAI.ChatHost.Inference;
+using D3D12LookDevPTwithAI.ChatHost.Mcp;
 
 namespace D3D12LookDevPTwithAI.ChatHost;
 
 public sealed class ChatCoordinator(
     IConversationStore conversationStore,
-    IChatInferenceRuntime inferenceRuntime)
+    IChatInferenceRuntime inferenceRuntime,
+    ISameInstanceMcpClientFactory? mcpClientFactory = null)
 {
     private const int InferenceHistoryMessageLimit = 64;
     private static readonly TimeSpan CancelledPartialPersistenceTimeout =
@@ -21,6 +23,7 @@ public sealed class ChatCoordinator(
     private Guid? _activeConversationId;
     private string? _instanceId;
     private string? _projectContextKey;
+    private ISameInstanceMcpClient? _mcpClient;
 
     public async Task<InitializeResult> InitializeAsync(
         InitializeRequest request,
@@ -33,14 +36,54 @@ public sealed class ChatCoordinator(
 
         lock (_gate)
         {
-            if (_instanceId is not null && !string.Equals(_instanceId, request.InstanceId, StringComparison.Ordinal))
-                throw new ChatRequestException("already_initialized", "ChatHost is already initialized for another native instance.");
+            if (_instanceId is not null)
+                throw new ChatRequestException("already_initialized", "ChatHost is already initialized.");
             _instanceId = request.InstanceId;
             _projectContextKey = request.ProjectContextKey;
         }
 
+        ISameInstanceMcpClient? candidateMcpClient = null;
         try
         {
+            if (mcpClientFactory is not null)
+            {
+                try
+                {
+                    if (string.IsNullOrWhiteSpace(request.McpEndpoint) ||
+                        string.IsNullOrWhiteSpace(request.McpBearerToken))
+                    {
+                        throw new InvalidOperationException("Missing private MCP capability.");
+                    }
+                    candidateMcpClient = mcpClientFactory.Create(
+                        request.McpEndpoint,
+                        request.McpBearerToken);
+                    _ = await candidateMcpClient.GetToolsAsync(cancellationToken).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    throw;
+                }
+                catch
+                {
+                    if (candidateMcpClient is not null)
+                    {
+                        await DisposeMcpClientQuietlyAsync(candidateMcpClient).ConfigureAwait(false);
+                        candidateMcpClient = null;
+                    }
+                    throw new ChatRequestException(
+                        "mcp_initialization_failed",
+                        "The private LookDev tool connection could not be initialized.",
+                        retryable: true);
+                }
+            }
+            else if (request.McpEndpoint is not null || request.McpBearerToken is not null)
+            {
+                throw new ChatRequestException(
+                    "mcp_initialization_failed",
+                    "The private LookDev tool connection could not be initialized.",
+                    retryable: true);
+            }
+
             await conversationStore.InitializeAsync(cancellationToken).ConfigureAwait(false);
             IReadOnlyList<ConversationSummary> conversations =
                 await conversationStore.ListAsync(request.ProjectContextKey, cancellationToken).ConfigureAwait(false);
@@ -53,7 +96,12 @@ public sealed class ChatCoordinator(
                 conversations = [created];
             }
 
-            lock (_gate) _activeConversationId = conversations[0].Id;
+            lock (_gate)
+            {
+                _activeConversationId = conversations[0].Id;
+                _mcpClient = candidateMcpClient;
+                candidateMcpClient = null;
+            }
             return new InitializeResult(
                 typeof(ChatCoordinator).Assembly.GetName().Version?.ToString() ?? "1.0.0",
                 conversations[0].Id,
@@ -61,6 +109,8 @@ public sealed class ChatCoordinator(
         }
         catch
         {
+            if (candidateMcpClient is not null)
+                await DisposeMcpClientQuietlyAsync(candidateMcpClient).ConfigureAwait(false);
             lock (_gate)
             {
                 _instanceId = null;
@@ -256,7 +306,13 @@ public sealed class ChatCoordinator(
     public async Task StopAsync(CancellationToken cancellationToken = default)
     {
         ActiveTurn? active;
-        lock (_gate) active = _activeTurn;
+        ISameInstanceMcpClient? mcpClient;
+        lock (_gate)
+        {
+            active = _activeTurn;
+            mcpClient = _mcpClient;
+            _mcpClient = null;
+        }
         active?.TryCancel();
         foreach (var approval in _approvals.ToArray())
         {
@@ -268,6 +324,8 @@ public sealed class ChatCoordinator(
             try { await active.Completion.WaitAsync(cancellationToken).ConfigureAwait(false); }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested || active.IsCancellationRequested) { }
         }
+        if (mcpClient is not null)
+            await mcpClient.DisposeAsync().ConfigureAwait(false);
     }
 
     private async Task RunInferenceTurnAsync(
@@ -616,6 +674,12 @@ public sealed class ChatCoordinator(
         catch (OperationCanceledException) when (timeout.IsCancellationRequested) { }
         catch (IOException) { }
         catch (ObjectDisposedException) { }
+    }
+
+    private static async ValueTask DisposeMcpClientQuietlyAsync(ISameInstanceMcpClient client)
+    {
+        try { await client.DisposeAsync().ConfigureAwait(false); }
+        catch { }
     }
 
     private (string ProjectContextKey, Guid? ActiveConversationId) GetInitializedState()

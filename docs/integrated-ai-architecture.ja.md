@@ -17,13 +17,16 @@ D3D12LookDevPTwithAI.exe  (唯一の表示アプリ)
        └─ D3D12LookDevPTwithAI.ChatHost.exe  (非表示の子プロセス)
             ├─ local conversation store
             ├─ local inference adapter
+            ├─ same-instance LookDev MCP client
             └─ llama-server.exe  (設定済みの場合だけ、非表示の子プロセス)
 
+Native UI ── process-local one-time approval broker
+
 [後続 milestone]
-  ChatHost ── same-instance LookDev MCP client / one-time approval broker
+  local inference adapter ── model Tool-call loop ── LookDev MCP client
 ```
 
-`ChatHost` と `llama-server.exe` は障害分離とランタイム分離のための内部プロセスであり、別アプリとして利用者へ露出しない。同一アプリの MCP Tool client と承認 broker は設計対象だが、現時点ではこの end-to-end 経路を実装していない。
+`ChatHost` と `llama-server.exe` は障害分離とランタイム分離のための内部プロセスであり、別アプリとして利用者へ露出しない。同一インスタンス MCP client と一回承認 broker の境界は実装済みである。現時点では推論 adapter が Tool call を生成しないため、自然言語から MCP Tool を呼ぶ end-to-end loop はまだ接続していない。
 
 ## プロセス所有と推論境界
 
@@ -40,7 +43,7 @@ D3D12LookDevPTwithAI.exe  (唯一の表示アプリ)
 - 新製品の初期モードは `AI Assistant`、推奨幅は 420 px とする。
 - `F9` で Assistant を開閉し、`F10` の render-only 動作は維持する。
 - 現在の Assistant は会話、runtime 状態、ストリーミング応答、取消を表示・操作する。
-- 過去履歴 page の閲覧 UI、固定クイック操作、Tool 実行状態、一回承認カードは後続 milestone とする。
+- 一回承認カードと grant 発行 handler は実装済みだが、推論側の Tool event はまだ発生しない。過去履歴 page の閲覧 UI、固定クイック操作、Tool 実行状態は後続 milestone とする。
 - 変更操作を統合した後の承認は `今回のみ承認` と `拒否` の2択とし、永続許可は設けない。
 
 ## IPC
@@ -73,9 +76,9 @@ C++ 側を Named Pipe server、Managed ChatHost を client とする。
 - `completed`
 - `error`
 
-`approval.respond` と approval 管理の IPC 境界は用意しているが、
-`toolApprovalRequired` / `toolStarted` / `toolCompleted` を発生させる same-instance
-MCP Tool 実行経路はまだ接続していない。
+`approval.respond`、一回承認カード、same-instance MCP client / grant broker の境界は
+実装済みである。推論 adapter が `toolApprovalRequired` / `toolStarted` /
+`toolCompleted` を発生させて MCP client を駆動する Tool-call loop はまだ接続していない。
 
 ## MCP と承認
 
@@ -86,7 +89,8 @@ MCP Tool 実行経路はまだ接続していない。
 - HTTP: `/mcp`, `/pair`, `/.well-known/lookdevpt/v1`
 - server info と protocol / contract version
 
-以下は後続 milestone の設計であり、現在の統合 chat からはまだ実行できない。
+以下の通信・承認境界は実装済みである。ただし推論 Tool-call loop が未接続のため、
+現在の統合 chat から自然言語で Tool を実行することはまだできない。
 
 統合 Assistant は、そのアプリ自身が起動した loopback MCP endpoint 以外へ接続しない。MCP が返す `readOnlyHint=true` の Tool だけを自動実行し、それ以外は必ず UI の一回承認を通す。
 
@@ -99,13 +103,17 @@ MCP Tool 実行経路はまだ接続していない。
 
 ChatHost は grant を MCP request の `_meta.shaderjp.lookdevpt/approvalToken` へ付与する。LookDev MCP は一致した grant を一度だけ消費し、既存 `McpDispatcher` の追加承認を省略する。不一致、期限切れ、再利用は即座に拒否する。外部クライアントの従来承認フローは変更しない。
 
+引数 hash の canonical 表現は C++ / .NET で共通とする。object key は UTF-8 byte 順、array は入力順、string は RFC 8259 の Unicode escape を UTF-8 へ復号してから JSON escape する。number は finite `double` とし、`-0` は `0`、それ以外は17桁 scientific 表記から仮数末尾の `0` と `.`、指数の `+` と先頭 `0` を除去する。MCP server の停止または起動世代変更を Native snapshot で検知した場合は、内部 ChatHost を再起動して専用 legacy session と Tool catalog を再交渉する。30分の idle expiry は承認 binding 前の `ping` で検出して一度だけ再交渉する。read-only call は unknown-session の場合だけ一度再試行できるが、変更 call の古い grant は再送せず、新 session で新しい UI 承認を要求する。
+
+Native MCP HTTP 入口は Host / Origin、bearer、pairing 状態、path / method / media type を header 受信直後に検証し、拒否できる要求の body を待たない。request 全体の受信期限は10秒、body は1 request 16 MiB、同時に確保できる decoded body budget は全体32 MiBとし、chunked body も逐次 compact する。JSON container depth は64に制限し、不正 UTF-8、lone surrogate、RFC 8259 外の number / whitespace を拒否する。ChatHost 終了時は専用 legacy session を250ms上限で best-effort DELETEし、失敗時は server の idle expiryをfallbackとする。
+
 ## ローカル AI
 
 製品既定の `IChatInferenceRuntime` は llama.cpp server 経路である。
 `%LOCALAPPDATA%\D3D12LookDevPTwithAI\AI\inference.json` が存在しない初回状態では
 runtime を起動せず `not_ready` を返す。deterministic placeholder へ暗黙 fallback
 しない。deterministic runtime は Debug の IPC end-to-end test hook だけに限定し、
-製品構成や展示構成には使用しない。
+同 hook では private MCP factory も登録しない。製品構成や展示構成には使用しない。
 
 現在の artifact setup は利用者承認による開発／手動 setup である。
 
@@ -173,9 +181,10 @@ project context key は正規化した project path / scene path から生成す
 
 1. 完了: 製品改名と基盤移植
 2. 完了: Native / Managed IPC、右ドック、project 別 SQLite 履歴、bounded paging
-3. 現在の縦断: 手動設定した GGUF / llama.cpp による loopback 推論、全 runtime file manifest、artifact lease、process ownership
-4. 未完: 単一 loopback MCP 接続、readonly 自動実行、一回承認 grant
-5. 未完: 公式 model catalog / manager、GPU budget、クイック操作、demo reset
-6. 未完: one-app portable / offline pack、署名済み配布 manifest、障害試験、展示 acceptance test
+3. 完了: 手動設定した GGUF / llama.cpp による loopback 推論、全 runtime file manifest、artifact lease、process ownership
+4. 完了: 親所有の単一 loopback MCP 接続、`readOnlyHint` policy、一回承認 grant
+5. 未完: llama Tool-call loop、Tool event / result 統合、複数 round 上限
+6. 未完: 公式 model catalog / manager、GPU budget、クイック操作、demo reset
+7. 未完: one-app portable / offline pack、署名済み配布 manifest、障害試験、展示 acceptance test
 
 各マイルストーンで `Debug|x64`、IPC protocol tests、MCP tests、Visual Studio filter の一対一整合性を検証する。

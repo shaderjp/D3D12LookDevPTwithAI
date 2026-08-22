@@ -1,6 +1,8 @@
 #include "SimpleJson.h"
 
-#include <cctype>
+#include <charconv>
+#include <cmath>
+#include <cstdint>
 #include <cstring>
 #include <iomanip>
 #include <sstream>
@@ -8,6 +10,78 @@
 
 namespace cld
 {
+namespace
+{
+constexpr std::size_t MaximumJsonContainerDepth = 64;
+
+std::uint32_t HexDigit(unsigned char character)
+{
+    if (character >= '0' && character <= '9')
+    {
+        return character - '0';
+    }
+    if (character >= 'a' && character <= 'f')
+    {
+        return character - 'a' + 10u;
+    }
+    if (character >= 'A' && character <= 'F')
+    {
+        return character - 'A' + 10u;
+    }
+    throw std::runtime_error("Invalid unicode escape in JSON string.");
+}
+
+std::uint32_t ParseUnicodeCodeUnit(
+    const std::string& text,
+    std::size_t& position)
+{
+    if (position > text.size() || text.size() - position < 4)
+    {
+        throw std::runtime_error("Invalid unicode escape in JSON string.");
+    }
+    std::uint32_t codeUnit = 0;
+    for (int index = 0; index < 4; ++index)
+    {
+        codeUnit = (codeUnit << 4u) |
+            HexDigit(static_cast<unsigned char>(text[position++]));
+    }
+    return codeUnit;
+}
+
+void AppendUtf8(std::uint32_t codePoint, std::string& output)
+{
+    if (codePoint <= 0x7fu)
+    {
+        output.push_back(static_cast<char>(codePoint));
+    }
+    else if (codePoint <= 0x7ffu)
+    {
+        output.push_back(static_cast<char>(0xc0u | (codePoint >> 6u)));
+        output.push_back(static_cast<char>(0x80u | (codePoint & 0x3fu)));
+    }
+    else if (codePoint <= 0xffffu)
+    {
+        output.push_back(static_cast<char>(0xe0u | (codePoint >> 12u)));
+        output.push_back(static_cast<char>(
+            0x80u | ((codePoint >> 6u) & 0x3fu)));
+        output.push_back(static_cast<char>(0x80u | (codePoint & 0x3fu)));
+    }
+    else if (codePoint <= 0x10ffffu)
+    {
+        output.push_back(static_cast<char>(0xf0u | (codePoint >> 18u)));
+        output.push_back(static_cast<char>(
+            0x80u | ((codePoint >> 12u) & 0x3fu)));
+        output.push_back(static_cast<char>(
+            0x80u | ((codePoint >> 6u) & 0x3fu)));
+        output.push_back(static_cast<char>(0x80u | (codePoint & 0x3fu)));
+    }
+    else
+    {
+        throw std::runtime_error("Invalid unicode code point in JSON string.");
+    }
+}
+}
+
 JsonParser::JsonParser(const std::string& text)
     : m_text(text)
 {
@@ -15,7 +89,7 @@ JsonParser::JsonParser(const std::string& text)
 
 JsonValue JsonParser::Parse()
 {
-    JsonValue value = ParseValue();
+    JsonValue value = ParseValue(0);
     SkipWhitespace();
     if (m_position != m_text.size())
     {
@@ -24,7 +98,7 @@ JsonValue JsonParser::Parse()
     return value;
 }
 
-JsonValue JsonParser::ParseValue()
+JsonValue JsonParser::ParseValue(std::size_t containerDepth)
 {
     SkipWhitespace();
     if (m_position >= m_text.size())
@@ -34,8 +108,18 @@ JsonValue JsonParser::ParseValue()
 
     switch (m_text[m_position])
     {
-    case '{': return ParseObject();
-    case '[': return ParseArray();
+    case '{':
+        if (containerDepth >= MaximumJsonContainerDepth)
+        {
+            throw std::runtime_error("JSON nesting depth exceeds the limit.");
+        }
+        return ParseObject(containerDepth + 1);
+    case '[':
+        if (containerDepth >= MaximumJsonContainerDepth)
+        {
+            throw std::runtime_error("JSON nesting depth exceeds the limit.");
+        }
+        return ParseArray(containerDepth + 1);
     case '"':
     {
         JsonValue value;
@@ -47,7 +131,8 @@ JsonValue JsonParser::ParseValue()
     case 'f': return ParseLiteral("false", JsonValue::Type::Bool, false);
     case 'n': return ParseLiteral("null", JsonValue::Type::Null, false);
     default:
-        if (m_text[m_position] == '-' || std::isdigit(static_cast<unsigned char>(m_text[m_position])))
+        if (m_text[m_position] == '-' ||
+            (m_text[m_position] >= '0' && m_text[m_position] <= '9'))
         {
             return ParseNumber();
         }
@@ -55,7 +140,7 @@ JsonValue JsonParser::ParseValue()
     }
 }
 
-JsonValue JsonParser::ParseObject()
+JsonValue JsonParser::ParseObject(std::size_t containerDepth)
 {
     JsonValue value;
     value.type = JsonValue::Type::Object;
@@ -72,7 +157,7 @@ JsonValue JsonParser::ParseObject()
         const std::string key = ParseString();
         SkipWhitespace();
         Expect(':');
-        value.object[key] = ParseValue();
+        value.object[key] = ParseValue(containerDepth);
         SkipWhitespace();
         if (TryConsume('}'))
         {
@@ -83,7 +168,7 @@ JsonValue JsonParser::ParseObject()
     return value;
 }
 
-JsonValue JsonParser::ParseArray()
+JsonValue JsonParser::ParseArray(std::size_t containerDepth)
 {
     JsonValue value;
     value.type = JsonValue::Type::Array;
@@ -96,7 +181,7 @@ JsonValue JsonParser::ParseArray()
 
     while (true)
     {
-        value.array.push_back(ParseValue());
+        value.array.push_back(ParseValue(containerDepth));
         SkipWhitespace();
         if (TryConsume(']'))
         {
@@ -129,7 +214,27 @@ JsonValue JsonParser::ParseNumber()
     {
         ++m_position;
     }
-    ConsumeDigits();
+    if (m_position >= m_text.size())
+    {
+        throw std::runtime_error("Invalid number in JSON.");
+    }
+    if (m_text[m_position] == '0')
+    {
+        ++m_position;
+        if (m_position < m_text.size() &&
+            m_text[m_position] >= '0' && m_text[m_position] <= '9')
+        {
+            throw std::runtime_error("Invalid number in JSON.");
+        }
+    }
+    else
+    {
+        if (m_text[m_position] < '1' || m_text[m_position] > '9')
+        {
+            throw std::runtime_error("Invalid number in JSON.");
+        }
+        ConsumeDigits();
+    }
     if (m_position < m_text.size() && m_text[m_position] == '.')
     {
         ++m_position;
@@ -147,7 +252,15 @@ JsonValue JsonParser::ParseNumber()
 
     JsonValue value;
     value.type = JsonValue::Type::Number;
-    value.number = std::stod(m_text.substr(begin, m_position - begin));
+    const char* first = m_text.data() + begin;
+    const char* last = m_text.data() + m_position;
+    const std::from_chars_result converted = std::from_chars(
+        first, last, value.number, std::chars_format::general);
+    if (converted.ec != std::errc() || converted.ptr != last ||
+        !std::isfinite(value.number))
+    {
+        throw std::runtime_error("Invalid number in JSON.");
+    }
     return value;
 }
 
@@ -157,14 +270,72 @@ std::string JsonParser::ParseString()
     std::string result;
     while (m_position < m_text.size())
     {
-        const char ch = m_text[m_position++];
+        const auto ch = static_cast<unsigned char>(m_text[m_position++]);
         if (ch == '"')
         {
             return result;
         }
+        if (ch < 0x20u)
+        {
+            throw std::runtime_error(
+                "Unescaped control character in JSON string.");
+        }
         if (ch != '\\')
         {
-            result.push_back(ch);
+            if (ch < 0x80u)
+            {
+                result.push_back(static_cast<char>(ch));
+                continue;
+            }
+
+            const std::size_t sequenceBegin = m_position - 1;
+            std::uint32_t codePoint = 0;
+            std::uint32_t minimumCodePoint = 0;
+            std::size_t continuationBytes = 0;
+            if (ch >= 0xc2u && ch <= 0xdfu)
+            {
+                codePoint = ch & 0x1fu;
+                minimumCodePoint = 0x80u;
+                continuationBytes = 1;
+            }
+            else if (ch >= 0xe0u && ch <= 0xefu)
+            {
+                codePoint = ch & 0x0fu;
+                minimumCodePoint = 0x800u;
+                continuationBytes = 2;
+            }
+            else if (ch >= 0xf0u && ch <= 0xf4u)
+            {
+                codePoint = ch & 0x07u;
+                minimumCodePoint = 0x10000u;
+                continuationBytes = 3;
+            }
+            else
+            {
+                throw std::runtime_error("Invalid UTF-8 in JSON string.");
+            }
+            if (m_position > m_text.size() ||
+                m_text.size() - m_position < continuationBytes)
+            {
+                throw std::runtime_error("Invalid UTF-8 in JSON string.");
+            }
+            for (std::size_t index = 0; index < continuationBytes; ++index)
+            {
+                const auto continuation =
+                    static_cast<unsigned char>(m_text[m_position++]);
+                if ((continuation & 0xc0u) != 0x80u)
+                {
+                    throw std::runtime_error("Invalid UTF-8 in JSON string.");
+                }
+                codePoint = (codePoint << 6u) | (continuation & 0x3fu);
+            }
+            if (codePoint < minimumCodePoint || codePoint > 0x10ffffu ||
+                (codePoint >= 0xd800u && codePoint <= 0xdfffu))
+            {
+                throw std::runtime_error("Invalid UTF-8 in JSON string.");
+            }
+            result.append(
+                m_text, sequenceBegin, continuationBytes + 1);
             continue;
         }
 
@@ -185,16 +356,39 @@ std::string JsonParser::ParseString()
         case 'r': result.push_back('\r'); break;
         case 't': result.push_back('\t'); break;
         case 'u':
-            for (int i = 0; i < 4; ++i)
+        {
+            std::uint32_t codePoint =
+                ParseUnicodeCodeUnit(m_text, m_position);
+            if (codePoint >= 0xd800u && codePoint <= 0xdbffu)
             {
-                if (m_position >= m_text.size() || !std::isxdigit(static_cast<unsigned char>(m_text[m_position])))
+                if (m_position > m_text.size() ||
+                    m_text.size() - m_position < 2 ||
+                    m_text[m_position] != '\\' ||
+                    m_text[m_position + 1] != 'u')
                 {
-                    throw std::runtime_error("Invalid unicode escape in JSON string.");
+                    throw std::runtime_error(
+                        "Invalid unicode surrogate pair in JSON string.");
                 }
-                ++m_position;
+                m_position += 2;
+                const std::uint32_t lowSurrogate =
+                    ParseUnicodeCodeUnit(m_text, m_position);
+                if (lowSurrogate < 0xdc00u || lowSurrogate > 0xdfffu)
+                {
+                    throw std::runtime_error(
+                        "Invalid unicode surrogate pair in JSON string.");
+                }
+                codePoint = 0x10000u +
+                    ((codePoint - 0xd800u) << 10u) +
+                    (lowSurrogate - 0xdc00u);
             }
-            result.push_back('?');
+            else if (codePoint >= 0xdc00u && codePoint <= 0xdfffu)
+            {
+                throw std::runtime_error(
+                    "Invalid unicode surrogate in JSON string.");
+            }
+            AppendUtf8(codePoint, result);
             break;
+        }
         default:
             throw std::runtime_error("Invalid escape in JSON string.");
         }
@@ -205,7 +399,8 @@ std::string JsonParser::ParseString()
 void JsonParser::ConsumeDigits()
 {
     bool consumed = false;
-    while (m_position < m_text.size() && std::isdigit(static_cast<unsigned char>(m_text[m_position])))
+    while (m_position < m_text.size() &&
+        m_text[m_position] >= '0' && m_text[m_position] <= '9')
     {
         consumed = true;
         ++m_position;
@@ -218,8 +413,14 @@ void JsonParser::ConsumeDigits()
 
 void JsonParser::SkipWhitespace()
 {
-    while (m_position < m_text.size() && std::isspace(static_cast<unsigned char>(m_text[m_position])))
+    while (m_position < m_text.size())
     {
+        const char character = m_text[m_position];
+        if (character != ' ' && character != '\t' &&
+            character != '\r' && character != '\n')
+        {
+            break;
+        }
         ++m_position;
     }
 }

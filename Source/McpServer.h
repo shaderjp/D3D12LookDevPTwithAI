@@ -12,6 +12,7 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <unordered_map>
 #include <vector>
 
 namespace mcp
@@ -36,6 +37,8 @@ struct ServerSettings
     std::string token;
     bool allowUnauthenticatedLoopbackForTests = false;
     int subscriptionKeepAliveMillisecondsForTests = 0;
+    int requestReceiveDeadlineMillisecondsForTests = 0;
+    size_t httpBodyBudgetBytesForTests = 0;
     std::string pairedClientsPath;
 };
 
@@ -63,6 +66,45 @@ struct ToolResult
     std::string contentJson;
 };
 
+struct ToolCallAuthorization
+{
+    bool oneTimeMutationGrant = false;
+};
+
+// Process-local broker used only by the integrated Assistant UI and this MCP
+// server. Grants are opaque, expire after 30 seconds, and are consumed on the
+// first matching (or mismatching) presentation.
+class ApprovalGrantBroker
+{
+public:
+    static ApprovalGrantBroker& Instance();
+
+    std::string Issue(
+        const std::string& clientSession,
+        const std::string& toolName,
+        const std::string& canonicalArgumentsSha256);
+    bool Consume(
+        const std::string& grant,
+        const std::string& clientSession,
+        const std::string& toolName,
+        const cld::JsonValue& arguments);
+    void RevokeAll() noexcept;
+
+private:
+    struct Record
+    {
+        std::string clientSession;
+        std::string toolName;
+        std::string argumentsSha256;
+        std::chrono::steady_clock::time_point expiresAt;
+    };
+
+    std::mutex m_mutex;
+    std::unordered_map<std::string, Record> m_records;
+};
+
+std::string CanonicalArgumentsSha256(const cld::JsonValue& arguments);
+
 struct ResourceResult
 {
     bool ok = false;
@@ -77,7 +119,11 @@ class IServerHost
 {
 public:
     virtual ~IServerHost() = default;
-    virtual ToolResult CallMcpTool(const std::string& name, const cld::JsonValue& arguments, int timeoutMs) = 0;
+    virtual ToolResult CallMcpTool(
+        const std::string& name,
+        const cld::JsonValue& arguments,
+        int timeoutMs,
+        ToolCallAuthorization authorization) = 0;
     virtual ResourceResult ReadMcpResource(const std::string& uri) = 0;
     virtual size_t PendingMcpCommandCount() const = 0;
 };
@@ -153,7 +199,10 @@ private:
         uintptr_t socketValue,
         HttpRequest& request,
         int& errorStatus,
-        std::string& error) const;
+        std::string& error,
+        bool& preflightRejected,
+        HttpResponse& preflightResponse,
+        size_t& reservedBodyBytes);
     bool SendHttpResponse(uintptr_t socketValue, const HttpResponse& response) const;
     bool SendBytes(uintptr_t socketValue, const std::string& bytes) const;
     void StreamSubscription(uintptr_t socketValue, const HttpResponse& response);
@@ -163,6 +212,11 @@ private:
     HttpResponse HandleInitialize(const cld::JsonValue& rpc);
     HttpResponse HandlePromptGet(const std::string& idJson, const cld::JsonValue& rpc, bool modern);
     HttpResponse HandleDeleteSession(const HttpRequest& request);
+    bool PreflightHttpRequest(
+        const HttpRequest& request,
+        HttpResponse& response);
+    bool TryReserveHttpBodyBytes(size_t byteCount);
+    void ReleaseHttpBodyBytes(size_t byteCount) noexcept;
     bool ValidateOrigin(const HttpRequest& request) const;
     bool ValidateHost(const HttpRequest& request) const;
     bool ValidateAuthorization(const HttpRequest& request) const;
@@ -189,6 +243,7 @@ private:
     std::condition_variable m_subscriptionCv;
     std::atomic<size_t> m_activeConnections = 0;
     std::atomic<size_t> m_activeSubscriptions = 0;
+    std::atomic<size_t> m_reservedHttpBodyBytes = 0;
     std::vector<std::string> m_recentRequests;
     std::string m_lastError;
     std::string m_pairingCode;

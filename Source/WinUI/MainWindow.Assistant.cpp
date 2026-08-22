@@ -2,6 +2,7 @@
 #include "MainWindow.xaml.h"
 
 #include "Services/AssistantHostBridge.h"
+#include "McpServer.h"
 #include "SimpleJson.h"
 
 #include <cwctype>
@@ -126,6 +127,74 @@ std::string NewIdentifier()
         });
     return WideToUtf8(text);
 }
+
+bool IsPrivateLookDevMcpEndpoint(std::string_view endpoint)
+{
+    constexpr std::string_view prefix = "http://127.0.0.1:";
+    constexpr std::string_view suffix = "/mcp";
+    if (!endpoint.starts_with(prefix) || !endpoint.ends_with(suffix))
+    {
+        return false;
+    }
+    const std::string_view portText = endpoint.substr(
+        prefix.size(), endpoint.size() - prefix.size() - suffix.size());
+    if (portText.empty() || portText.size() > 5 ||
+        !std::all_of(portText.begin(), portText.end(), [](unsigned char value)
+        {
+            return value >= '0' && value <= '9';
+        }))
+    {
+        return false;
+    }
+    unsigned port = 0;
+    for (unsigned char value : portText)
+    {
+        port = port * 10u + static_cast<unsigned>(value - '0');
+    }
+    return port > 0 && port <= 65535;
+}
+
+void SecureClear(std::string& value) noexcept
+{
+    if (!value.empty())
+    {
+        SecureZeroMemory(value.data(), value.size());
+        value.clear();
+    }
+}
+
+struct ScopedSecret
+{
+    ~ScopedSecret()
+    {
+        SecureClear(value);
+    }
+
+    std::string value;
+};
+
+struct AssistantApprovalBinding
+{
+    ~AssistantApprovalBinding()
+    {
+        Clear();
+    }
+
+    void Clear() noexcept
+    {
+        SecureClear(approvalId);
+        SecureClear(turnId);
+        SecureClear(toolName);
+        SecureClear(mcpSessionId);
+        SecureClear(argumentsHash);
+    }
+
+    std::string approvalId;
+    std::string turnId;
+    std::string toolName;
+    std::string mcpSessionId;
+    std::string argumentsHash;
+};
 
 std::string NormalizeContextPath(std::wstring const& value)
 {
@@ -309,6 +378,7 @@ struct AssistantUiState
     bool initialized = false;
     bool initializing = false;
     bool mcpReady = false;
+    std::uint64_t mcpGeneration = 0;
     bool turnActive = false;
     bool fillingConversations = false;
     std::string instanceId;
@@ -588,6 +658,26 @@ void MainWindow::UpdateAssistantContext(
     const std::string contextKey = ProjectContextKey(
         snapshot.projectPath, snapshot.scenePath);
 
+    // A server restart invalidates every legacy MCP session, even when it
+    // returns on the same endpoint with the same bearer capability. Restart
+    // the private ChatHost so it negotiates a fresh dedicated session and
+    // catalog before another tool call can be attempted.
+    if ((m_assistant->initialized || m_assistant->initializing) &&
+        m_assistant->mcpGeneration != 0 &&
+        (!snapshot.mcpRunning ||
+         m_assistant->mcpGeneration != snapshot.mcpGeneration))
+    {
+        StopAssistant();
+        if (!m_closing)
+        {
+            StartAssistant();
+            if (!m_assistant)
+            {
+                return;
+            }
+        }
+    }
+
     // The current ChatHost binds one project context for its lifetime. A new
     // project therefore gets a fresh local host and history partition.
     if (m_assistant->initialized &&
@@ -695,18 +785,43 @@ void MainWindow::TryInitializeAssistant()
         return;
     }
 
+    const auto snapshot = m_controller
+        ? m_controller->LatestSnapshot()
+        : nullptr;
+    if (!snapshot || !snapshot->mcpRunning)
+    {
+        return;
+    }
+    const std::string mcpEndpoint = WideToUtf8(snapshot->mcpEndpoint);
+    ScopedSecret mcpBearerToken{
+        WideToUtf8(snapshot->mcpToken) };
+    if (!IsPrivateLookDevMcpEndpoint(mcpEndpoint) ||
+        mcpBearerToken.value.empty())
+    {
+        AiRuntimeStatusText().Text(
+            L"The private LookDev MCP connection is not ready.");
+        return;
+    }
+    state->mcpGeneration = snapshot->mcpGeneration;
+
     std::ostringstream payload;
     payload << "{"
         << "\"instanceId\":\""
         << cld::EscapeJson(state->instanceId) << "\","
         << "\"projectContextKey\":\""
-        << cld::EscapeJson(state->projectContextKey) << "\"}"
+        << cld::EscapeJson(state->projectContextKey) << "\","
+        << "\"mcpEndpoint\":\""
+        << cld::EscapeJson(mcpEndpoint) << "\","
+        << "\"mcpBearerToken\":\""
+        << cld::EscapeJson(mcpBearerToken.value) << "\"}"
         ;
     state->initializing = true;
     AiRuntimeStatusText().Text(L"Initializing local assistant\u2026");
     AiModelStatusText().Text(L"Runtime: connecting to ChatHost");
     AiSetupProgress().Visibility(Visibility::Visible);
-    if (!PostAssistantRequest("initialize", payload.str()))
+    const bool posted = PostAssistantRequest("initialize", payload.str());
+    SecureClear(mcpBearerToken.value);
+    if (!posted)
     {
         state->initializing = false;
     }
@@ -1203,8 +1318,14 @@ void MainWindow::HandleAssistantEvent(
         }
         const std::string approvalId =
             cld::JsonStringOr(*payload, "approvalId");
+        const std::string toolName =
+            cld::JsonStringOr(*payload, "tool");
+        const std::string mcpSessionId =
+            cld::JsonStringOr(*payload, "mcpSessionId");
+        const std::string argumentsHash =
+            cld::JsonStringOr(*payload, "argumentsHash");
         const std::wstring tool = Utf8ToWide(
-            cld::JsonStringOr(*payload, "tool", "LookDev tool"));
+            toolName.empty() ? "LookDev tool" : toolName);
         const std::wstring summary = Utf8ToWide(
             cld::JsonStringOr(
                 *payload, "summary", "Approval is required."));
@@ -1220,44 +1341,85 @@ void MainWindow::HandleAssistantEvent(
         TextBlock heading;
         heading.Text(L"Approval required · " + tool);
         TextBlock detail;
-        detail.Text(
-            summary +
-            L"\n\nAllow once is unavailable until the native "
-            L"one-time grant broker is implemented. You can deny this "
-            L"request safely.");
+        detail.Text(summary + L"\n\nAllow once applies only to this exact tool call and expires in 30 seconds.");
         detail.TextWrapping(TextWrapping::Wrap);
         StackPanel actions;
         actions.Orientation(Orientation::Horizontal);
         actions.Spacing(6);
         Button allow;
-        allow.Content(box_value(L"Allow once (unavailable)"));
-        allow.IsEnabled(false);
+        allow.Content(box_value(L"Allow once"));
+        allow.IsEnabled(
+            !approvalId.empty() && !toolName.empty() &&
+            !mcpSessionId.empty() && !argumentsHash.empty());
         Button deny;
         deny.Content(box_value(L"Deny"));
         deny.IsEnabled(!approvalId.empty());
         const auto weakWindow = get_weak();
         const std::weak_ptr<AssistantUiState> weakState = state;
-        deny.Click([weakWindow, weakState, approvalId, turnId](
-            IInspectable const& sender, RoutedEventArgs const&)
+        const auto weakAllow = winrt::make_weak(allow);
+        const auto weakDeny = winrt::make_weak(deny);
+        const auto binding = std::make_shared<AssistantApprovalBinding>(
+            AssistantApprovalBinding{
+                approvalId, turnId, toolName,
+                mcpSessionId, argumentsHash });
+        allow.Click([
+            weakWindow, weakState, weakAllow, weakDeny, binding](
+            IInspectable const&, RoutedEventArgs const&)
+        {
+            auto session = weakState.lock();
+            if (auto self = weakWindow.get();
+                self && session && self->m_assistant == session &&
+                session->activeTurnId == binding->turnId && !self->m_closing)
+            {
+                try
+                {
+                    ScopedSecret grant{
+                        mcp::ApprovalGrantBroker::Instance().Issue(
+                            binding->mcpSessionId,
+                            binding->toolName,
+                            binding->argumentsHash) };
+                    const bool posted = self->PostAssistantRequest(
+                        "approval.respond",
+                        "{\"approvalId\":\"" +
+                            cld::EscapeJson(binding->approvalId) +
+                            "\",\"decision\":\"allowOnce\"," +
+                            "\"approvalGrant\":\"" + grant.value + "\"}");
+                    SecureClear(grant.value);
+                    if (posted)
+                    {
+                        if (auto button = weakAllow.get()) button.IsEnabled(false);
+                        if (auto button = weakDeny.get()) button.IsEnabled(false);
+                        binding->Clear();
+                    }
+                }
+                catch (...)
+                {
+                    AddTranscriptCard(
+                        self->AiTranscriptList(), L"Approval",
+                        L"The one-time approval could not be issued.", true);
+                }
+            }
+        });
+        deny.Click([weakWindow, weakState, weakAllow, weakDeny, binding](
+            IInspectable const&, RoutedEventArgs const&)
         {
             auto session = weakState.lock();
             if (auto self = weakWindow.get();
                 self && session &&
                 self->m_assistant == session &&
-                session->activeTurnId == turnId &&
+                session->activeTurnId == binding->turnId &&
                 !self->m_closing)
             {
                 const bool posted = self->PostAssistantRequest(
                     "approval.respond",
                     "{\"approvalId\":\"" +
-                        cld::EscapeJson(approvalId) +
+                        cld::EscapeJson(binding->approvalId) +
                         "\",\"decision\":\"deny\"}");
                 if (posted)
                 {
-                    if (auto button = sender.try_as<Button>())
-                    {
-                        button.IsEnabled(false);
-                    }
+                    if (auto button = weakAllow.get()) button.IsEnabled(false);
+                    if (auto button = weakDeny.get()) button.IsEnabled(false);
+                    binding->Clear();
                 }
             }
         });

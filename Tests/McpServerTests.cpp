@@ -6,9 +6,13 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <clocale>
 #include <cctype>
+#include <cmath>
 #include <cstdlib>
 #include <iostream>
+#include <initializer_list>
+#include <limits>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -21,8 +25,14 @@ namespace
     class FakeHost final : public mcp::IServerHost
     {
     public:
-        mcp::ToolResult CallMcpTool(const std::string& name, const cld::JsonValue&, int) override
+        mcp::ToolResult CallMcpTool(
+            const std::string& name,
+            const cld::JsonValue&,
+            int,
+            mcp::ToolCallAuthorization authorization) override
         {
+            lastOneTimeAuthorization.store(
+                authorization.oneTimeMutationGrant);
             mcp::ToolResult result;
             result.ok = true;
             result.text = "called " + name;
@@ -107,6 +117,8 @@ namespace
         {
             return 0;
         }
+
+        std::atomic_bool lastOneTimeAuthorization = false;
     };
 
     void Require(bool condition, const char* message)
@@ -117,11 +129,305 @@ namespace
         }
     }
 
-    std::string Meta()
+    std::string NestedArray(std::size_t containerDepth)
     {
-        return "\"_meta\":{\"io.modelcontextprotocol/protocolVersion\":\"2026-07-28\","
+        return std::string(containerDepth, '[') + "0" +
+            std::string(containerDepth, ']');
+    }
+
+    std::string Utf8Bytes(
+        std::initializer_list<unsigned char> bytes)
+    {
+        std::string result;
+        result.reserve(bytes.size());
+        for (unsigned char byte : bytes)
+        {
+            result.push_back(static_cast<char>(byte));
+        }
+        return result;
+    }
+
+    bool JsonParseFails(const std::string& json)
+    {
+        try
+        {
+            (void)cld::JsonParser(json).Parse();
+            return false;
+        }
+        catch (const std::runtime_error&)
+        {
+            return true;
+        }
+    }
+
+    void TestJsonDepthLimit()
+    {
+        const cld::JsonValue boundary =
+            cld::JsonParser(NestedArray(64)).Parse();
+        Require(
+            boundary.type == cld::JsonValue::Type::Array,
+            "JSON parser rejected the maximum container depth");
+
+        bool rejected = false;
+        try
+        {
+            (void)cld::JsonParser(NestedArray(65)).Parse();
+        }
+        catch (const std::runtime_error& error)
+        {
+            rejected = std::string(error.what()) ==
+                "JSON nesting depth exceeds the limit.";
+        }
+        Require(
+            rejected,
+            "JSON parser accepted a container beyond the depth limit");
+    }
+
+    void TestJsonUnicodeStrings()
+    {
+        const std::string japanese = Utf8Bytes({
+            0xe6, 0x97, 0xa5,
+            0xe6, 0x9c, 0xac,
+            0xe8, 0xaa, 0x9e });
+        const std::string emoji = Utf8Bytes({ 0xf0, 0x9f, 0x98, 0x80 });
+        const std::string rawJson =
+            "{\"label\":\"" + japanese + emoji + "\"}";
+        const std::string escapedJson =
+            R"json({"label":"\u65e5\u672c\u8a9e\ud83d\ude00"})json";
+        const cld::JsonValue raw = cld::JsonParser(rawJson).Parse();
+        const cld::JsonValue escaped =
+            cld::JsonParser(escapedJson).Parse();
+        Require(
+            cld::JsonStringOr(raw, "label") == japanese + emoji &&
+                cld::JsonStringOr(escaped, "label") == japanese + emoji,
+            "JSON unicode escape did not decode to UTF-8");
+        Require(
+            mcp::CanonicalArgumentsSha256(raw) ==
+                mcp::CanonicalArgumentsSha256(escaped),
+            "raw and escaped unicode produced different argument hashes");
+
+        Require(
+            JsonParseFails(R"json({"x":"\ud83d"})json") &&
+                JsonParseFails(R"json({"x":"\ud83d\u0041"})json") &&
+                JsonParseFails(R"json({"x":"\ude00"})json"),
+            "JSON parser accepted a malformed unicode surrogate");
+        Require(
+            JsonParseFails("{\"x\":\"line\nbreak\"}"),
+            "JSON parser accepted a raw control character");
+
+        std::string invalidUtf8 = "{\"x\":\"";
+        invalidUtf8 += Utf8Bytes({ 0xc0, 0xaf });
+        invalidUtf8 += "\"}";
+        std::string surrogateUtf8 = "{\"x\":\"";
+        surrogateUtf8 += Utf8Bytes({ 0xed, 0xa0, 0x80 });
+        surrogateUtf8 += "\"}";
+        std::string outOfRangeUtf8 = "{\"x\":\"";
+        outOfRangeUtf8 += Utf8Bytes({ 0xf4, 0x90, 0x80, 0x80 });
+        outOfRangeUtf8 += "\"}";
+        Require(
+            JsonParseFails(invalidUtf8) &&
+                JsonParseFails(surrogateUtf8) &&
+                JsonParseFails(outOfRangeUtf8),
+            "JSON parser accepted invalid raw UTF-8");
+    }
+
+    void TestJsonNumberGrammarAndLocale()
+    {
+        const cld::JsonValue localizedDecimal =
+            cld::JsonParser(" \t\r\n1.5 \n").Parse();
+        Require(
+            localizedDecimal.type == cld::JsonValue::Type::Number &&
+                localizedDecimal.number == 1.5,
+            "JSON parser rejected an RFC 8259 number or whitespace");
+
+        const std::array<const char*, 12> invalidNumbers = {
+            "01", "-01", "00", "-", ".1", "1.",
+            "1e", "1e+", "+1", "NaN", "Infinity", "1e309"
+        };
+        for (const char* invalid : invalidNumbers)
+        {
+            Require(
+                JsonParseFails(invalid),
+                "JSON parser accepted invalid number grammar");
+        }
+        Require(
+            JsonParseFails("\f0") && JsonParseFails("\v0"),
+            "JSON parser accepted non-RFC whitespace");
+
+        const char* currentLocale = std::setlocale(LC_NUMERIC, nullptr);
+        const std::string originalLocale =
+            currentLocale != nullptr ? currentLocale : "C";
+        const char* changedLocale =
+            std::setlocale(LC_NUMERIC, "German_Germany.1252");
+        if (changedLocale == nullptr)
+        {
+            changedLocale = std::setlocale(LC_NUMERIC, "de-DE");
+        }
+        bool localeIndependent = true;
+        if (changedLocale != nullptr)
+        {
+            try
+            {
+                const cld::JsonValue value =
+                    cld::JsonParser("1.5").Parse();
+                localeIndependent =
+                    value.type == cld::JsonValue::Type::Number &&
+                    value.number == 1.5 && JsonParseFails("1,5");
+            }
+            catch (const std::runtime_error&)
+            {
+                localeIndependent = false;
+            }
+        }
+        (void)std::setlocale(LC_NUMERIC, originalLocale.c_str());
+        Require(
+            localeIndependent,
+            "JSON number parsing changed with the process locale");
+    }
+
+    void TestCanonicalArgumentFixtures()
+    {
+        const auto requireHash = [](
+            const std::string& json,
+            const char* expected,
+            const char* diagnostics)
+        {
+            const cld::JsonValue value = cld::JsonParser(json).Parse();
+            Require(
+                mcp::CanonicalArgumentsSha256(value) == expected,
+                diagnostics);
+        };
+
+        const std::string japanese = Utf8Bytes({
+            0xe6, 0x97, 0xa5,
+            0xe6, 0x9c, 0xac,
+            0xe8, 0xaa, 0x9e });
+        const std::string emoji = Utf8Bytes({ 0xf0, 0x9f, 0x98, 0x80 });
+        const std::string privateUse = Utf8Bytes({ 0xee, 0x80, 0x80 });
+        requireHash(
+            "{}",
+            "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+            "empty canonical argument hash changed");
+        requireHash(
+            "{\"b\":1,\"a\":-0}",
+            "2f954b957c86ae054ee0935643ad1f0dd7522789a6490bd06a116978447b012b",
+            "sorted canonical argument hash changed");
+        requireHash(
+            "{\"text\":\"line\\n" + japanese +
+                "\",\"values\":[true,null,0.5]}",
+            "bc39897afca6235bae005c4ac4eee62f819ab375661018e5e5c500da29712546",
+            "unicode canonical argument hash changed");
+        requireHash(
+            "{\"tiny\":1e-8,\"large\":1e20,\"small\":1e-7}",
+            "ffd94ad98d15b3ef7f3ba1bd7c3cebd60062be66388df869d700b60de5f5504c",
+            "exponent canonical argument hash changed");
+        requireHash(
+            "{\"" + emoji + "\":2,\"" + privateUse + "\":1}",
+            "0c17a92c27cd16a347789cf9fe4b62e7d020ae5e2c3d8371cf43ac41f8ed30ef",
+            "UTF-8 key ordering canonical hash changed");
+
+        const auto requireNumberHash = [](
+            double number,
+            const char* expected,
+            const char* diagnostics)
+        {
+            cld::JsonValue value;
+            value.type = cld::JsonValue::Type::Object;
+            cld::JsonValue member;
+            member.type = cld::JsonValue::Type::Number;
+            member.number = number;
+            value.object.emplace("v", member);
+            Require(
+                mcp::CanonicalArgumentsSha256(value) == expected,
+                diagnostics);
+        };
+        requireNumberHash(
+            1e6,
+            "ce11dcd09748a235500ecf8323fa48697351a2ba66a557ebc5b3478993706729",
+            "1e6 canonical argument hash changed");
+        requireNumberHash(
+            1e15,
+            "363ed7a10f2aaa15a2dfbd110ff2cd57f46ac77b5ee3834d1a2fd73f93490c88",
+            "1e15 canonical argument hash changed");
+        requireNumberHash(
+            1e16,
+            "80c8d25e04ccc932a94aa6fdcc0c90ee36f23665b313b0a3dad06fe333f8d606",
+            "1e16 canonical argument hash changed");
+        requireNumberHash(
+            1e17,
+            "031294a3c1bd126b83c6e02a51cb3accdb3e39b5ec31da5f585d3b655c1374ae",
+            "1e17 canonical argument hash changed");
+        requireNumberHash(
+            1e-4,
+            "9c3f563e731898097d62d45d3c9cab62b7804c3b0e3fd3892a3cff32a222e475",
+            "1e-4 canonical argument hash changed");
+        requireNumberHash(
+            1e-5,
+            "d87d46e7098aedb95fb6cca01d36d8da61136e1f5a51291916cb5abf7262f5b1",
+            "1e-5 canonical argument hash changed");
+        requireNumberHash(
+            std::nextafter(1.0, 0.0),
+            "490716aaf54aa8133e2ee995bc7dcd6e80caa0ab18aa5d262731ae0eb7a1c939",
+            "double below-one boundary canonical hash changed");
+        requireNumberHash(
+            std::nextafter(1.0, 2.0),
+            "c9d17a945f8b692b317d3d7b86dd11afafdace37e8e20ebbac3596043312d1bc",
+            "double above-one boundary canonical hash changed");
+        requireNumberHash(
+            (std::numeric_limits<double>::max)(),
+            "ee16b8e5a24a3e4a3e566dc4da9a4afa993274e80d3744e71987b3bd32312f50",
+            "maximum double canonical hash changed");
+        requireNumberHash(
+            (std::numeric_limits<double>::denorm_min)(),
+            "e78ddea1a7937dbd43be5cceeae312be7fb38ccf3b908835ac066e6174b658b7",
+            "minimum subnormal canonical hash changed");
+        requireNumberHash(
+            -1e6,
+            "be4dcb04db2f33d2433b16a150d26802dad440a10f474e378b542eff8da5b21b",
+            "negative 1e6 canonical argument hash changed");
+    }
+
+    void TestToolCatalogReadOnlyAnnotations()
+    {
+        const cld::JsonValue catalog =
+            cld::JsonParser(mcp::BuildToolsListJson()).Parse();
+        const cld::JsonValue* tools = cld::FindMember(catalog, "tools");
+        Require(
+            tools != nullptr &&
+                tools->type == cld::JsonValue::Type::Array,
+            "tool catalog did not contain a tools array");
+        const cld::JsonValue* captureViewport = nullptr;
+        for (const cld::JsonValue& tool : tools->array)
+        {
+            if (cld::JsonStringOr(tool, "name") ==
+                "lookdevpt.capture_viewport")
+            {
+                captureViewport = &tool;
+                break;
+            }
+        }
+        Require(captureViewport != nullptr,
+            "capture_viewport tool was missing from the catalog");
+        const cld::JsonValue* annotations =
+            cld::FindMember(*captureViewport, "annotations");
+        Require(
+            annotations != nullptr &&
+                cld::JsonBoolOr(
+                    *annotations, "readOnlyHint", false),
+            "capture_viewport was not marked read-only");
+    }
+
+    std::string Meta(const std::string& approvalToken = {})
+    {
+        std::string meta = "\"_meta\":{\"io.modelcontextprotocol/protocolVersion\":\"2026-07-28\","
             "\"io.modelcontextprotocol/clientInfo\":{\"name\":\"mcp-server-tests\",\"version\":\"1.0\"},"
-            "\"io.modelcontextprotocol/clientCapabilities\":{}}";
+            "\"io.modelcontextprotocol/clientCapabilities\":{}";
+        if (!approvalToken.empty())
+        {
+            meta += ",\"shaderjp.lookdevpt/approvalToken\":\"" +
+                cld::EscapeJson(approvalToken) + "\"";
+        }
+        return meta + "}";
     }
 
     SOCKET Connect(uint16_t port)
@@ -360,6 +666,25 @@ namespace
         const std::string call = Exchange(port, RequestText(port, "POST", callBody, "2026-07-28", "tools/call", "lookdevpt.get_state"));
         Require(call.find("\"structuredContent\":{\"ok\":true") != std::string::npos, "modern tool call failed");
 
+        const cld::JsonValue emptyArguments =
+            cld::JsonParser("{}").Parse();
+        const std::string modernGrant =
+            mcp::ApprovalGrantBroker::Instance().Issue(
+                "modern-session-rejected",
+                "lookdevpt.get_state",
+                mcp::CanonicalArgumentsSha256(emptyArguments));
+        const std::string modernGrantBody =
+            "{\"jsonrpc\":\"2.0\",\"id\":40,\"method\":\"tools/call\",\"params\":{" +
+            Meta(modernGrant) +
+            ",\"name\":\"lookdevpt.get_state\",\"arguments\":{}}}";
+        const std::string modernGrantResponse = Exchange(port, RequestText(
+            port, "POST", modernGrantBody, "2026-07-28", "tools/call",
+            "lookdevpt.get_state", "modern-session-rejected"));
+        Require(
+            modernGrantResponse.find("invalid_approval_grant") !=
+                std::string::npos,
+            "modern MCP accepted an internal one-time approval token");
+
         const std::string chunkedCall = Exchange(port, ChunkedRequestText(port, callBody, "2026-07-28", "tools/call", "lookdevpt.get_state"));
         Require(chunkedCall.find("\"structuredContent\":{\"ok\":true") != std::string::npos, "chunked modern tool call failed");
 
@@ -404,7 +729,168 @@ namespace
         (void)server;
     }
 
-    void TestLegacy(uint16_t port)
+    void TestApprovalGrant(
+        uint16_t port,
+        FakeHost& host,
+        const std::string& sessionId)
+    {
+        const cld::JsonValue canonicalFixture = cld::JsonParser(
+            R"json({"b":1,"n":-0,"a":[true,null,"x"]})json").Parse();
+        const std::string argumentsHash =
+            mcp::CanonicalArgumentsSha256(canonicalFixture);
+        Require(
+            argumentsHash ==
+                "fd580922504c7e68243ee62db404d9e22d08e1d5ee43548bee66890f06448ca9",
+            "canonical argument hash fixture changed");
+
+        constexpr const char* toolName = "lookdevpt.set_camera";
+        const std::string grant = mcp::ApprovalGrantBroker::Instance().Issue(
+            sessionId, toolName, argumentsHash);
+        Require(grant.size() == 64, "one-time grant is not 256 bits");
+
+        const std::string callBody =
+            std::string("{\"jsonrpc\":\"2.0\",\"id\":90,\"method\":\"tools/call\",\"params\":{") +
+            "\"_meta\":{\"shaderjp.lookdevpt/approvalToken\":\"" +
+            grant + "\"},\"name\":\"" + toolName +
+            "\",\"arguments\":{\"a\":[true,null,\"x\"],\"n\":0,\"b\":1}}}";
+        const std::string allowed = Exchange(port, RequestText(
+            port, "POST", callBody, "2025-11-25", {}, {}, sessionId));
+        Require(
+            allowed.find("invalid_approval_grant") == std::string::npos &&
+                host.lastOneTimeAuthorization.exchange(false),
+            "matching one-time grant did not authorize the exact call");
+
+        const std::string replayed = Exchange(port, RequestText(
+            port, "POST", callBody, "2025-11-25", {}, {}, sessionId));
+        Require(
+            replayed.find("invalid_approval_grant") != std::string::npos &&
+                !host.lastOneTimeAuthorization.exchange(false),
+            "one-time grant was replayed");
+
+        const std::string mismatchedGrant =
+            mcp::ApprovalGrantBroker::Instance().Issue(
+                sessionId, toolName, argumentsHash);
+        const std::string mismatchedBody =
+            std::string("{\"jsonrpc\":\"2.0\",\"id\":91,\"method\":\"tools/call\",\"params\":{") +
+            "\"_meta\":{\"shaderjp.lookdevpt/approvalToken\":\"" +
+            mismatchedGrant + "\"},\"name\":\"" + toolName +
+            "\",\"arguments\":{\"b\":2}}}";
+        const std::string mismatched = Exchange(port, RequestText(
+            port, "POST", mismatchedBody, "2025-11-25", {}, {}, sessionId));
+        Require(
+            mismatched.find("invalid_approval_grant") != std::string::npos,
+            "grant accepted mismatched arguments");
+
+        const std::string burned = Exchange(port, RequestText(
+            port, "POST", callBody.substr(0, callBody.find(grant)) +
+                mismatchedGrant + callBody.substr(callBody.find(grant) + grant.size()),
+            "2025-11-25", {}, {}, sessionId));
+        Require(
+            burned.find("invalid_approval_grant") != std::string::npos,
+            "mismatched grant was not consumed");
+
+        const cld::JsonValue emptyArguments =
+            cld::JsonParser("{}").Parse();
+        const std::string secondInitializeBody =
+            std::string("{\"jsonrpc\":\"2.0\",\"id\":93,\"method\":\"initialize\",") +
+            "\"params\":{\"protocolVersion\":\"2025-11-25\"," +
+            "\"capabilities\":{},\"clientInfo\":{\"name\":\"binding-test\"," +
+            "\"version\":\"1\"}}}";
+        const std::string secondInitialized = Exchange(port, RequestText(
+            port, "POST", secondInitializeBody, "2025-11-25"));
+        const std::string secondSessionId = HeaderValueFromResponse(
+            secondInitialized, "MCP-Session-Id");
+        Require(
+            !secondSessionId.empty(),
+            "binding test could not create a second legacy session");
+        const std::string secondNotification =
+            "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}";
+        (void)Exchange(port, RequestText(
+            port, "POST", secondNotification, "2025-11-25",
+            {}, {}, secondSessionId));
+
+        const std::string sessionBoundGrant =
+            mcp::ApprovalGrantBroker::Instance().Issue(
+                sessionId,
+                "lookdevpt.get_state",
+                mcp::CanonicalArgumentsSha256(emptyArguments));
+        const std::string sessionBoundBody =
+            std::string("{\"jsonrpc\":\"2.0\",\"id\":94,\"method\":\"tools/call\",\"params\":{") +
+            "\"_meta\":{\"shaderjp.lookdevpt/approvalToken\":\"" +
+            sessionBoundGrant + "\"},\"name\":\"lookdevpt.get_state\"," +
+            "\"arguments\":{}}}";
+        const std::string wrongSession = Exchange(port, RequestText(
+            port, "POST", sessionBoundBody, "2025-11-25",
+            {}, {}, secondSessionId));
+        const std::string burnedByWrongSession = Exchange(port, RequestText(
+            port, "POST", sessionBoundBody, "2025-11-25",
+            {}, {}, sessionId));
+        Require(
+            wrongSession.find("invalid_approval_grant") != std::string::npos &&
+                burnedByWrongSession.find("invalid_approval_grant") !=
+                    std::string::npos,
+            "wrong-session presentation did not burn the approval grant");
+
+        const std::string toolBoundGrant =
+            mcp::ApprovalGrantBroker::Instance().Issue(
+                sessionId,
+                "lookdevpt.get_state",
+                mcp::CanonicalArgumentsSha256(emptyArguments));
+        const std::string wrongToolBody =
+            std::string("{\"jsonrpc\":\"2.0\",\"id\":95,\"method\":\"tools/call\",\"params\":{") +
+            "\"_meta\":{\"shaderjp.lookdevpt/approvalToken\":\"" +
+            toolBoundGrant + "\"},\"name\":\"lookdevpt.get_stats\"," +
+            "\"arguments\":{}}}";
+        const std::string expectedToolBody =
+            std::string("{\"jsonrpc\":\"2.0\",\"id\":96,\"method\":\"tools/call\",\"params\":{") +
+            "\"_meta\":{\"shaderjp.lookdevpt/approvalToken\":\"" +
+            toolBoundGrant + "\"},\"name\":\"lookdevpt.get_state\"," +
+            "\"arguments\":{}}}";
+        const std::string wrongTool = Exchange(port, RequestText(
+            port, "POST", wrongToolBody, "2025-11-25",
+            {}, {}, sessionId));
+        const std::string burnedByWrongTool = Exchange(port, RequestText(
+            port, "POST", expectedToolBody, "2025-11-25",
+            {}, {}, sessionId));
+        Require(
+            wrongTool.find("invalid_approval_grant") != std::string::npos &&
+                burnedByWrongTool.find("invalid_approval_grant") !=
+                    std::string::npos,
+            "wrong-tool presentation did not burn the approval grant");
+
+        (void)Exchange(port, RequestText(
+            port, "DELETE", {}, "2025-11-25",
+            {}, {}, secondSessionId));
+
+        const std::string japanese = Utf8Bytes({
+            0xe6, 0x97, 0xa5,
+            0xe6, 0x9c, 0xac,
+            0xe8, 0xaa, 0x9e });
+        const std::string emoji = Utf8Bytes({ 0xf0, 0x9f, 0x98, 0x80 });
+        const cld::JsonValue unicodeArguments = cld::JsonParser(
+            "{\"label\":\"" + japanese + emoji + "\"}").Parse();
+        const std::string unicodeGrant =
+            mcp::ApprovalGrantBroker::Instance().Issue(
+                sessionId,
+                toolName,
+                mcp::CanonicalArgumentsSha256(unicodeArguments));
+        const std::string unicodeWireBody =
+            std::string("{\"jsonrpc\":\"2.0\",\"id\":92,\"method\":\"tools/call\",\"params\":{") +
+            "\"_meta\":{\"shaderjp.lookdevpt/approvalToken\":\"" +
+            unicodeGrant + "\"},\"name\":\"" + toolName +
+            "\",\"arguments\":{\"label\":\"" +
+            "\\u65e5\\u672c\\u8a9e\\ud83d\\ude00\"}}}";
+        const std::string unicodeWireResponse = Exchange(port, RequestText(
+            port, "POST", unicodeWireBody, "2025-11-25",
+            {}, {}, sessionId));
+        Require(
+            unicodeWireResponse.find("invalid_approval_grant") ==
+                    std::string::npos &&
+                host.lastOneTimeAuthorization.exchange(false),
+            "escaped Japanese and emoji arguments did not match the native grant hash");
+    }
+
+    void TestLegacy(uint16_t port, FakeHost& host)
     {
         const std::string initializeBody = "{\"jsonrpc\":\"2.0\",\"id\":10,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-11-25\",\"capabilities\":{},\"clientInfo\":{\"name\":\"test\",\"version\":\"1\"}}}";
         const std::string initialized = Exchange(port, RequestText(port, "POST", initializeBody, "2025-11-25"));
@@ -416,9 +902,39 @@ namespace
             initialized.find("\"textureResidencyV1\":true") != std::string::npos,
             "glTF compatibility features are missing from initialize");
 
+        const cld::JsonValue emptyArguments =
+            cld::JsonParser("{}").Parse();
+        const std::string preInitializeGrant =
+            mcp::ApprovalGrantBroker::Instance().Issue(
+                sessionId,
+                "lookdevpt.get_state",
+                mcp::CanonicalArgumentsSha256(emptyArguments));
+        const std::string preInitializeCallBody =
+            std::string("{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"tools/call\",") +
+            "\"params\":{\"_meta\":{\"shaderjp.lookdevpt/approvalToken\":\"" +
+            preInitializeGrant + "\"},\"name\":\"lookdevpt.get_state\"," +
+            "\"arguments\":{}}}";
+        const std::string preInitializeCall = Exchange(port, RequestText(
+            port, "POST", preInitializeCallBody, "2025-11-25",
+            {}, {}, sessionId));
+        Require(
+            preInitializeCall.find("invalid_approval_grant") != std::string::npos &&
+                !host.lastOneTimeAuthorization.exchange(false),
+            "grant was consumed before the legacy session was initialized");
+
         const std::string notificationBody = "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}";
         const std::string notification = Exchange(port, RequestText(port, "POST", notificationBody, "2025-11-25", {}, {}, sessionId));
         Require(notification.find("HTTP/1.1 202 Accepted") != std::string::npos, "legacy initialized notification failed");
+
+        const std::string initializedCall = Exchange(port, RequestText(
+            port, "POST", preInitializeCallBody, "2025-11-25",
+            {}, {}, sessionId));
+        Require(
+            initializedCall.find("invalid_approval_grant") == std::string::npos &&
+                host.lastOneTimeAuthorization.exchange(false),
+            "grant was not accepted after legacy session initialization");
+
+        TestApprovalGrant(port, host, sessionId);
 
         const std::string listBody = "{\"jsonrpc\":\"2.0\",\"id\":11,\"method\":\"tools/list\",\"params\":{}}";
         const std::string list = Exchange(port, RequestText(port, "POST", listBody, "2025-11-25", {}, {}, sessionId));
@@ -445,6 +961,38 @@ namespace
 
     void TestPairing(mcp::Server& server, uint16_t port)
     {
+        const std::string depthCode = server.BeginPairing();
+        std::string wrongDepthCode = depthCode;
+        wrongDepthCode[0] = wrongDepthCode[0] == '9'
+            ? '0'
+            : static_cast<char>(wrongDepthCode[0] + 1);
+        const std::string boundaryBody =
+            "{\"code\":\"" + wrongDepthCode +
+            "\",\"clientName\":\"depth-boundary\",\"nested\":" +
+            NestedArray(63) + "}";
+        const std::string boundaryResponse = Exchange(
+            port,
+            PairingRequestText(port, "POST", "/pair", boundaryBody));
+        Require(
+            boundaryResponse.find("HTTP/1.1 401 Unauthorized") !=
+                std::string::npos,
+            "unauthenticated pairing rejected JSON at the depth boundary");
+
+        const std::string excessiveBody =
+            "{\"code\":\"" + wrongDepthCode +
+            "\",\"clientName\":\"depth-excess\",\"nested\":" +
+            NestedArray(64) + "}";
+        const std::string excessiveResponse = Exchange(
+            port,
+            PairingRequestText(port, "POST", "/pair", excessiveBody));
+        Require(
+            excessiveResponse.find("HTTP/1.1 400 Bad Request") !=
+                    std::string::npos &&
+                excessiveResponse.find(
+                    "JSON nesting depth exceeds the limit.") !=
+                    std::string::npos,
+            "unauthenticated pairing did not reject excessive JSON depth");
+
         const std::string code = server.BeginPairing();
         Require(code.size() == 8 && std::all_of(code.begin(), code.end(), [](unsigned char ch) { return std::isdigit(ch) != 0; }), "pairing code is not eight digits");
         const std::string discovery = Exchange(port, PairingRequestText(port, "GET", "/.well-known/lookdevpt/v1"));
@@ -564,9 +1112,14 @@ int main(int argc, char** argv)
                 std::this_thread::sleep_for(std::chrono::seconds(60));
             }
         }
+        TestJsonDepthLimit();
+        TestJsonUnicodeStrings();
+        TestJsonNumberGrammarAndLocale();
+        TestCanonicalArgumentFixtures();
+        TestToolCatalogReadOnlyAnnotations();
         const uint16_t port = StartServer(server, host);
         TestModern(server, port);
-        TestLegacy(port);
+        TestLegacy(port, host);
         TestPairing(server, port);
         TestSubscription(server, port);
         server.Stop();

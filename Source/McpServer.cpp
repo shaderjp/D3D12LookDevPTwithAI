@@ -7,8 +7,10 @@
 
 #include <algorithm>
 #include <array>
+#include <charconv>
 #include <cctype>
 #include <chrono>
+#include <cmath>
 #include <functional>
 #include <filesystem>
 #include <fstream>
@@ -25,6 +27,7 @@ namespace
     constexpr const char* LegacyProtocolVersion = "2025-11-25";
     constexpr const char* CompatProtocolVersion = "2025-06-18";
     constexpr size_t MaxHttpBodyBytes = 16u * 1024u * 1024u;
+    constexpr size_t MaxBufferedHttpBodyBytes = 32u * 1024u * 1024u;
     constexpr size_t MaxHttpHeaderBytes = 64u * 1024u;
     constexpr size_t MaxHttpChunks = 65536;
     constexpr size_t MaxConnections = 64;
@@ -36,6 +39,10 @@ namespace
     constexpr int64_t CatalogTtlMs = 3600000;
     constexpr auto PairingLifetime = std::chrono::seconds(90);
     constexpr int MaxPairingFailures = 5;
+    constexpr auto ApprovalGrantLifetime = std::chrono::seconds(30);
+    constexpr size_t MaximumApprovalGrants = 64;
+    constexpr auto RequestReceiveDeadline = std::chrono::seconds(10);
+    constexpr DWORD ReceivePollMilliseconds = 100;
 
     std::string ToLowerAscii(std::string text)
     {
@@ -78,6 +85,147 @@ namespace
         output << std::hex << std::setfill('0');
         for (const unsigned char byte : digest) output << std::setw(2) << static_cast<unsigned>(byte);
         return output.str();
+    }
+
+    bool IsLowerHexSha256(const std::string& value)
+    {
+        return value.size() == 64 && std::all_of(
+            value.begin(), value.end(), [](unsigned char character)
+            {
+                return (character >= '0' && character <= '9') ||
+                    (character >= 'a' && character <= 'f');
+            });
+    }
+
+    bool IsGrantBindingText(const std::string& value, size_t maximumLength)
+    {
+        return !value.empty() && value.size() <= maximumLength &&
+            std::all_of(value.begin(), value.end(), [](unsigned char character)
+            {
+                return (character >= 'a' && character <= 'z') ||
+                    (character >= 'A' && character <= 'Z') ||
+                    (character >= '0' && character <= '9') ||
+                    character == '.' || character == '_' ||
+                    character == ':' || character == '-';
+            });
+    }
+
+    void AppendCanonicalJson(const cld::JsonValue& value, std::string& output)
+    {
+        switch (value.type)
+        {
+        case cld::JsonValue::Type::Null:
+            output += "null";
+            return;
+        case cld::JsonValue::Type::Bool:
+            output += value.boolean ? "true" : "false";
+            return;
+        case cld::JsonValue::Type::Number:
+        {
+            if (!std::isfinite(value.number))
+            {
+                throw std::invalid_argument("Non-finite JSON number.");
+            }
+            if (value.number == 0.0)
+            {
+                output += '0';
+                return;
+            }
+            std::array<char, 64> number{};
+            const auto converted = std::to_chars(
+                number.data(), number.data() + number.size(), value.number,
+                std::chars_format::scientific, 16);
+            if (converted.ec != std::errc())
+            {
+                throw std::runtime_error("JSON number canonicalization failed.");
+            }
+            const char* exponent = std::find(
+                number.data(), converted.ptr, 'e');
+            if (exponent == converted.ptr)
+            {
+                throw std::runtime_error("JSON number canonicalization failed.");
+            }
+            const char* mantissaEnd = exponent;
+            while (mantissaEnd > number.data() &&
+                mantissaEnd[-1] == '0')
+            {
+                --mantissaEnd;
+            }
+            if (mantissaEnd > number.data() &&
+                mantissaEnd[-1] == '.')
+            {
+                --mantissaEnd;
+            }
+            output.append(
+                number.data(),
+                static_cast<std::size_t>(mantissaEnd - number.data()));
+            output += 'e';
+
+            const char* exponentDigits = exponent + 1;
+            bool negativeExponent = false;
+            if (exponentDigits != converted.ptr &&
+                (*exponentDigits == '+' || *exponentDigits == '-'))
+            {
+                negativeExponent = *exponentDigits == '-';
+                ++exponentDigits;
+            }
+            while (exponentDigits != converted.ptr &&
+                *exponentDigits == '0')
+            {
+                ++exponentDigits;
+            }
+            if (exponentDigits == converted.ptr)
+            {
+                output += '0';
+            }
+            else
+            {
+                if (negativeExponent) output += '-';
+                output.append(
+                    exponentDigits,
+                    static_cast<std::size_t>(
+                        converted.ptr - exponentDigits));
+            }
+            return;
+        }
+        case cld::JsonValue::Type::String:
+            output += '"';
+            output += cld::EscapeJson(value.string);
+            output += '"';
+            return;
+        case cld::JsonValue::Type::Array:
+            output += '[';
+            for (size_t index = 0; index < value.array.size(); ++index)
+            {
+                if (index != 0) output += ',';
+                AppendCanonicalJson(value.array[index], output);
+            }
+            output += ']';
+            return;
+        case cld::JsonValue::Type::Object:
+        {
+            std::vector<std::string_view> keys;
+            keys.reserve(value.object.size());
+            for (const auto& [key, ignored] : value.object)
+            {
+                (void)ignored;
+                keys.push_back(key);
+            }
+            std::sort(keys.begin(), keys.end());
+            output += '{';
+            for (size_t index = 0; index < keys.size(); ++index)
+            {
+                if (index != 0) output += ',';
+                output += '"';
+                output += cld::EscapeJson(std::string(keys[index]));
+                output += "\":";
+                AppendCanonicalJson(value.object.at(std::string(keys[index])), output);
+            }
+            output += '}';
+            return;
+        }
+        }
+        throw std::invalid_argument("Unknown JSON value type.");
     }
 
     std::string GeneratePairingCode()
@@ -217,9 +365,11 @@ namespace
     {
         switch (status)
         {
+        case 408: return "Request Timeout";
         case 413: return "Payload Too Large";
         case 431: return "Request Header Fields Too Large";
         case 501: return "Not Implemented";
+        case 503: return "Service Unavailable";
         default: return "Bad Request";
         }
     }
@@ -622,6 +772,147 @@ namespace
 
 namespace mcp
 {
+std::string CanonicalArgumentsSha256(const cld::JsonValue& arguments)
+{
+    std::string canonical;
+    canonical.reserve(256);
+    AppendCanonicalJson(arguments, canonical);
+    return Sha256Hex(canonical);
+}
+
+ApprovalGrantBroker& ApprovalGrantBroker::Instance()
+{
+    static ApprovalGrantBroker broker;
+    return broker;
+}
+
+std::string ApprovalGrantBroker::Issue(
+    const std::string& clientSession,
+    const std::string& toolName,
+    const std::string& canonicalArgumentsSha256)
+{
+    if (!IsGrantBindingText(clientSession, 128) ||
+        !IsGrantBindingText(toolName, 128) ||
+        toolName.rfind("lookdevpt.", 0) != 0 ||
+        !IsLowerHexSha256(canonicalArgumentsSha256))
+    {
+        throw std::invalid_argument("Invalid one-time approval binding.");
+    }
+
+    std::array<unsigned char, 32> randomBytes{};
+    if (BCryptGenRandom(
+            nullptr, randomBytes.data(),
+            static_cast<ULONG>(randomBytes.size()),
+            BCRYPT_USE_SYSTEM_PREFERRED_RNG) < 0)
+    {
+        throw std::runtime_error("One-time approval grant generation failed.");
+    }
+    constexpr char Hex[] = "0123456789abcdef";
+    std::array<char, 64> grantCharacters{};
+    for (size_t index = 0; index < randomBytes.size(); ++index)
+    {
+        grantCharacters[index * 2] = Hex[randomBytes[index] >> 4u];
+        grantCharacters[index * 2 + 1] = Hex[randomBytes[index] & 0x0fu];
+    }
+    std::string grant(grantCharacters.data(), grantCharacters.size());
+    SecureZeroMemory(randomBytes.data(), randomBytes.size());
+    SecureZeroMemory(grantCharacters.data(), grantCharacters.size());
+    std::string grantHash;
+    try
+    {
+        grantHash = Sha256Hex(grant);
+    }
+    catch (...)
+    {
+        SecureZeroMemory(grant.data(), grant.size());
+        throw;
+    }
+
+    const auto now = std::chrono::steady_clock::now();
+    std::lock_guard<std::mutex> lock(m_mutex);
+    for (auto iterator = m_records.begin(); iterator != m_records.end();)
+    {
+        if (iterator->second.expiresAt <= now)
+        {
+            iterator = m_records.erase(iterator);
+        }
+        else
+        {
+            ++iterator;
+        }
+    }
+    if (m_records.size() >= MaximumApprovalGrants)
+    {
+        SecureZeroMemory(grant.data(), grant.size());
+        throw std::runtime_error("Too many one-time approvals are pending.");
+    }
+    m_records.emplace(grantHash, Record{
+        clientSession,
+        toolName,
+        canonicalArgumentsSha256,
+        now + ApprovalGrantLifetime });
+    return grant;
+}
+
+bool ApprovalGrantBroker::Consume(
+    const std::string& grant,
+    const std::string& clientSession,
+    const std::string& toolName,
+    const cld::JsonValue& arguments)
+{
+    if (grant.size() != 64)
+    {
+        return false;
+    }
+
+    std::string grantHash;
+    try
+    {
+        grantHash = Sha256Hex(grant);
+    }
+    catch (...)
+    {
+        return false;
+    }
+
+    Record record;
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        const auto iterator = m_records.find(grantHash);
+        if (iterator == m_records.end())
+        {
+            return false;
+        }
+        record = std::move(iterator->second);
+        m_records.erase(iterator);
+    }
+
+    if (!IsGrantBindingText(clientSession, 128) ||
+        !IsGrantBindingText(toolName, 128))
+    {
+        return false;
+    }
+    std::string argumentsHash;
+    try
+    {
+        argumentsHash = CanonicalArgumentsSha256(arguments);
+    }
+    catch (...)
+    {
+        return false;
+    }
+    return record.expiresAt > std::chrono::steady_clock::now() &&
+        record.clientSession == clientSession &&
+        record.toolName == toolName &&
+        record.argumentsSha256 == argumentsHash;
+}
+
+void ApprovalGrantBroker::RevokeAll() noexcept
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_records.clear();
+}
+
 Server::Server() = default;
 
 Server::~Server()
@@ -733,6 +1024,7 @@ bool Server::Start(const ServerSettings& settings, IServerHost* host)
     }
     m_activeConnections = 0;
     m_activeSubscriptions = 0;
+    m_reservedHttpBodyBytes = 0;
     m_stopRequested = false;
     m_running = true;
     m_thread = std::thread(&Server::Run, this);
@@ -742,6 +1034,7 @@ bool Server::Start(const ServerSettings& settings, IServerHost* host)
 
 void Server::Stop()
 {
+    ApprovalGrantBroker::Instance().RevokeAll();
     if (!m_running && !m_thread.joinable())
     {
         return;
@@ -799,6 +1092,7 @@ void Server::Stop()
     }
 
     m_running = false;
+    m_reservedHttpBodyBytes = 0;
     WSACleanup();
 }
 
@@ -1016,21 +1310,45 @@ void Server::HandleClient(
         m_activeConnections.fetch_sub(1);
         complete->store(true);
     });
-    DWORD timeoutMs = 30000;
-    setsockopt(client, SOL_SOCKET, SO_RCVTIMEO, reinterpret_cast<const char*>(&timeoutMs), sizeof(timeoutMs));
-    setsockopt(client, SOL_SOCKET, SO_SNDTIMEO, reinterpret_cast<const char*>(&timeoutMs), sizeof(timeoutMs));
+    const DWORD receiveTimeoutMs = ReceivePollMilliseconds;
+    DWORD sendTimeoutMs = 30000;
+    setsockopt(client, SOL_SOCKET, SO_RCVTIMEO, reinterpret_cast<const char*>(&receiveTimeoutMs), sizeof(receiveTimeoutMs));
+    setsockopt(client, SOL_SOCKET, SO_SNDTIMEO, reinterpret_cast<const char*>(&sendTimeoutMs), sizeof(sendTimeoutMs));
 
+    size_t reservedBodyBytes = 0;
+    auto bodyBudgetGuard = std::unique_ptr<void, std::function<void(void*)>>(
+        reinterpret_cast<void*>(1),
+        [this, &reservedBodyBytes](void*)
+        {
+            ReleaseHttpBodyBytes(reservedBodyBytes);
+        });
     HttpRequest request;
     int errorStatus = 400;
     std::string error;
     HttpResponse response;
-    if (!ReadHttpRequest(socketValue, request, errorStatus, error))
+    bool preflightRejected = false;
+    HttpResponse preflightResponse;
+    if (!ReadHttpRequest(
+        socketValue,
+        request,
+        errorStatus,
+        error,
+        preflightRejected,
+        preflightResponse,
+        reservedBodyBytes))
     {
-        const int errorCode = errorStatus == 400 ? -32700 : -32000;
-        response = JsonResponse(
-            errorStatus,
-            HttpReasonPhrase(errorStatus),
-            MakeHttpErrorBody(errorCode, error));
+        if (preflightRejected)
+        {
+            response = std::move(preflightResponse);
+        }
+        else
+        {
+            const int errorCode = errorStatus == 400 ? -32700 : -32000;
+            response = JsonResponse(
+                errorStatus,
+                HttpReasonPhrase(errorStatus),
+                MakeHttpErrorBody(errorCode, error));
+        }
     }
     else
     {
@@ -1071,20 +1389,74 @@ bool Server::ReadHttpRequest(
     uintptr_t socketValue,
     HttpRequest& request,
     int& errorStatus,
-    std::string& error) const
+    std::string& error,
+    bool& preflightRejected,
+    HttpResponse& preflightResponse,
+    size_t& reservedBodyBytes)
 {
     errorStatus = 400;
+    preflightRejected = false;
+    reservedBodyBytes = 0;
     SOCKET client = static_cast<SOCKET>(socketValue);
+    const auto deadlineDuration =
+        m_settings.requestReceiveDeadlineMillisecondsForTests > 0
+            ? std::chrono::milliseconds(
+                m_settings.requestReceiveDeadlineMillisecondsForTests)
+            : std::chrono::duration_cast<std::chrono::milliseconds>(
+                RequestReceiveDeadline);
+    const auto receiveDeadline =
+        std::chrono::steady_clock::now() + deadlineDuration;
+    auto receiveWithDeadline = [
+        &](char* destination, int destinationBytes,
+            const char* readFailure) -> int
+    {
+        for (;;)
+        {
+            if (std::chrono::steady_clock::now() >= receiveDeadline)
+            {
+                errorStatus = 408;
+                error = "HTTP request receive deadline exceeded.";
+                return -1;
+            }
+            const int received =
+                recv(client, destination, destinationBytes, 0);
+            if (received > 0)
+            {
+                if (std::chrono::steady_clock::now() >= receiveDeadline)
+                {
+                    errorStatus = 408;
+                    error = "HTTP request receive deadline exceeded.";
+                    return -1;
+                }
+                return received;
+            }
+            if (received == 0)
+            {
+                error = readFailure;
+                return -1;
+            }
+            const int socketError = WSAGetLastError();
+            if (socketError == WSAETIMEDOUT ||
+                socketError == WSAEWOULDBLOCK)
+            {
+                continue;
+            }
+            error = readFailure;
+            return -1;
+        }
+    };
     std::string buffer;
     char chunk[4096];
     size_t headerEnd = std::string::npos;
 
     while (headerEnd == std::string::npos)
     {
-        const int received = recv(client, chunk, sizeof(chunk), 0);
-        if (received <= 0)
+        const int received = receiveWithDeadline(
+            chunk,
+            static_cast<int>(sizeof(chunk)),
+            "HTTP request read failed.");
+        if (received < 0)
         {
-            error = "HTTP request read failed.";
             return false;
         }
         buffer.append(chunk, chunk + received);
@@ -1135,6 +1507,19 @@ bool Server::ReadHttpRequest(
         std::string name = ToLowerAscii(cld::TrimAscii(line.substr(0, colon)));
         std::string value = cld::TrimAscii(line.substr(colon + 1));
         request.headers[name] = value;
+    }
+
+    if (PreflightHttpRequest(request, preflightResponse))
+    {
+        preflightRejected = true;
+        return false;
+    }
+    const bool requestNeedsBody =
+        request.method == "POST" &&
+        (request.path == "/mcp" || request.path == "/pair");
+    if (!requestNeedsBody)
+    {
+        return true;
     }
 
     size_t contentLength = 0;
@@ -1199,17 +1584,27 @@ bool Server::ReadHttpRequest(
             error = "The final transfer coding must be chunked.";
             return false;
         }
+        if (!TryReserveHttpBodyBytes(MaxHttpBodyBytes))
+        {
+            errorStatus = 503;
+            error = "HTTP body buffering budget is exhausted.";
+            return false;
+        }
+        reservedBodyBytes = MaxHttpBodyBytes;
 
         std::string encoded = buffer.substr(bodyStart);
         size_t cursor = 0;
         size_t chunkCount = 0;
         request.body.clear();
+        request.body.reserve(MaxHttpBodyBytes);
         auto receiveMore = [&]() -> bool
         {
-            const int received = recv(client, chunk, sizeof(chunk), 0);
-            if (received <= 0)
+            const int received = receiveWithDeadline(
+                chunk,
+                static_cast<int>(sizeof(chunk)),
+                "Chunked HTTP body read failed.");
+            if (received < 0)
             {
-                error = "Chunked HTTP body read failed.";
                 return false;
             }
             encoded.append(chunk, chunk + received);
@@ -1295,9 +1690,33 @@ bool Server::ReadHttpRequest(
                 return false;
             }
             const size_t nativeChunkSize = static_cast<size_t>(chunkSize);
-            if (!ensureBytes(cursor + nativeChunkSize + 2)) return false;
-            request.body.append(encoded, cursor, nativeChunkSize);
-            cursor += nativeChunkSize;
+            size_t remainingChunkBytes = nativeChunkSize;
+            while (remainingChunkBytes != 0)
+            {
+                if (cursor == encoded.size())
+                {
+                    encoded.clear();
+                    cursor = 0;
+                    if (!receiveMore()) return false;
+                }
+                const size_t available = (std::min)(
+                    remainingChunkBytes,
+                    encoded.size() - cursor);
+                request.body.append(encoded, cursor, available);
+                cursor += available;
+                remainingChunkBytes -= available;
+                if (cursor == encoded.size())
+                {
+                    encoded.clear();
+                    cursor = 0;
+                }
+                else if (cursor >= MaxHttpHeaderBytes)
+                {
+                    encoded.erase(0, cursor);
+                    cursor = 0;
+                }
+            }
+            if (!ensureBytes(cursor + 2)) return false;
             if (encoded.compare(cursor, 2, "\r\n") != 0)
             {
                 error = "HTTP chunk terminator is invalid.";
@@ -1313,13 +1732,22 @@ bool Server::ReadHttpRequest(
         }
     }
 
+    if (!TryReserveHttpBodyBytes(contentLength))
+    {
+        errorStatus = 503;
+        error = "HTTP body buffering budget is exhausted.";
+        return false;
+    }
+    reservedBodyBytes = contentLength;
     request.body = buffer.substr(bodyStart);
     while (request.body.size() < contentLength)
     {
-        const int received = recv(client, chunk, sizeof(chunk), 0);
-        if (received <= 0)
+        const int received = receiveWithDeadline(
+            chunk,
+            static_cast<int>(sizeof(chunk)),
+            "HTTP body read failed.");
+        if (received < 0)
         {
-            error = "HTTP body read failed.";
             return false;
         }
         request.body.append(chunk, chunk + received);
@@ -1475,6 +1903,206 @@ void Server::StreamSubscription(uintptr_t socketValue, const HttpResponse& respo
         {
             break;
         }
+    }
+}
+
+bool Server::PreflightHttpRequest(
+    const HttpRequest& request,
+    HttpResponse& response)
+{
+    if (!ValidateOrigin(request))
+    {
+        response = JsonResponse(
+            403,
+            "Forbidden",
+            MakeHttpErrorBody(-32000, "Origin is not allowed."));
+        return true;
+    }
+    if (!ValidateHost(request))
+    {
+        response = JsonResponse(
+            403,
+            "Forbidden",
+            MakeHttpErrorBody(-32000, "Host is not allowed."));
+        return true;
+    }
+    if (request.path == "/.well-known/lookdevpt/v1")
+    {
+        if (request.method != "GET")
+        {
+            response = JsonResponse(
+                405,
+                "Method Not Allowed",
+                MakeHttpErrorBody(-32000, "Discovery requires GET."));
+            return true;
+        }
+        return false;
+    }
+    if (request.path == "/pair")
+    {
+        if (request.method != "POST")
+        {
+            response = JsonResponse(
+                405,
+                "Method Not Allowed",
+                MakeHttpErrorBody(-32000, "Pairing requires POST."));
+            return true;
+        }
+        std::lock_guard<std::mutex> lock(m_mutex);
+        const auto now = std::chrono::steady_clock::now();
+        if (m_pairingCode.empty() || now >= m_pairingExpiresAt)
+        {
+            m_pairingCode.clear();
+            response = JsonResponse(
+                409,
+                "Conflict",
+                MakeHttpErrorBody(-32030, "No active pairing code."));
+            return true;
+        }
+        return false;
+    }
+    if (request.path != "/mcp")
+    {
+        response = JsonResponse(
+            404,
+            "Not Found",
+            MakeHttpErrorBody(-32601, "MCP endpoint is /mcp."));
+        return true;
+    }
+    if (!ValidateAuthorization(request))
+    {
+        response = JsonResponse(
+            401,
+            "Unauthorized",
+            MakeHttpErrorBody(
+                -32001,
+                "Authorization bearer token is required."));
+        return true;
+    }
+
+    const std::string protocolVersion =
+        HeaderValue(request.headers, "mcp-protocol-version");
+    const bool modern = protocolVersion == ModernProtocolVersion;
+    if (request.method == "GET")
+    {
+        response = JsonResponse(
+            405,
+            "Method Not Allowed",
+            MakeHttpErrorBody(
+                -32000,
+                "MCP GET streams are not supported."));
+        response.headers.push_back({ "Allow", "POST, DELETE" });
+        return true;
+    }
+    if (request.method == "DELETE")
+    {
+        if (modern)
+        {
+            response = JsonResponse(
+                405,
+                "Method Not Allowed",
+                MakeHttpErrorBody(
+                    -32000,
+                    "Protocol 2026-07-28 does not use sessions."));
+            response.headers.push_back({ "Allow", "POST" });
+            return true;
+        }
+        return false;
+    }
+    if (request.method != "POST")
+    {
+        response = JsonResponse(
+            405,
+            "Method Not Allowed",
+            MakeHttpErrorBody(
+                -32000,
+                "Only POST, GET, and DELETE are supported."));
+        response.headers.push_back({ "Allow", "POST, GET, DELETE" });
+        return true;
+    }
+
+    const std::string accept = HeaderValue(request.headers, "accept");
+    if (modern)
+    {
+        const std::string lowerAccept = ToLowerAscii(accept);
+        if (lowerAccept.find("application/json") == std::string::npos ||
+            lowerAccept.find("text/event-stream") == std::string::npos)
+        {
+            response = JsonResponse(
+                406,
+                "Not Acceptable",
+                MakeHttpErrorBody(
+                    -32000,
+                    "Accept header must list application/json and text/event-stream."));
+            return true;
+        }
+        const std::string contentType =
+            ToLowerAscii(HeaderValue(request.headers, "content-type"));
+        if (contentType.find("application/json") == std::string::npos)
+        {
+            response = JsonResponse(
+                415,
+                "Unsupported Media Type",
+                MakeHttpErrorBody(
+                    -32600,
+                    "Content-Type must be application/json."));
+            return true;
+        }
+    }
+    else if (!accept.empty() &&
+        !ContainsHeaderToken(accept, "application/json") &&
+        !ContainsHeaderToken(accept, "text/event-stream"))
+    {
+        response = JsonResponse(
+            406,
+            "Not Acceptable",
+            MakeHttpErrorBody(
+                -32000,
+                "Accept header must allow application/json or text/event-stream."));
+        return true;
+    }
+    return false;
+}
+
+bool Server::TryReserveHttpBodyBytes(size_t byteCount)
+{
+    if (byteCount == 0)
+    {
+        return true;
+    }
+    const size_t budget = m_settings.httpBodyBudgetBytesForTests > 0
+        ? m_settings.httpBodyBudgetBytesForTests
+        : MaxBufferedHttpBodyBytes;
+    if (byteCount > budget)
+    {
+        return false;
+    }
+    size_t reserved = m_reservedHttpBodyBytes.load(
+        std::memory_order_relaxed);
+    for (;;)
+    {
+        if (reserved > budget - byteCount)
+        {
+            return false;
+        }
+        if (m_reservedHttpBodyBytes.compare_exchange_weak(
+            reserved,
+            reserved + byteCount,
+            std::memory_order_acq_rel,
+            std::memory_order_relaxed))
+        {
+            return true;
+        }
+    }
+}
+
+void Server::ReleaseHttpBodyBytes(size_t byteCount) noexcept
+{
+    if (byteCount != 0)
+    {
+        m_reservedHttpBodyBytes.fetch_sub(
+            byteCount,
+            std::memory_order_acq_rel);
     }
 }
 
@@ -1685,6 +2313,7 @@ Server::HttpResponse Server::HandleJsonRpc(const HttpRequest& request, const cld
         return HandleInitialize(rpc);
     }
 
+    bool requestSessionInitialized = modern;
     if (!modern)
     {
         Session session;
@@ -1693,6 +2322,7 @@ Server::HttpResponse Server::HandleJsonRpc(const HttpRequest& request, const cld
         {
             return JsonResponse(sessionDiagnostics == "Unknown MCP session." ? 404 : 400, sessionDiagnostics == "Unknown MCP session." ? "Not Found" : "Bad Request", MakeError(JsonIdToJson(rpc), -32002, sessionDiagnostics));
         }
+        requestSessionInitialized = session.initialized;
     }
 
     if (!hasId)
@@ -1850,7 +2480,38 @@ Server::HttpResponse Server::HandleJsonRpc(const HttpRequest& request, const cld
             return JsonResponse(200, "OK", MakeError(idJson, -32602, "tools/call arguments must be an object."));
         }
 
-        ToolResult toolResult = m_host->CallMcpTool(name, *arguments, (std::max)(1, m_settings.requestTimeoutSeconds) * 1000);
+        ToolCallAuthorization authorization;
+        const cld::JsonValue* meta = JsonMember(*params, "_meta");
+        const cld::JsonValue* approvalToken =
+            meta && meta->type == cld::JsonValue::Type::Object
+                ? JsonMember(*meta, "shaderjp.lookdevpt/approvalToken")
+                : nullptr;
+        if (approvalToken)
+        {
+            const std::string sessionId = HeaderValue(
+                request.headers, "mcp-session-id");
+            if (modern || !requestSessionInitialized ||
+                approvalToken->type != cld::JsonValue::Type::String ||
+                sessionId.empty() ||
+                !ApprovalGrantBroker::Instance().Consume(
+                    approvalToken->string, sessionId, name, *arguments))
+            {
+                ToolResult rejected;
+                rejected.isError = true;
+                rejected.text = "The one-time approval grant is invalid or expired.";
+                rejected.structuredJson =
+                    "{\"ok\":false,\"code\":\"invalid_approval_grant\"}";
+                return JsonResponse(200, "OK", ProtocolResponse(
+                    idJson, ToolResultToJson(rejected), modern));
+            }
+            authorization.oneTimeMutationGrant = true;
+        }
+
+        ToolResult toolResult = m_host->CallMcpTool(
+            name,
+            *arguments,
+            (std::max)(1, m_settings.requestTimeoutSeconds) * 1000,
+            authorization);
         return JsonResponse(200, "OK", ProtocolResponse(idJson, ToolResultToJson(toolResult), modern));
     }
 
@@ -2270,7 +2931,7 @@ std::string BuildToolsListJson()
     tools.push_back(ToolJson("lookdevpt.list_debug_views", "List debug views", "Return debug view ids, labels, and keys.", EmptyObjectSchema().c_str(), true));
     tools.push_back(ToolJson("lookdevpt.list_render_modes", "List render modes", "Return path tracing mode labels and action values.", EmptyObjectSchema().c_str(), true));
     tools.push_back(ToolJson("lookdevpt.get_diagnostics", "Get diagnostics", "Return scene, project, capture, and MCP diagnostics.", EmptyObjectSchema().c_str(), true));
-    tools.push_back(ToolJson("lookdevpt.capture_viewport", "Capture viewport", "Capture the current path-traced viewport as PNG.", captureViewportSchema));
+    tools.push_back(ToolJson("lookdevpt.capture_viewport", "Capture viewport", "Capture the current path-traced viewport as PNG.", captureViewportSchema, true));
     tools.push_back(ToolJson("lookdevpt.capture_debug_pack", "Capture debug pack", "Capture up to eight debug views as PNG resources.", captureDebugPackSchema));
     tools.push_back(ToolJson("lookdevpt.audit_scene", "Audit scene", "Audit scene structure, materials, textures, geometry, lighting, and renderer fallbacks without changing renderer state.", EmptyObjectSchema().c_str(), true));
     tools.push_back(ToolJson("lookdevpt.probe_surfaces", "Probe surfaces", "Trace exact, non-destructive surface probes for up to sixteen viewport coordinates.", probeSurfacesSchema, true));

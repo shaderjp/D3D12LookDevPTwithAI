@@ -31,8 +31,15 @@ ChatHost の会話履歴 API は SQLite の連番 cursor による UTF-8 byte �
 取得するため、長期履歴でも 4 MiB の IPC frame 上限を超えません。Native UI が表示する
 のは現時点では最新 page で、過去 page の閲覧 UI は後続 milestone です。
 
-同一アプリの MCP Tool 実行、一回承認 grant、アプリ内 model manager、一体型 portable /
-offline 展示 pack はまだ実装していません。設計と境界は
+同一インスタンス専用 MCP transport と Native の一回承認境界は実装済みです。
+ChatHost は親 Native process が所有する `127.0.0.1` endpoint だけへ接続し、
+`readOnlyHint` を保持します。変更 Tool は MCP session、Tool 名、canonical 引数 hash に
+束縛した30秒・一回限りの grant を必須とします。Native endpoint は不正・未認証要求を
+body の buffer 前に拒否し、受信全体を10秒、body buffer を1 request 16 MiB・全体
+32 MiB に制限します。専用 legacy session は server 再起動または idle expiry 後に
+再交渉し、ChatHost 終了時には best-effort で削除します。llama 推論 adapter はまだ
+Tool call を生成・実行しないため、自然言語からの LookDev 制御は次の milestone です。
+アプリ内 model manager と一体型 portable / offline 展示 pack も未実装です。設計と境界は
 [統合アーキテクチャ](docs/integrated-ai-architecture.ja.md)を参照してください。
 
 ### ローカル推論の手動 setup
@@ -384,9 +391,10 @@ AOV artifactを取得できます。完了または中止後はcheckpointから�
 .\Scripts\TestAssistantHostBridge.ps1
 ```
 
-`TestAssistantHostBridge.ps1` は deterministic inference hook を明示的に選択する
-Debug E2E test です。通常の app / ChatHost 起動では、設定済みの llama.cpp 経路を
-使用します。renderer command queue の test は command coalescing、FIFO barrier、
+`TestAssistantHostBridge.ps1` は deterministic inference hook を明示的に選択し、
+private MCP factory を省略する Debug E2E test です。通常の app / ChatHost 起動では
+親所有 MCP capability を必須とし、設定済みの llama.cpp 経路を使用します。
+renderer command queue の test は command coalescing、FIFO barrier、
 index 付き target、immutable snapshot の atomic publish を検証します。
 
 ## ThirdParty revision

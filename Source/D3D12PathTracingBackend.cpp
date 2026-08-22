@@ -4559,7 +4559,11 @@ bool D3D12PathTracingBackend::ApplyAction(const std::string& method, const cld::
     return false;
 }
 
-mcp::ToolResult D3D12PathTracingBackend::CallMcpTool(const std::string& name, const cld::JsonValue& arguments, int timeoutMs)
+mcp::ToolResult D3D12PathTracingBackend::CallMcpTool(
+    const std::string& name,
+    const cld::JsonValue& arguments,
+    int timeoutMs,
+    mcp::ToolCallAuthorization authorization)
 {
     if (name == "lookdevpt.get_stats")
     {
@@ -4603,17 +4607,19 @@ mcp::ToolResult D3D12PathTracingBackend::CallMcpTool(const std::string& name, co
             [&](const McpBenchmark& benchmark) { return benchmark.id == id; }) != m_mcpBenchmarks.end();
         return MakeMcpJsonToolResult(found, found ? "Benchmark returned." : "Benchmark id was not found.", json);
     }
-    if (auto reviewTool = CallMcpReviewTool(name, arguments, timeoutMs))
+    if (auto reviewTool = CallMcpReviewTool(
+            name, arguments, timeoutMs,
+            authorization.oneTimeMutationGrant))
     {
         return *reviewTool;
     }
     if (name == "lookdevpt.capture_viewport")
     {
-        return SubmitMcpCommandTool(name, "__capture_viewport", arguments, false, timeoutMs);
+        return SubmitMcpCommandTool(name, "__capture_viewport", arguments, false, timeoutMs, authorization.oneTimeMutationGrant);
     }
     if (name == "lookdevpt.capture_debug_pack")
     {
-        return SubmitMcpCommandTool(name, "__capture_debug_pack", arguments, true, timeoutMs);
+        return SubmitMcpCommandTool(name, "__capture_debug_pack", arguments, true, timeoutMs, authorization.oneTimeMutationGrant);
     }
     if (name == "lookdevpt.validate_action")
     {
@@ -4623,72 +4629,72 @@ mcp::ToolResult D3D12PathTracingBackend::CallMcpTool(const std::string& name, co
         {
             return MakeMcpJsonToolResult(false, "validate_action requires method and object params.", "{\"ok\":false,\"diagnostics\":\"validate_action requires method and object params.\"}");
         }
-        return SubmitMcpActionTool(name, method, *params, true, timeoutMs);
+        return SubmitMcpActionTool(name, method, *params, true, timeoutMs, authorization.oneTimeMutationGrant);
     }
     if (name == "lookdevpt.run_actions")
     {
         const bool validateOnly = cld::JsonBoolOr(arguments, "validateOnly", false);
-        return SubmitMcpCommandTool(name, "__run_actions", arguments, !validateOnly, timeoutMs);
+        return SubmitMcpCommandTool(name, "__run_actions", arguments, !validateOnly, timeoutMs, authorization.oneTimeMutationGrant);
     }
     if (name == "lookdevpt.create_checkpoint")
     {
-        return SubmitMcpCommandTool(name, "__create_checkpoint", arguments, true, timeoutMs);
+        return SubmitMcpCommandTool(name, "__create_checkpoint", arguments, true, timeoutMs, authorization.oneTimeMutationGrant);
     }
     if (name == "lookdevpt.restore_checkpoint")
     {
-        return SubmitMcpCommandTool(name, "__restore_checkpoint", arguments, true, timeoutMs);
+        return SubmitMcpCommandTool(name, "__restore_checkpoint", arguments, true, timeoutMs, authorization.oneTimeMutationGrant);
     }
     if (name == "lookdevpt.delete_checkpoint")
     {
-        return SubmitMcpCommandTool(name, "__delete_checkpoint", arguments, true, timeoutMs);
+        return SubmitMcpCommandTool(name, "__delete_checkpoint", arguments, true, timeoutMs, authorization.oneTimeMutationGrant);
     }
     if (name == "lookdevpt.start_benchmark")
     {
-        return SubmitMcpCommandTool(name, "__start_benchmark", arguments, true, timeoutMs);
+        return SubmitMcpCommandTool(name, "__start_benchmark", arguments, true, timeoutMs, authorization.oneTimeMutationGrant);
     }
     if (name == "lookdevpt.cancel_benchmark")
     {
-        return SubmitMcpCommandTool(name, "__cancel_benchmark", arguments, true, timeoutMs);
+        return SubmitMcpCommandTool(name, "__cancel_benchmark", arguments, true, timeoutMs, authorization.oneTimeMutationGrant);
     }
     if (name == "lookdevpt.reset_accumulation")
     {
-        return SubmitMcpCommandTool(name, "__reset_accumulation", arguments, true, timeoutMs);
+        return SubmitMcpCommandTool(name, "__reset_accumulation", arguments, true, timeoutMs, authorization.oneTimeMutationGrant);
     }
     if (name == "lookdevpt.reset_denoise_history")
     {
-        return SubmitMcpCommandTool(name, "__reset_denoise_history", arguments, true, timeoutMs);
+        return SubmitMcpCommandTool(name, "__reset_denoise_history", arguments, true, timeoutMs, authorization.oneTimeMutationGrant);
     }
     if (name == "lookdevpt.reset_reservoirs")
     {
-        return SubmitMcpCommandTool(name, "__reset_reservoirs", arguments, true, timeoutMs);
+        return SubmitMcpCommandTool(name, "__reset_reservoirs", arguments, true, timeoutMs, authorization.oneTimeMutationGrant);
     }
     if (name == "lookdevpt.reset_camera_view")
     {
-        return SubmitMcpCommandTool(name, "__reset_camera_view", arguments, true, timeoutMs);
+        return SubmitMcpCommandTool(name, "__reset_camera_view", arguments, true, timeoutMs, authorization.oneTimeMutationGrant);
     }
     if (name == "lookdevpt.set_camera_speed")
     {
-        return SubmitMcpCommandTool(name, "__set_camera_speed", arguments, true, timeoutMs);
+        return SubmitMcpCommandTool(name, "__set_camera_speed", arguments, true, timeoutMs, authorization.oneTimeMutationGrant);
     }
     if (name == "lookdevpt.fit_camera_to_scene")
     {
-        return SubmitMcpCommandTool(name, "__fit_camera_to_scene", arguments, true, timeoutMs);
+        return SubmitMcpCommandTool(name, "__fit_camera_to_scene", arguments, true, timeoutMs, authorization.oneTimeMutationGrant);
     }
     if (name == "lookdevpt.set_display_resolution")
     {
-        return SubmitMcpCommandTool(name, "__set_display_resolution", arguments, true, timeoutMs);
+        return SubmitMcpCommandTool(name, "__set_display_resolution", arguments, true, timeoutMs, authorization.oneTimeMutationGrant);
     }
     if (name == "lookdevpt.load_project")
     {
-        return SubmitMcpCommandTool(name, "__load_project", arguments, true, timeoutMs);
+        return SubmitMcpCommandTool(name, "__load_project", arguments, true, timeoutMs, authorization.oneTimeMutationGrant);
     }
     if (name == "lookdevpt.save_project")
     {
-        return SubmitMcpCommandTool(name, "__save_project", arguments, true, timeoutMs);
+        return SubmitMcpCommandTool(name, "__save_project", arguments, true, timeoutMs, authorization.oneTimeMutationGrant);
     }
     if (name == "lookdevpt.save_project_as")
     {
-        return SubmitMcpCommandTool(name, "__save_project_as", arguments, true, timeoutMs);
+        return SubmitMcpCommandTool(name, "__save_project_as", arguments, true, timeoutMs, authorization.oneTimeMutationGrant);
     }
 
     constexpr const char* prefix = "lookdevpt.";
@@ -4701,7 +4707,7 @@ mcp::ToolResult D3D12PathTracingBackend::CallMcpTool(const std::string& name, co
             actionMethod == "reset_material" || actionMethod == "save_material_variant" || actionMethod == "apply_material_variant" ||
             actionMethod == "delete_material_variant" || actionMethod == "set_material_view" || actionMethod == "set_color_management")
         {
-            return SubmitMcpActionTool(name, actionMethod, arguments, false, timeoutMs);
+            return SubmitMcpActionTool(name, actionMethod, arguments, false, timeoutMs, authorization.oneTimeMutationGrant);
         }
     }
 
@@ -4711,7 +4717,8 @@ mcp::ToolResult D3D12PathTracingBackend::CallMcpTool(const std::string& name, co
 std::optional<mcp::ToolResult> D3D12PathTracingBackend::CallMcpReviewTool(
     const std::string& name,
     const cld::JsonValue& arguments,
-    int timeoutMs)
+    int timeoutMs,
+    bool oneTimeMutationGrant)
 {
     if (name == "lookdevpt.audit_scene")
     {
@@ -4720,7 +4727,7 @@ std::optional<mcp::ToolResult> D3D12PathTracingBackend::CallMcpReviewTool(
     }
     if (name == "lookdevpt.probe_surfaces")
     {
-        return SubmitMcpCommandTool(name, "__probe_surfaces", arguments, false, timeoutMs);
+        return SubmitMcpCommandTool(name, "__probe_surfaces", arguments, false, timeoutMs, oneTimeMutationGrant);
     }
     if (name == "lookdevpt.compare_captures")
     {
@@ -5290,6 +5297,7 @@ void D3D12PathTracingBackend::StartMcpServer()
     SaveMcpUserSettings();
     if (m_mcpServer.Start(settings, this))
     {
+        ++m_mcpServerGeneration;
         m_mcpUiDiagnostics = "MCP server started.";
         // Populate every resource once before the server handles its first
         // read, then let the normal 30/10 Hz and revision throttles take over.
@@ -6810,7 +6818,7 @@ bool D3D12PathTracingBackend::FindMcpCapture(uint64_t id, std::string& base64Png
     return false;
 }
 
-mcp::ToolResult D3D12PathTracingBackend::SubmitMcpCommandTool(const std::string& toolName, const std::string& actionMethod, const cld::JsonValue& params, bool mutation, int timeoutMs)
+mcp::ToolResult D3D12PathTracingBackend::SubmitMcpCommandTool(const std::string& toolName, const std::string& actionMethod, const cld::JsonValue& params, bool mutation, int timeoutMs, bool oneTimeMutationGrant)
 {
     mcp::ServerSettings settings;
     {
@@ -6832,7 +6840,9 @@ mcp::ToolResult D3D12PathTracingBackend::SubmitMcpCommandTool(const std::string&
     request.summary = (mutation ? "Run " : "Read ") + toolName + " " + cld::JsonValueToJson(params);
     request.deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
 
-    const bool requiresApproval = mutation && settings.accessMode == mcp::AccessMode::ConfirmMutations;
+    const bool requiresApproval = mutation &&
+        settings.accessMode == mcp::AccessMode::ConfirmMutations &&
+        !oneTimeMutationGrant;
     mcp::SubmitResult submitted = m_mcpDispatcher.Submit(std::move(request), requiresApproval);
     if (!submitted.accepted)
     {
@@ -6851,7 +6861,7 @@ mcp::ToolResult D3D12PathTracingBackend::SubmitMcpCommandTool(const std::string&
     return tool;
 }
 
-mcp::ToolResult D3D12PathTracingBackend::SubmitMcpActionTool(const std::string& toolName, const std::string& actionMethod, const cld::JsonValue& params, bool validateOnly, int timeoutMs)
+mcp::ToolResult D3D12PathTracingBackend::SubmitMcpActionTool(const std::string& toolName, const std::string& actionMethod, const cld::JsonValue& params, bool validateOnly, int timeoutMs, bool oneTimeMutationGrant)
 {
     mcp::ServerSettings settings;
     {
@@ -6874,7 +6884,9 @@ mcp::ToolResult D3D12PathTracingBackend::SubmitMcpActionTool(const std::string& 
     request.summary = (validateOnly ? "Validate " : "Apply ") + actionMethod + " " + cld::JsonValueToJson(params);
     request.deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
 
-    const bool requiresApproval = mutation && settings.accessMode == mcp::AccessMode::ConfirmMutations;
+    const bool requiresApproval = mutation &&
+        settings.accessMode == mcp::AccessMode::ConfirmMutations &&
+        !oneTimeMutationGrant;
     mcp::SubmitResult submitted = m_mcpDispatcher.Submit(std::move(request), requiresApproval);
     if (!submitted.accepted)
     {

@@ -880,11 +880,16 @@ private:
     bool SaveStartupSettingsToDisk();
     bool DeleteStartupSettings();
     bool ApplyAction(const std::string& method, const cld::JsonValue& params, std::string& diagnostics, bool validateOnly);
-    mcp::ToolResult CallMcpTool(const std::string& name, const cld::JsonValue& arguments, int timeoutMs) override;
+    mcp::ToolResult CallMcpTool(
+        const std::string& name,
+        const cld::JsonValue& arguments,
+        int timeoutMs,
+        mcp::ToolCallAuthorization authorization) override;
     std::optional<mcp::ToolResult> CallMcpReviewTool(
         const std::string& name,
         const cld::JsonValue& arguments,
-        int timeoutMs);
+        int timeoutMs,
+        bool oneTimeMutationGrant);
     mcp::ResourceResult ReadMcpResource(const std::string& uri) override;
     size_t PendingMcpCommandCount() const override;
     void LoadMcpUserSettings();
@@ -896,7 +901,7 @@ private:
     std::string BuildMcpStateJson() const;
     std::string BuildMcpStatsJson() const;
     std::string BuildMcpMaterialsJson() const;
-    mcp::ToolResult SubmitMcpActionTool(const std::string& toolName, const std::string& actionMethod, const cld::JsonValue& params, bool validateOnly, int timeoutMs);
+    mcp::ToolResult SubmitMcpActionTool(const std::string& toolName, const std::string& actionMethod, const cld::JsonValue& params, bool validateOnly, int timeoutMs, bool oneTimeMutationGrant);
     mcp::ToolResult MakeMcpJsonToolResult(bool ok, const std::string& text, const std::string& structuredJson) const;
     bool CaptureViewportPng(std::string& base64Png, std::string& diagnostics);
     bool CaptureViewportPng(
@@ -948,7 +953,7 @@ private:
     std::string SceneFingerprint() const;
     std::string CameraFingerprint() const;
     void EnforceMcpArtifactBudget();
-    mcp::ToolResult SubmitMcpCommandTool(const std::string& toolName, const std::string& actionMethod, const cld::JsonValue& params, bool mutation, int timeoutMs);
+    mcp::ToolResult SubmitMcpCommandTool(const std::string& toolName, const std::string& actionMethod, const cld::JsonValue& params, bool mutation, int timeoutMs, bool oneTimeMutationGrant);
     mcp::CommandResult ExecuteMcpCommand(const mcp::CommandRequest& request);
     void CreateDescriptorHeap();
     void CreateOutputResources();
@@ -1109,6 +1114,7 @@ private:
     mcp::ServerSettings m_mcpSettings;
     mutable std::mutex m_mcpSettingsMutex;
     mcp::Server m_mcpServer;
+    std::uint64_t m_mcpServerGeneration = 0;
     mcp::Dispatcher m_mcpDispatcher;
     mutable std::mutex m_mcpSnapshotMutex;
     std::string m_mcpStateJson = "{}";

@@ -36,9 +36,18 @@ byte-bounded pages so long histories cannot exceed the 4 MiB IPC frame limit.
 The native UI currently displays the latest page; browsing older pages is a
 subsequent UI milestone.
 
-Same-instance MCP tool execution, one-time approval grants, an in-app model
-manager, and the integrated portable/offline exhibition pack are not
-implemented yet. See the
+The private same-instance MCP transport and native one-time approval boundary
+are now implemented. ChatHost accepts only the parent-owned
+`127.0.0.1` endpoint, preserves `readOnlyHint`, and requires a 30-second
+single-use grant bound to the MCP session, tool name, and canonical argument
+hash for every non-read-only call. The native endpoint rejects invalid or
+unauthorized requests before buffering their bodies, applies a 10-second
+receive deadline, and caps buffered bodies at 16 MiB per request and 32 MiB
+globally. Private legacy sessions are renewed after server restart or idle
+expiry and are best-effort deleted when ChatHost stops. The llama inference
+adapter does not yet emit or execute tool calls, so natural-language LookDev
+control remains the next milestone. The in-app model manager and integrated
+portable/offline exhibition pack are also still pending. See the
 [integrated architecture](docs/integrated-ai-architecture.ja.md).
 
 ### Manual local inference setup
@@ -412,7 +421,8 @@ Run the inherited and WinUI boundary tests from PowerShell:
 ```
 
 `TestAssistantHostBridge.ps1` is the Debug E2E test that explicitly selects the
-deterministic inference hook; ordinary app and ChatHost launches use the
+deterministic inference hook and omits the private MCP factory; ordinary app
+and ChatHost launches require the parent-owned MCP capability and use the
 configured llama.cpp path. The renderer command-queue tests cover command
 coalescing, FIFO barriers, indexed targets, and atomic immutable snapshot
 publication.

@@ -64,7 +64,7 @@ bool SendAll(SOCKET socket, const std::string& bytes)
     return true;
 }
 
-HttpResponse Exchange(uint16_t port, const std::vector<std::string>& parts)
+SOCKET ConnectClient(uint16_t port)
 {
     SOCKET client = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
     Require(client != INVALID_SOCKET, "client socket creation failed");
@@ -78,28 +78,11 @@ HttpResponse Exchange(uint16_t port, const std::vector<std::string>& parts)
     address.sin_port = htons(port);
     Require(connect(client, reinterpret_cast<sockaddr*>(&address), sizeof(address)) != SOCKET_ERROR,
         "client connection failed");
+    return client;
+}
 
-    for (const std::string& part : parts)
-    {
-        Require(SendAll(client, part), "client request send failed");
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
-    }
-    shutdown(client, SD_SEND);
-
-    std::string text;
-    char buffer[8192];
-    for (;;)
-    {
-        const int received = recv(client, buffer, static_cast<int>(sizeof(buffer)), 0);
-        if (received == 0)
-        {
-            break;
-        }
-        Require(received > 0, "client response read failed");
-        text.append(buffer, static_cast<size_t>(received));
-    }
-    closesocket(client);
-
+HttpResponse ParseHttpResponse(const std::string& text)
+{
     const size_t headerEnd = text.find("\r\n\r\n");
     Require(headerEnd != std::string::npos, "HTTP response headers were incomplete");
     std::istringstream headers(text.substr(0, headerEnd));
@@ -123,6 +106,59 @@ HttpResponse Exchange(uint16_t port, const std::vector<std::string>& parts)
     }
     response.body = text.substr(headerEnd + 4);
     return response;
+}
+
+HttpResponse ReceiveHttpResponse(SOCKET client)
+{
+    std::string text;
+    char buffer[8192];
+    for (;;)
+    {
+        const int received = recv(
+            client, buffer, static_cast<int>(sizeof(buffer)), 0);
+        if (received == 0)
+        {
+            break;
+        }
+        Require(received > 0, "client response read failed");
+        text.append(buffer, static_cast<size_t>(received));
+    }
+    closesocket(client);
+    return ParseHttpResponse(text);
+}
+
+HttpResponse Exchange(uint16_t port, const std::vector<std::string>& parts)
+{
+    SOCKET client = ConnectClient(port);
+    for (const std::string& part : parts)
+    {
+        Require(SendAll(client, part), "client request send failed");
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    shutdown(client, SD_SEND);
+    return ReceiveHttpResponse(client);
+}
+
+HttpResponse ExchangeHeadersOnly(
+    uint16_t port,
+    const std::string& headers)
+{
+    SOCKET client = ConnectClient(port);
+    Require(SendAll(client, headers), "client headers send failed");
+    return ReceiveHttpResponse(client);
+}
+
+SOCKET WaitForEitherResponse(SOCKET first, SOCKET second)
+{
+    fd_set readable;
+    FD_ZERO(&readable);
+    FD_SET(first, &readable);
+    FD_SET(second, &readable);
+    timeval timeout{};
+    timeout.tv_sec = 2;
+    const int ready = select(0, &readable, nullptr, nullptr, &timeout);
+    Require(ready > 0, "concurrent request response timed out");
+    return FD_ISSET(first, &readable) ? first : second;
 }
 
 uint16_t FindAvailablePort()
@@ -228,7 +264,11 @@ size_t CountOccurrences(const std::string& text, const std::string& pattern)
 class TestHost final : public mcp::IServerHost
 {
 public:
-    mcp::ToolResult CallMcpTool(const std::string& name, const cld::JsonValue&, int) override
+    mcp::ToolResult CallMcpTool(
+        const std::string& name,
+        const cld::JsonValue&,
+        int,
+        mcp::ToolCallAuthorization) override
     {
         ++toolCalls;
         correctTool.store(name == "lookdevpt.get_stats");
@@ -350,6 +390,40 @@ int main()
     Require(Exchange(port, { base + "Origin: https://example.invalid\r\nContent-Length: 0\r\n\r\n" }).status == 403,
         "invalid Origin did not return 403");
 
+    const std::string withheldBodyLength =
+        "Content-Length: 1048576\r\n\r\n";
+    const auto preflightStarted = std::chrono::steady_clock::now();
+    Require(ExchangeHeadersOnly(port,
+        "POST /mcp HTTP/1.1\r\nHost: 127.0.0.1\r\n" +
+        AuthorizationHeaders({}) + withheldBodyLength).status == 401,
+        "unauthenticated MCP request waited for its body");
+    Require(ExchangeHeadersOnly(port,
+        "POST /mcp HTTP/1.1\r\nHost: example.invalid\r\n" +
+        AuthorizationHeaders(token) + withheldBodyLength).status == 403,
+        "invalid Host request waited for its body");
+    Require(ExchangeHeadersOnly(port,
+        "POST /mcp HTTP/1.1\r\nHost: 127.0.0.1\r\n" +
+        AuthorizationHeaders(token) +
+        "Origin: https://example.invalid\r\n" +
+        withheldBodyLength).status == 403,
+        "invalid Origin request waited for its body");
+    Require(ExchangeHeadersOnly(port,
+        "POST /pair HTTP/1.1\r\nHost: 127.0.0.1\r\n" +
+        withheldBodyLength).status == 409,
+        "inactive pairing request waited for its body");
+    Require(ExchangeHeadersOnly(port,
+        "POST /unknown HTTP/1.1\r\nHost: 127.0.0.1\r\n" +
+        withheldBodyLength).status == 404,
+        "unknown endpoint waited for its body");
+    Require(ExchangeHeadersOnly(port,
+        "PATCH /mcp HTTP/1.1\r\nHost: 127.0.0.1\r\n" +
+        AuthorizationHeaders(token) + withheldBodyLength).status == 405,
+        "unsupported MCP method waited for its body");
+    Require(
+        std::chrono::steady_clock::now() - preflightStarted <
+            std::chrono::seconds(2),
+        "HTTP preflight rejection was not bounded before body receipt");
+
     HttpResponse deleteResponse = Exchange(port, ContentLengthRequest(
         "DELETE", token, {}, sessionHeaders));
     Require(deleteResponse.status == 202, "chunked-client session DELETE did not return 202");
@@ -380,6 +454,70 @@ int main()
     server.Stop();
     const auto idleStopElapsed = std::chrono::steady_clock::now() - idleStopStarted;
     Require(idleStopElapsed < std::chrono::seconds(2), "server stop blocked on an idle listening socket");
+
+    mcp::ServerSettings budgetSettings = settings;
+    budgetSettings.httpBodyBudgetBytesForTests = 1024;
+    budgetSettings.requestReceiveDeadlineMillisecondsForTests = 5000;
+    Require(server.Start(budgetSettings, &host),
+        "MCP server failed to start for body-budget test");
+    const std::string budgetHeaders =
+        "POST /mcp HTTP/1.1\r\nHost: 127.0.0.1\r\n" +
+        AuthorizationHeaders(token) +
+        "Content-Length: 1024\r\n\r\n";
+    SOCKET budgetClientA = ConnectClient(port);
+    SOCKET budgetClientB = ConnectClient(port);
+    Require(SendAll(budgetClientA, budgetHeaders),
+        "first budget request headers send failed");
+    Require(SendAll(budgetClientB, budgetHeaders),
+        "second budget request headers send failed");
+    const SOCKET rejectedBudgetClient =
+        WaitForEitherResponse(budgetClientA, budgetClientB);
+    const SOCKET heldBudgetClient = rejectedBudgetClient == budgetClientA
+        ? budgetClientB
+        : budgetClientA;
+    const HttpResponse budgetResponse =
+        ReceiveHttpResponse(rejectedBudgetClient);
+    closesocket(heldBudgetClient);
+    Require(budgetResponse.status == 503,
+        "global HTTP body budget did not reject a concurrent reservation");
+    server.Stop();
+
+    mcp::ServerSettings deadlineSettings = settings;
+    deadlineSettings.requestReceiveDeadlineMillisecondsForTests = 250;
+    Require(server.Start(deadlineSettings, &host),
+        "MCP server failed to start for receive-deadline test");
+    const auto slowHeaderStarted = std::chrono::steady_clock::now();
+    SOCKET slowHeaderClient = ConnectClient(port);
+    Require(SendAll(
+        slowHeaderClient,
+        "POST /mcp HTTP/1.1\r\nHost: 127.0.0.1\r\n"),
+        "slow-header request send failed");
+    const HttpResponse slowHeaderResponse =
+        ReceiveHttpResponse(slowHeaderClient);
+    Require(slowHeaderResponse.status == 408,
+        "slow HTTP headers were not terminated by the receive deadline");
+    Require(
+        std::chrono::steady_clock::now() - slowHeaderStarted <
+            std::chrono::seconds(2),
+        "slow HTTP header deadline was not bounded");
+
+    const auto slowBodyStarted = std::chrono::steady_clock::now();
+    SOCKET slowBodyClient = ConnectClient(port);
+    Require(SendAll(
+        slowBodyClient,
+        "POST /mcp HTTP/1.1\r\nHost: 127.0.0.1\r\n" +
+        AuthorizationHeaders(token) +
+        "Content-Length: 64\r\n\r\n{"),
+        "slow-body request send failed");
+    const HttpResponse slowBodyResponse =
+        ReceiveHttpResponse(slowBodyClient);
+    Require(slowBodyResponse.status == 408,
+        "slow HTTP body was not terminated by the receive deadline");
+    Require(
+        std::chrono::steady_clock::now() - slowBodyStarted <
+            std::chrono::seconds(2),
+        "slow HTTP body deadline was not bounded");
+    server.Stop();
 
     settings.authenticationMode = mcp::AuthenticationMode::None;
     settings.token.clear();

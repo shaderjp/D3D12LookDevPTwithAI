@@ -108,6 +108,7 @@ struct EditorSnapshot
     bool benchmarkFinished = false;
     bool projectDirty = false;
     bool mcpRunning = false;
+    std::uint64_t mcpGeneration = 0;
     bool renderOnly = false;
     std::wstring sceneName = L"Preview cube";
     std::wstring scenePath;

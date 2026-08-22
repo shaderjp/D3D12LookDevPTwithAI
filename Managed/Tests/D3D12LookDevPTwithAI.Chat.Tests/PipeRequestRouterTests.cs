@@ -6,6 +6,7 @@ using D3D12LookDevPTwithAI.Chat.Core;
 using D3D12LookDevPTwithAI.Chat.Infrastructure;
 using D3D12LookDevPTwithAI.ChatHost;
 using D3D12LookDevPTwithAI.ChatHost.Inference;
+using D3D12LookDevPTwithAI.ChatHost.Mcp;
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Hosting;
 
@@ -13,6 +14,70 @@ namespace D3D12LookDevPTwithAI.Chat.Tests;
 
 public sealed class PipeRequestRouterTests
 {
+    [Fact]
+    public async Task Initialize_validates_private_mcp_catalog_and_stop_disposes_the_client()
+    {
+        var mcpClient = new FakeSameInstanceMcpClient();
+        var factory = new FakeSameInstanceMcpClientFactory(_ => mcpClient);
+        var fixture = new RouterFixture(mcpClientFactory: factory);
+        try
+        {
+            await fixture.Router.HandleAsync(
+                fixture.Request(
+                    "initialize",
+                    new InitializeRequest(
+                        "instance-1",
+                        "project-1",
+                        "http://127.0.0.1:43123/mcp",
+                        "private-token")),
+                fixture.Peer);
+
+            var response = await fixture.Peer.ReadAsync();
+            Assert.Null(response.Error);
+            Assert.Equal(1, mcpClient.GetToolsCallCount);
+            Assert.Equal("http://127.0.0.1:43123/mcp", factory.Endpoint);
+            Assert.Equal("private-token", factory.BearerToken);
+
+            await fixture.Coordinator.StopAsync();
+            Assert.True(mcpClient.IsDisposed);
+        }
+        finally
+        {
+            await fixture.DisposeAsync();
+        }
+    }
+
+    [Fact]
+    public async Task Failed_private_mcp_initialize_is_sanitized_disposed_and_can_retry()
+    {
+        const string endpoint = "http://127.0.0.1:43124/mcp";
+        const string bearerToken = "private-token-marker";
+        const string privatePath = "C:\\private\\scene-marker.gltf";
+        var failedClient = new FakeSameInstanceMcpClient(
+            new InvalidOperationException(endpoint + bearerToken + privatePath));
+        var succeedingClient = new FakeSameInstanceMcpClient();
+        var clients = new Queue<ISameInstanceMcpClient>([failedClient, succeedingClient]);
+        var factory = new FakeSameInstanceMcpClientFactory(_ => clients.Dequeue());
+        await using var fixture = new RouterFixture(mcpClientFactory: factory);
+        var request = new InitializeRequest("instance-1", "project-1", endpoint, bearerToken);
+
+        await fixture.Router.HandleAsync(fixture.Request("initialize", request), fixture.Peer);
+        var failed = await fixture.Peer.ReadAsync();
+
+        Assert.Equal("mcp_initialization_failed", failed.Error?.Code);
+        Assert.True(failed.Error?.Retryable);
+        var serialized = JsonSerializer.Serialize(failed, PipeJson.SerializerOptions);
+        Assert.DoesNotContain(endpoint, serialized, StringComparison.Ordinal);
+        Assert.DoesNotContain(bearerToken, serialized, StringComparison.Ordinal);
+        Assert.DoesNotContain(privatePath, serialized, StringComparison.Ordinal);
+        Assert.True(failedClient.IsDisposed);
+
+        await fixture.Router.HandleAsync(fixture.Request("initialize", request), fixture.Peer);
+        var succeeded = await fixture.Peer.ReadAsync();
+        Assert.Null(succeeded.Error);
+        Assert.Equal(1, succeedingClient.GetToolsCallCount);
+    }
+
     [Fact]
     public async Task Initialize_and_conversation_requests_operate_on_the_persisted_store()
     {
@@ -710,7 +775,8 @@ public sealed class PipeRequestRouterTests
         public RouterFixture(
             IChatInferenceRuntime? inferenceRuntime = null,
             bool failHistoryRead = false,
-            Func<IConversationStore, IConversationStore>? decorateConversationStore = null)
+            Func<IConversationStore, IConversationStore>? decorateConversationStore = null,
+            ISameInstanceMcpClientFactory? mcpClientFactory = null)
         {
             Store = new SqliteConversationStore(new AppPaths(_dataDirectory));
             IConversationStore coordinatorStore = failHistoryRead
@@ -720,7 +786,8 @@ public sealed class PipeRequestRouterTests
                 coordinatorStore = decorateConversationStore(coordinatorStore);
             Coordinator = new ChatCoordinator(
                 coordinatorStore,
-                inferenceRuntime ?? new DeterministicChatInferenceRuntime());
+                inferenceRuntime ?? new DeterministicChatInferenceRuntime(),
+                mcpClientFactory);
             Router = new PipeRequestRouter(Coordinator, _lifetime);
         }
 
@@ -790,6 +857,57 @@ public sealed class PipeRequestRouterTests
         {
             await Coordinator.StopAsync();
             if (Directory.Exists(_dataDirectory)) Directory.Delete(_dataDirectory, recursive: true);
+        }
+    }
+
+    private sealed class FakeSameInstanceMcpClientFactory(
+        Func<(string Endpoint, string BearerToken), ISameInstanceMcpClient> create)
+        : ISameInstanceMcpClientFactory
+    {
+        public string? Endpoint { get; private set; }
+        public string? BearerToken { get; private set; }
+
+        public ISameInstanceMcpClient Create(string endpoint, string bearerToken)
+        {
+            Endpoint = endpoint;
+            BearerToken = bearerToken;
+            return create((endpoint, bearerToken));
+        }
+    }
+
+    private sealed class FakeSameInstanceMcpClient(Exception? catalogFailure = null)
+        : ISameInstanceMcpClient
+    {
+        public int GetToolsCallCount { get; private set; }
+        public bool IsDisposed { get; private set; }
+
+        public Task<IReadOnlyList<SameInstanceMcpTool>> GetToolsAsync(
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            GetToolsCallCount++;
+            return catalogFailure is null
+                ? Task.FromResult<IReadOnlyList<SameInstanceMcpTool>>([])
+                : Task.FromException<IReadOnlyList<SameInstanceMcpTool>>(catalogFailure);
+        }
+
+        public Task<SameInstanceMcpToolResult> CallToolAsync(
+            string toolName,
+            JsonElement arguments,
+            string? approvalGrant = null,
+            CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
+        public Task<SameInstanceMcpApprovalBinding> CreateApprovalBindingAsync(
+            string toolName,
+            JsonElement arguments,
+            CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
+        public ValueTask DisposeAsync()
+        {
+            IsDisposed = true;
+            return ValueTask.CompletedTask;
         }
     }
 

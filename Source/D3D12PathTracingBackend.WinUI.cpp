@@ -1964,6 +1964,7 @@ D3D12PathTracingBackend::CaptureEditorSnapshot() const
 
     mcp::ServerStatus const status = m_mcpServer.GetStatus();
     snapshot.mcpRunning = status.running;
+    snapshot.mcpGeneration = m_mcpServerGeneration;
     snapshot.mcpEndpoint = Widen(status.endpoint);
     snapshot.mcpLastError = Widen(status.lastError);
     values[L"mcp.sessions"] =

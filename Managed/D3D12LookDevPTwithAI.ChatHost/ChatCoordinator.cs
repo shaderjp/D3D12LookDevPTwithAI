@@ -1,13 +1,16 @@
 using System.Collections.Concurrent;
 using System.Text;
+using System.Text.Json;
 using D3D12LookDevPTwithAI.Chat.Core;
+using D3D12LookDevPTwithAI.ChatHost.Inference;
 
 namespace D3D12LookDevPTwithAI.ChatHost;
 
-public sealed class ChatCoordinator(IConversationStore conversationStore)
+public sealed class ChatCoordinator(
+    IConversationStore conversationStore,
+    IChatInferenceRuntime inferenceRuntime)
 {
-    private const int MaximumInputCharacters = 64 * 1024;
-    private const int PlaceholderChunkCharacters = 12;
+    private const int InferenceHistoryMessageLimit = 64;
     private static readonly TimeSpan TerminalEventWriteTimeout = TimeSpan.FromSeconds(2);
     private readonly object _gate = new();
     private readonly ConcurrentDictionary<Guid, TaskCompletionSource<ApprovalResolution>> _approvals = new();
@@ -79,8 +82,10 @@ public sealed class ChatCoordinator(IConversationStore conversationStore)
     {
         var (projectContextKey, _) = GetInitializedState();
         var title = string.IsNullOrWhiteSpace(request.Title) ? "新しいチャット" : request.Title.Trim();
-        if (title.Length > 200)
-            throw new ChatRequestException("invalid_title", "Conversation title must not exceed 200 characters.");
+        if (title.Length > PipeProtocol.MaximumConversationTitleCharacters)
+            throw new ChatRequestException(
+                "invalid_title",
+                $"Conversation title must not exceed {PipeProtocol.MaximumConversationTitleCharacters} characters.");
 
         var conversation = await conversationStore.CreateAsync(
             projectContextKey,
@@ -94,6 +99,18 @@ public sealed class ChatCoordinator(IConversationStore conversationStore)
         ConversationSelectRequest request,
         CancellationToken cancellationToken = default)
     {
+        if (request.ConversationId == Guid.Empty)
+            throw new ChatRequestException("invalid_conversation", "conversationId is required.");
+        if (request.BeforeMessageSequence is <= 0 or > PipeProtocol.MaximumExactJsonInteger)
+            throw new ChatRequestException(
+                "invalid_history_cursor",
+                $"beforeMessageSequence must be between 1 and {PipeProtocol.MaximumExactJsonInteger}.");
+        var pageSize = request.PageSize ?? PipeProtocol.DefaultConversationPageSize;
+        if (pageSize <= 0 || pageSize > PipeProtocol.MaximumConversationPageSize)
+            throw new ChatRequestException(
+                "invalid_page_size",
+                $"pageSize must be between 1 and {PipeProtocol.MaximumConversationPageSize}.");
+
         var (projectContextKey, _) = GetInitializedState();
         var conversation = await conversationStore.GetAsync(
             projectContextKey,
@@ -102,12 +119,15 @@ public sealed class ChatCoordinator(IConversationStore conversationStore)
         if (conversation is null)
             throw new ChatRequestException("conversation_not_found", "The requested conversation does not exist.");
 
-        var messages = await conversationStore.GetMessagesAsync(
+        var candidates = await conversationStore.ListMessagesBeforeAsync(
             projectContextKey,
             request.ConversationId,
+            request.BeforeMessageSequence,
+            checked(pageSize + 1),
             cancellationToken).ConfigureAwait(false);
+        var page = BuildConversationPage(conversation, candidates, pageSize);
         lock (_gate) _activeConversationId = conversation.Id;
-        return new ConversationSelectResult(conversation, messages);
+        return page;
     }
 
     public async Task<PreparedTurn> PrepareTurnAsync(
@@ -121,8 +141,10 @@ public sealed class ChatCoordinator(IConversationStore conversationStore)
             throw new ChatRequestException("invalid_turn", "turnId is required.");
         if (string.IsNullOrWhiteSpace(request.Text))
             throw new ChatRequestException("invalid_turn", "Turn text is required.");
-        if (request.Text.Length > MaximumInputCharacters)
-            throw new ChatRequestException("invalid_turn", $"Turn text must not exceed {MaximumInputCharacters} characters.");
+        if (request.Text.Length > ChatInferenceLimits.MaximumInputCharacters)
+            throw new ChatRequestException(
+                "invalid_turn",
+                $"Turn text must not exceed {ChatInferenceLimits.MaximumInputCharacters} characters.");
 
         var (projectContextKey, activeConversationId) = GetInitializedState();
         if (activeConversationId != request.ConversationId)
@@ -149,27 +171,32 @@ public sealed class ChatCoordinator(IConversationStore conversationStore)
                 throw new ChatRequestException("conversation_not_selected", "Select the conversation before sending a turn.");
 
             var cancellation = CancellationTokenSource.CreateLinkedTokenSource(hostCancellationToken);
-            var activeTurn = new ActiveTurn(request.TurnId, cancellation);
+            var activeTurn = new ActiveTurn(
+                request.TurnId,
+                cancellation,
+                turnCancellationToken => RunInferenceTurnAsync(
+                    projectContextKey,
+                    request,
+                    requestId,
+                    peer,
+                    turnCancellationToken),
+                completedTurn =>
+                {
+                    lock (_gate)
+                    {
+                        if (ReferenceEquals(_activeTurn, completedTurn)) _activeTurn = null;
+                    }
+                });
             _activeTurn = activeTurn;
             return new PreparedTurn(
-                start: () =>
-                {
-                    var task = RunPlaceholderTurnAsync(
-                        activeTurn,
-                        projectContextKey,
-                        request,
-                        requestId,
-                        peer);
-                    activeTurn.Task = task;
-                },
+                start: activeTurn.Start,
                 abort: () =>
                 {
                     lock (_gate)
                     {
                         if (ReferenceEquals(_activeTurn, activeTurn)) _activeTurn = null;
                     }
-                    activeTurn.Cancellation.Cancel();
-                    activeTurn.Cancellation.Dispose();
+                    activeTurn.Abort();
                 });
         }
     }
@@ -230,32 +257,41 @@ public sealed class ChatCoordinator(IConversationStore conversationStore)
         }
         if (active is not null)
         {
-            try { await active.Task.WaitAsync(cancellationToken).ConfigureAwait(false); }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested || active.Cancellation.IsCancellationRequested) { }
+            try { await active.Completion.WaitAsync(cancellationToken).ConfigureAwait(false); }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested || active.IsCancellationRequested) { }
         }
     }
 
-    private async Task RunPlaceholderTurnAsync(
-        ActiveTurn activeTurn,
+    private async Task RunInferenceTurnAsync(
         string projectContextKey,
         SendTurnRequest request,
         Guid requestId,
-        IPipePeer peer)
+        IPipePeer peer,
+        CancellationToken cancellationToken)
     {
         await Task.Yield();
-        var cancellationToken = activeTurn.Cancellation.Token;
-        var userMessage = new ConversationMessage(
-            Guid.NewGuid(),
-            request.ConversationId,
-            "user",
-            request.Text.Trim(),
-            DateTimeOffset.UtcNow);
         var assistantMessageId = Guid.NewGuid();
-        var response = $"[Local ChatHost placeholder] {request.Text.Trim()}";
         var visibleResponse = new StringBuilder();
         var assistantStored = false;
         try
         {
+            var persistedHistory = await conversationStore.ListMessagesBeforeAsync(
+                projectContextKey,
+                request.ConversationId,
+                beforeMessageSequence: null,
+                InferenceHistoryMessageLimit,
+                cancellationToken).ConfigureAwait(false);
+            var inferenceRequest = new ChatInferenceRequest(
+                request.ConversationId,
+                projectContextKey,
+                BuildInferenceHistory(persistedHistory),
+                request.Text.Trim());
+            var userMessage = new ConversationMessage(
+                Guid.NewGuid(),
+                request.ConversationId,
+                "user",
+                request.Text.Trim(),
+                DateTimeOffset.UtcNow);
             await conversationStore.AppendMessageAsync(
                 projectContextKey,
                 userMessage,
@@ -265,24 +301,62 @@ public sealed class ChatCoordinator(IConversationStore conversationStore)
                 "messageAdded",
                 new MessageAddedEvent(request.TurnId, userMessage),
                 cancellationToken).ConfigureAwait(false);
+            var runtimeStatus = await inferenceRuntime.GetStatusAsync(
+                cancellationToken).ConfigureAwait(false);
+            if (!IsSafeRuntimeToken(
+                    runtimeStatus.RuntimeId,
+                    ChatInferenceLimits.MaximumRuntimeIdentifierCharacters) ||
+                !IsSafeRuntimeToken(
+                    runtimeStatus.State,
+                    ChatInferenceLimits.MaximumRuntimeStateCharacters))
+            {
+                throw new ChatInferenceException(
+                    "invalid_inference_status",
+                    "The local inference runtime returned an invalid status.");
+            }
+            if (!runtimeStatus.IsReady)
+            {
+                throw new ChatInferenceException(
+                    "inference_runtime_not_ready",
+                    "The local inference runtime is not ready.",
+                    retryable: true);
+            }
             await peer.SendEventAsync(
                 requestId,
                 "runtimeState",
-                new RuntimeStateEvent("ready"),
+                new RuntimeStateEvent(runtimeStatus.State, runtimeStatus.RuntimeId),
                 cancellationToken).ConfigureAwait(false);
 
-            for (var offset = 0; offset < response.Length; offset += PlaceholderChunkCharacters)
+            await foreach (var chunk in inferenceRuntime.StreamAsync(
+                inferenceRequest,
+                cancellationToken).WithCancellation(cancellationToken).ConfigureAwait(false))
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                var length = Math.Min(PlaceholderChunkCharacters, response.Length - offset);
-                var delta = response.Substring(offset, length);
-                visibleResponse.Append(delta);
+                if (string.IsNullOrEmpty(chunk.Text))
+                {
+                    throw new ChatInferenceException(
+                        "invalid_inference_output",
+                        "The local inference runtime returned an empty text chunk.");
+                }
+                if (visibleResponse.Length + chunk.Text.Length >
+                    ChatInferenceLimits.MaximumOutputCharacters)
+                {
+                    throw new ChatInferenceException(
+                        "inference_output_too_large",
+                        $"The local response exceeded {ChatInferenceLimits.MaximumOutputCharacters} characters.");
+                }
+                visibleResponse.Append(chunk.Text);
                 await peer.SendEventAsync(
                     requestId,
                     "textDelta",
-                    new TextDeltaEvent(request.TurnId, assistantMessageId, delta),
+                    new TextDeltaEvent(request.TurnId, assistantMessageId, chunk.Text),
                     cancellationToken).ConfigureAwait(false);
-                await Task.Delay(15, cancellationToken).ConfigureAwait(false);
+            }
+            if (visibleResponse.Length == 0)
+            {
+                throw new ChatInferenceException(
+                    "empty_inference_response",
+                    "The local inference runtime returned no response.");
             }
 
             var assistantMessage = new ConversationMessage(
@@ -338,6 +412,19 @@ public sealed class ChatCoordinator(IConversationStore conversationStore)
                 "completed",
                 new TurnCompletedEvent(request.TurnId, "cancelled")).ConfigureAwait(false);
         }
+        catch (ChatInferenceException exception)
+        {
+            await SendWithoutTurnCancellationAsync(
+                peer,
+                requestId,
+                "error",
+                BuildPublicInferenceError(request.TurnId, exception)).ConfigureAwait(false);
+            await SendWithoutTurnCancellationAsync(
+                peer,
+                requestId,
+                "completed",
+                new TurnCompletedEvent(request.TurnId, "failed")).ConfigureAwait(false);
+        }
         catch (Exception)
         {
             await SendWithoutTurnCancellationAsync(
@@ -351,14 +438,161 @@ public sealed class ChatCoordinator(IConversationStore conversationStore)
                 "completed",
                 new TurnCompletedEvent(request.TurnId, "failed")).ConfigureAwait(false);
         }
-        finally
+    }
+
+    private static ErrorEvent BuildPublicInferenceError(
+        Guid turnId,
+        ChatInferenceException exception) => exception.Code switch
         {
-            lock (_gate)
+            "invalid_inference_status" => new ErrorEvent(
+                turnId,
+                "invalid_inference_status",
+                "The local inference runtime returned an invalid status."),
+            "inference_runtime_not_ready" => new ErrorEvent(
+                turnId,
+                "inference_runtime_not_ready",
+                "The local inference runtime is not ready."),
+            "invalid_inference_output" => new ErrorEvent(
+                turnId,
+                "invalid_inference_output",
+                "The local inference runtime returned invalid output."),
+            "inference_output_too_large" => new ErrorEvent(
+                turnId,
+                "inference_output_too_large",
+                "The local inference response exceeded the supported size."),
+            "empty_inference_response" => new ErrorEvent(
+                turnId,
+                "empty_inference_response",
+                "The local inference runtime returned no response."),
+            "invalid_inference_request" => new ErrorEvent(
+                turnId,
+                "invalid_inference_request",
+                "The local inference request is invalid."),
+            _ => new ErrorEvent(
+                turnId,
+                "inference_runtime_failed",
+                "The local inference runtime failed."),
+        };
+
+    private static bool IsSafeRuntimeToken(string? value, int maximumCharacters)
+    {
+        if (string.IsNullOrWhiteSpace(value) || value.Length > maximumCharacters)
+            return false;
+        foreach (var character in value)
+        {
+            if ((character is >= 'a' and <= 'z') ||
+                (character is >= 'A' and <= 'Z') ||
+                (character is >= '0' and <= '9') ||
+                character is '-' or '_' or '.')
             {
-                if (ReferenceEquals(_activeTurn, activeTurn)) _activeTurn = null;
+                continue;
             }
-            activeTurn.Cancellation.Dispose();
+            return false;
         }
+        return true;
+    }
+
+    private static IReadOnlyList<ChatInferenceMessage> BuildInferenceHistory(
+        IReadOnlyList<SequencedConversationMessage> newestFirst)
+    {
+        var selectedNewestFirst = new List<ChatInferenceMessage>(newestFirst.Count);
+        var historyCharacters = 0;
+        foreach (var sequenced in newestFirst)
+        {
+            var message = sequenced.Message;
+            if (message.IsError)
+                continue;
+            var role = message.Role switch
+            {
+                "system" => ChatInferenceRole.System,
+                "user" => ChatInferenceRole.User,
+                "assistant" => ChatInferenceRole.Assistant,
+                _ => (ChatInferenceRole?)null,
+            };
+            if (!role.HasValue || string.IsNullOrEmpty(message.Content))
+                continue;
+            if (historyCharacters + message.Content.Length >
+                ChatInferenceLimits.MaximumHistoryCharacters)
+            {
+                break;
+            }
+            selectedNewestFirst.Add(new ChatInferenceMessage(
+                role.Value,
+                message.Content));
+            historyCharacters += message.Content.Length;
+        }
+        selectedNewestFirst.Reverse();
+        return selectedNewestFirst;
+    }
+
+    private static ConversationSelectResult BuildConversationPage(
+        ConversationSummary conversation,
+        IReadOnlyList<SequencedConversationMessage> candidatesNewestFirst,
+        int pageSize)
+    {
+        var sizingResult = new ConversationSelectResult(
+            conversation,
+            Array.Empty<ConversationMessage>(),
+            PipeProtocol.MaximumExactJsonInteger,
+            HasMoreMessages: false);
+        var fixedPayloadBytes = JsonSerializer.SerializeToUtf8Bytes(
+            sizingResult,
+            PipeJson.SerializerOptions).Length - 2;
+        if (fixedPayloadBytes + 2 > PipeProtocol.MaximumConversationSelectPayloadBytes)
+            throw new ChatRequestException(
+                "history_page_too_large",
+                "The conversation metadata exceeds the supported history page size.");
+
+        var selectedNewestFirst = new List<SequencedConversationMessage>(
+            Math.Min(pageSize, candidatesNewestFirst.Count));
+        var messageArrayBytes = 2;
+        foreach (var candidate in candidatesNewestFirst.Take(pageSize))
+        {
+            if (candidate.Sequence <= 0 || candidate.Sequence > PipeProtocol.MaximumExactJsonInteger)
+                throw new ChatRequestException(
+                    "history_cursor_out_of_range",
+                    "The stored history sequence exceeds the supported cursor range.");
+
+            var messageBytes = JsonSerializer.SerializeToUtf8Bytes(
+                candidate.Message,
+                PipeJson.SerializerOptions).Length;
+            var separatorBytes = selectedNewestFirst.Count == 0 ? 0 : 1;
+            if (fixedPayloadBytes + messageArrayBytes + separatorBytes + messageBytes >
+                PipeProtocol.MaximumConversationSelectPayloadBytes)
+            {
+                break;
+            }
+            selectedNewestFirst.Add(candidate);
+            messageArrayBytes += separatorBytes + messageBytes;
+        }
+
+        if (selectedNewestFirst.Count == 0 && candidatesNewestFirst.Count != 0)
+            throw new ChatRequestException(
+                "history_message_too_large",
+                "A stored conversation message exceeds the supported history page size.");
+
+        var hasMoreMessages = selectedNewestFirst.Count < candidatesNewestFirst.Count;
+        var olderBeforeMessageSequence = hasMoreMessages
+            ? selectedNewestFirst[^1].Sequence
+            : (long?)null;
+        var messages = selectedNewestFirst
+            .AsEnumerable()
+            .Reverse()
+            .Select(candidate => candidate.Message)
+            .ToArray();
+        var result = new ConversationSelectResult(
+            conversation,
+            messages,
+            olderBeforeMessageSequence,
+            hasMoreMessages);
+        if (JsonSerializer.SerializeToUtf8Bytes(result, PipeJson.SerializerOptions).Length >
+            PipeProtocol.MaximumConversationSelectPayloadBytes)
+        {
+            throw new ChatRequestException(
+                "history_page_too_large",
+                "The conversation history page exceeds the supported response size.");
+        }
+        return result;
     }
 
     private static async Task SendWithoutTurnCancellationAsync(
@@ -384,23 +618,126 @@ public sealed class ChatCoordinator(IConversationStore conversationStore)
         }
     }
 
-    private sealed class ActiveTurn(Guid turnId, CancellationTokenSource cancellation)
+    private sealed class ActiveTurn
     {
-        public Guid TurnId { get; } = turnId;
-        public CancellationTokenSource Cancellation { get; } = cancellation;
-        public Task Task { get; set; } = Task.CompletedTask;
+        private const int Prepared = 0;
+        private const int Started = 1;
+        private const int Aborted = 2;
+        private const int CancelledBeforeStart = 3;
+        private readonly CancellationTokenSource _cancellation;
+        private readonly CancellationToken _cancellationToken;
+        private readonly TaskCompletionSource _completion = new(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly Func<CancellationToken, Task> _operation;
+        private readonly Action<ActiveTurn> _onCompleted;
+        private int _disposition;
+        private int _completionSignaled;
+
+        public ActiveTurn(
+            Guid turnId,
+            CancellationTokenSource cancellation,
+            Func<CancellationToken, Task> operation,
+            Action<ActiveTurn> onCompleted)
+        {
+            TurnId = turnId;
+            _cancellation = cancellation;
+            _cancellationToken = cancellation.Token;
+            _operation = operation;
+            _onCompleted = onCompleted;
+        }
+
+        public Guid TurnId { get; }
+        public Task Completion => _completion.Task;
+        public bool IsCancellationRequested => _cancellationToken.IsCancellationRequested;
+
+        public void Start()
+        {
+            var previous = Interlocked.CompareExchange(
+                ref _disposition,
+                Started,
+                Prepared);
+            if (previous == CancelledBeforeStart)
+                return;
+            if (previous != Prepared)
+                throw new InvalidOperationException("The active turn has already been handled.");
+
+            Task operation;
+            try
+            {
+                operation = _operation(_cancellationToken);
+            }
+            catch (Exception exception)
+            {
+                operation = Task.FromException(exception);
+            }
+            _ = ObserveOperationAsync(operation);
+        }
+
+        public void Abort()
+        {
+            var previous = Interlocked.CompareExchange(
+                ref _disposition,
+                Aborted,
+                Prepared);
+            if (previous == Prepared)
+            {
+                TryCancel();
+                CompleteSuccessfully();
+            }
+        }
 
         public bool TryCancel()
         {
             try
             {
-                Cancellation.Cancel();
+                _cancellation.Cancel();
+                if (Interlocked.CompareExchange(
+                        ref _disposition,
+                        CancelledBeforeStart,
+                        Prepared) == Prepared)
+                {
+                    CompleteSuccessfully();
+                }
                 return true;
             }
             catch (ObjectDisposedException)
             {
                 return false;
             }
+        }
+
+        private async Task ObserveOperationAsync(Task operation)
+        {
+            try
+            {
+                await operation.ConfigureAwait(false);
+                CompleteSuccessfully();
+            }
+            catch (OperationCanceledException) when (_cancellationToken.IsCancellationRequested)
+            {
+                CompleteCanceled();
+            }
+            catch (Exception exception)
+            {
+                CompleteWithException(exception);
+            }
+        }
+
+        private void CompleteSuccessfully() => Complete(() => _completion.TrySetResult());
+
+        private void CompleteCanceled() =>
+            Complete(() => _completion.TrySetCanceled(_cancellationToken));
+
+        private void CompleteWithException(Exception exception) =>
+            Complete(() => _completion.TrySetException(exception));
+
+        private void Complete(Action signalCompletion)
+        {
+            if (Interlocked.Exchange(ref _completionSignaled, 1) != 0)
+                return;
+            _onCompleted(this);
+            _cancellation.Dispose();
+            signalCompletion();
         }
     }
 

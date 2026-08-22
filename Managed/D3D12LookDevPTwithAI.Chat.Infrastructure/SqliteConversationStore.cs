@@ -6,7 +6,7 @@ namespace D3D12LookDevPTwithAI.Chat.Infrastructure;
 
 public sealed class SqliteConversationStore(IAppPaths paths) : IConversationStore
 {
-    private const int CurrentSchemaVersion = 1;
+    private const int CurrentSchemaVersion = 2;
     private readonly SemaphoreSlim _initializeGate = new(1, 1);
     private volatile bool _initialized;
 
@@ -36,8 +36,8 @@ public sealed class SqliteConversationStore(IAppPaths paths) : IConversationStor
             if (version > CurrentSchemaVersion)
                 throw new InvalidOperationException($"The chat history schema version {version} is newer than supported version {CurrentSchemaVersion}.");
 
-            if (version == 0)
-                await ApplyVersionOneAsync(connection, cancellationToken).ConfigureAwait(false);
+            if (version < CurrentSchemaVersion)
+                await ApplyMigrationsAsync(connection, version, cancellationToken).ConfigureAwait(false);
 
             _initialized = true;
         }
@@ -109,6 +109,10 @@ public sealed class SqliteConversationStore(IAppPaths paths) : IConversationStor
             string.IsNullOrWhiteSpace(title) ? "新しいチャット" : title.Trim(),
             now,
             now);
+        if (conversation.Title.Length > PipeProtocol.MaximumConversationTitleCharacters)
+            throw new ArgumentException(
+                $"Conversation title must not exceed {PipeProtocol.MaximumConversationTitleCharacters} characters.",
+                nameof(title));
         await using var connection = CreateConnection();
         await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
         var command = connection.CreateCommand();
@@ -141,7 +145,7 @@ public sealed class SqliteConversationStore(IAppPaths paths) : IConversationStor
             SELECT id, conversation_id, role, content, created_at, is_error
             FROM messages
             WHERE project_context_key = $context AND conversation_id = $conversation
-            ORDER BY created_at, message_sequence
+            ORDER BY message_sequence
             """;
         command.Parameters.AddWithValue("$context", projectContextKey);
         command.Parameters.AddWithValue("$conversation", conversationId.ToString("D"));
@@ -159,6 +163,70 @@ public sealed class SqliteConversationStore(IAppPaths paths) : IConversationStor
         return result;
     }
 
+    public async Task<IReadOnlyList<SequencedConversationMessage>> ListMessagesBeforeAsync(
+        string projectContextKey,
+        Guid conversationId,
+        long? beforeMessageSequence,
+        int maximumMessages,
+        CancellationToken cancellationToken = default)
+    {
+        ValidateProjectContextKey(projectContextKey);
+        if (conversationId == Guid.Empty)
+            throw new ArgumentException("A conversation identifier is required.", nameof(conversationId));
+        if (beforeMessageSequence is <= 0 or > PipeProtocol.MaximumExactJsonInteger)
+            throw new ArgumentOutOfRangeException(
+                nameof(beforeMessageSequence),
+                $"The message sequence cursor must be between 1 and {PipeProtocol.MaximumExactJsonInteger}.");
+        if (maximumMessages <= 0 ||
+            maximumMessages > PipeProtocol.MaximumConversationPageSize + 1)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(maximumMessages),
+                $"The message page query must request between 1 and {PipeProtocol.MaximumConversationPageSize + 1} messages.");
+        }
+        await InitializeAsync(cancellationToken).ConfigureAwait(false);
+
+        var result = new List<SequencedConversationMessage>();
+        await using var connection = CreateConnection();
+        await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
+        var command = connection.CreateCommand();
+        command.CommandText = beforeMessageSequence.HasValue
+            ? """
+                SELECT message_sequence, id, conversation_id, role, content, created_at, is_error
+                FROM messages
+                WHERE project_context_key = $context AND conversation_id = $conversation
+                    AND message_sequence < $before
+                ORDER BY message_sequence DESC
+                LIMIT $limit
+                """
+            : """
+                SELECT message_sequence, id, conversation_id, role, content, created_at, is_error
+                FROM messages
+                WHERE project_context_key = $context AND conversation_id = $conversation
+                ORDER BY message_sequence DESC
+                LIMIT $limit
+                """;
+        command.Parameters.AddWithValue("$context", projectContextKey);
+        command.Parameters.AddWithValue("$conversation", conversationId.ToString("D"));
+        command.Parameters.AddWithValue("$limit", maximumMessages);
+        if (beforeMessageSequence.HasValue)
+            command.Parameters.AddWithValue("$before", beforeMessageSequence.Value);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            result.Add(new SequencedConversationMessage(
+                reader.GetInt64(0),
+                new ConversationMessage(
+                    Guid.Parse(reader.GetString(1)),
+                    Guid.Parse(reader.GetString(2)),
+                    reader.GetString(3),
+                    reader.GetString(4),
+                    ParseTimestamp(reader.GetString(5)),
+                    reader.GetInt32(6) != 0)));
+        }
+        return result;
+    }
+
     public async Task AppendMessageAsync(
         string projectContextKey,
         ConversationMessage message,
@@ -166,6 +234,19 @@ public sealed class SqliteConversationStore(IAppPaths paths) : IConversationStor
     {
         ValidateProjectContextKey(projectContextKey);
         ArgumentNullException.ThrowIfNull(message);
+        if (message.Id == Guid.Empty)
+            throw new ArgumentException("A message identifier is required.", nameof(message));
+        if (message.ConversationId == Guid.Empty)
+            throw new ArgumentException("A conversation identifier is required.", nameof(message));
+        if (string.IsNullOrWhiteSpace(message.Role) || message.Role.Length > 32)
+            throw new ArgumentException("Message role is required and must not exceed 32 characters.", nameof(message));
+        if (message.Content is null ||
+            message.Content.Length > PipeProtocol.MaximumConversationMessageCharacters)
+        {
+            throw new ArgumentException(
+                $"Message content must not exceed {PipeProtocol.MaximumConversationMessageCharacters} characters.",
+                nameof(message));
+        }
         await InitializeAsync(cancellationToken).ConfigureAwait(false);
 
         await using var connection = CreateConnection();
@@ -175,10 +256,7 @@ public sealed class SqliteConversationStore(IAppPaths paths) : IConversationStor
         insert.Transaction = (SqliteTransaction)transaction;
         insert.CommandText = """
             INSERT INTO messages(project_context_key, id, conversation_id, role, content, created_at, is_error)
-            VALUES($context, $id, $conversation, $role, $content, $created, $error);
-            UPDATE conversations
-            SET updated_at = CASE WHEN updated_at < $updated THEN $updated ELSE updated_at END
-            WHERE project_context_key = $context AND id = $conversation;
+            VALUES($context, $id, $conversation, $role, $content, $created, $error)
             """;
         insert.Parameters.AddWithValue("$context", projectContextKey);
         insert.Parameters.AddWithValue("$id", message.Id.ToString("D"));
@@ -186,51 +264,79 @@ public sealed class SqliteConversationStore(IAppPaths paths) : IConversationStor
         insert.Parameters.AddWithValue("$role", message.Role);
         insert.Parameters.AddWithValue("$content", message.Content);
         insert.Parameters.AddWithValue("$created", FormatTimestamp(message.CreatedAt));
-        insert.Parameters.AddWithValue("$updated", FormatTimestamp(message.CreatedAt));
         insert.Parameters.AddWithValue("$error", message.IsError ? 1 : 0);
         await insert.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+
+        var sequenceCommand = connection.CreateCommand();
+        sequenceCommand.Transaction = (SqliteTransaction)transaction;
+        sequenceCommand.CommandText = "SELECT last_insert_rowid();";
+        var insertedSequence = Convert.ToInt64(
+            await sequenceCommand.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false),
+            CultureInfo.InvariantCulture);
+        if (insertedSequence <= 0 || insertedSequence > PipeProtocol.MaximumExactJsonInteger)
+            throw new InvalidOperationException("The chat history sequence exceeds the supported cursor range.");
+
+        var update = connection.CreateCommand();
+        update.Transaction = (SqliteTransaction)transaction;
+        update.CommandText = """
+            UPDATE conversations
+            SET updated_at = CASE WHEN updated_at < $updated THEN $updated ELSE updated_at END
+            WHERE project_context_key = $context AND id = $conversation
+            """;
+        update.Parameters.AddWithValue("$updated", FormatTimestamp(message.CreatedAt));
+        update.Parameters.AddWithValue("$context", projectContextKey);
+        update.Parameters.AddWithValue("$conversation", message.ConversationId.ToString("D"));
+        await update.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
     }
 
-    private static async Task ApplyVersionOneAsync(
+    private static async Task ApplyMigrationsAsync(
         SqliteConnection connection,
+        int version,
         CancellationToken cancellationToken)
     {
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
         var command = connection.CreateCommand();
         command.Transaction = (SqliteTransaction)transaction;
-        command.CommandText = """
-            CREATE TABLE IF NOT EXISTS conversations (
-                project_context_key TEXT NOT NULL,
-                id TEXT NOT NULL,
-                title TEXT NOT NULL,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL,
-                PRIMARY KEY(project_context_key, id)
-            );
+        command.CommandText = version == 0
+            ? """
+                CREATE TABLE IF NOT EXISTS conversations (
+                    project_context_key TEXT NOT NULL,
+                    id TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY(project_context_key, id)
+                );
 
-            CREATE TABLE IF NOT EXISTS messages (
-                message_sequence INTEGER PRIMARY KEY AUTOINCREMENT,
-                project_context_key TEXT NOT NULL,
-                id TEXT NOT NULL,
-                conversation_id TEXT NOT NULL,
-                role TEXT NOT NULL,
-                content TEXT NOT NULL,
-                created_at TEXT NOT NULL,
-                is_error INTEGER NOT NULL DEFAULT 0,
-                UNIQUE(project_context_key, id),
-                FOREIGN KEY(project_context_key, conversation_id)
-                    REFERENCES conversations(project_context_key, id)
-                    ON DELETE CASCADE
-            );
+                CREATE TABLE IF NOT EXISTS messages (
+                    message_sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+                    project_context_key TEXT NOT NULL,
+                    id TEXT NOT NULL,
+                    conversation_id TEXT NOT NULL,
+                    role TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    is_error INTEGER NOT NULL DEFAULT 0,
+                    UNIQUE(project_context_key, id),
+                    FOREIGN KEY(project_context_key, conversation_id)
+                        REFERENCES conversations(project_context_key, id)
+                        ON DELETE CASCADE
+                );
 
-            CREATE INDEX IF NOT EXISTS ix_conversations_context_updated
-                ON conversations(project_context_key, updated_at DESC);
-            CREATE INDEX IF NOT EXISTS ix_messages_context_conversation_order
-                ON messages(project_context_key, conversation_id, created_at, message_sequence);
-
-            PRAGMA user_version = 1;
-            """;
+                CREATE INDEX IF NOT EXISTS ix_conversations_context_updated
+                    ON conversations(project_context_key, updated_at DESC);
+                DROP INDEX IF EXISTS ix_messages_context_conversation_order;
+                CREATE INDEX IF NOT EXISTS ix_messages_context_conversation_sequence
+                    ON messages(project_context_key, conversation_id, message_sequence DESC);
+                PRAGMA user_version = 2;
+                """
+            : """
+                DROP INDEX IF EXISTS ix_messages_context_conversation_order;
+                CREATE INDEX IF NOT EXISTS ix_messages_context_conversation_sequence
+                    ON messages(project_context_key, conversation_id, message_sequence DESC);
+                PRAGMA user_version = 2;
+                """;
         await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
     }

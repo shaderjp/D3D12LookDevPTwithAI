@@ -1,9 +1,12 @@
 using System.Diagnostics;
+using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Threading.Channels;
 using D3D12LookDevPTwithAI.Chat.Core;
 using D3D12LookDevPTwithAI.Chat.Infrastructure;
 using D3D12LookDevPTwithAI.ChatHost;
+using D3D12LookDevPTwithAI.ChatHost.Inference;
+using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Hosting;
 
 namespace D3D12LookDevPTwithAI.Chat.Tests;
@@ -46,6 +49,163 @@ public sealed class PipeRequestRouterTests
     }
 
     [Fact]
+    public async Task Send_turn_streams_the_injected_inference_runtime()
+    {
+        var runtime = new ScriptedInferenceRuntime("alpha ", "beta");
+        await using var fixture = new RouterFixture(runtime);
+        var conversationId = await fixture.InitializeAsync();
+        var turnId = Guid.NewGuid();
+        var send = fixture.Request(
+            "sendTurn",
+            new SendTurnRequest(turnId, conversationId, "use the runtime"));
+
+        await fixture.Router.HandleAsync(send, fixture.Peer);
+        var accepted = await fixture.Peer.ReadAsync();
+        var deltas = new List<string>();
+        string? backend = null;
+        PipeEnvelope envelope;
+        do
+        {
+            envelope = await fixture.Peer.ReadAsync(TimeSpan.FromSeconds(3));
+            if (envelope.Method == "textDelta")
+                deltas.Add(envelope.Payload.GetProperty("delta").GetString()!);
+            if (envelope.Method == "runtimeState")
+                backend = envelope.Payload.GetProperty("backend").GetString();
+        }
+        while (envelope.Method != "completed");
+
+        Assert.Null(accepted.Error);
+        Assert.Equal("alpha beta", string.Concat(deltas));
+        Assert.Equal(ScriptedInferenceRuntime.Id, backend);
+        var request = Assert.Single(runtime.Requests);
+        Assert.Equal(conversationId, request.ConversationId);
+        Assert.Equal("use the runtime", request.UserText);
+        Assert.Empty(request.History);
+    }
+
+    [Fact]
+    public async Task Inference_runtime_receives_prior_history_in_database_sequence_order()
+    {
+        var runtime = new ScriptedInferenceRuntime("runtime reply");
+        await using var fixture = new RouterFixture(runtime);
+        var conversationId = await fixture.InitializeAsync();
+
+        async Task SendAndDrainAsync(string text)
+        {
+            await fixture.Router.HandleAsync(
+                fixture.Request(
+                    "sendTurn",
+                    new SendTurnRequest(Guid.NewGuid(), conversationId, text)),
+                fixture.Peer);
+            Assert.Null((await fixture.Peer.ReadAsync()).Error);
+            PipeEnvelope envelope;
+            do
+            {
+                envelope = await fixture.Peer.ReadAsync(TimeSpan.FromSeconds(3));
+            }
+            while (envelope.Method != "completed");
+        }
+
+        await SendAndDrainAsync("first question");
+        await SendAndDrainAsync("second question");
+
+        Assert.Equal(2, runtime.Requests.Count);
+        var history = runtime.Requests[1].History;
+        Assert.Collection(
+            history,
+            message =>
+            {
+                Assert.Equal(ChatInferenceRole.User, message.Role);
+                Assert.Equal("first question", message.Content);
+            },
+            message =>
+            {
+                Assert.Equal(ChatInferenceRole.Assistant, message.Role);
+                Assert.Equal("runtime reply", message.Content);
+            });
+    }
+
+    [Fact]
+    public async Task Inference_runtime_exception_details_do_not_cross_the_pipe_boundary()
+    {
+        var runtime = new ScriptedInferenceRuntime
+        {
+            Failure = new ChatInferenceException(
+                "private_runtime_failure_code",
+                ScriptedInferenceRuntime.SensitiveFailureMarker),
+        };
+        await using var fixture = new RouterFixture(runtime);
+        var conversationId = await fixture.InitializeAsync();
+        await fixture.Router.HandleAsync(
+            fixture.Request(
+                "sendTurn",
+                new SendTurnRequest(Guid.NewGuid(), conversationId, "trigger runtime failure")),
+            fixture.Peer);
+
+        Assert.Null((await fixture.Peer.ReadAsync()).Error);
+        PipeEnvelope? failure = null;
+        PipeEnvelope envelope;
+        do
+        {
+            envelope = await fixture.Peer.ReadAsync(TimeSpan.FromSeconds(3));
+            if (envelope.Method == "error") failure = envelope;
+        }
+        while (envelope.Method != "completed");
+
+        Assert.NotNull(failure);
+        Assert.Equal(
+            "inference_runtime_failed",
+            failure.Payload.GetProperty("code").GetString());
+        Assert.DoesNotContain(
+            ScriptedInferenceRuntime.SensitiveFailureMarker,
+            failure.Payload.GetProperty("message").GetString(),
+            StringComparison.Ordinal);
+        Assert.Equal("failed", envelope.Payload.GetProperty("status").GetString());
+    }
+
+    [Fact]
+    public async Task Unsafe_runtime_status_is_rejected_before_it_crosses_the_pipe_boundary()
+    {
+        var runtime = new ScriptedInferenceRuntime("unused")
+        {
+            Status = new ChatInferenceRuntimeStatus(
+                ScriptedInferenceRuntime.SensitiveFailureMarker,
+                "Unsafe test runtime",
+                IsReady: true,
+                State: "ready"),
+        };
+        await using var fixture = new RouterFixture(runtime);
+        var conversationId = await fixture.InitializeAsync();
+        await fixture.Router.HandleAsync(
+            fixture.Request(
+                "sendTurn",
+                new SendTurnRequest(Guid.NewGuid(), conversationId, "trigger unsafe status")),
+            fixture.Peer);
+
+        Assert.Null((await fixture.Peer.ReadAsync()).Error);
+        var methods = new List<string>();
+        PipeEnvelope? failure = null;
+        PipeEnvelope envelope;
+        do
+        {
+            envelope = await fixture.Peer.ReadAsync(TimeSpan.FromSeconds(3));
+            methods.Add(envelope.Method!);
+            if (envelope.Method == "error") failure = envelope;
+        }
+        while (envelope.Method != "completed");
+
+        Assert.DoesNotContain("runtimeState", methods);
+        Assert.NotNull(failure);
+        Assert.Equal(
+            "invalid_inference_status",
+            failure.Payload.GetProperty("code").GetString());
+        Assert.DoesNotContain(
+            ScriptedInferenceRuntime.SensitiveFailureMarker,
+            failure.Payload.GetProperty("message").GetString(),
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task Send_turn_responds_before_streaming_deterministic_background_events()
     {
         await using var fixture = new RouterFixture();
@@ -72,6 +232,33 @@ public sealed class PipeRequestRouterTests
         Assert.Contains("runtimeState", methods);
         Assert.Contains("textDelta", methods);
         Assert.Equal("completed", completed.Payload.GetProperty("status").GetString());
+    }
+
+    [Fact]
+    public async Task Accepted_turn_reports_a_terminal_failure_when_history_loading_fails()
+    {
+        await using var fixture = new RouterFixture(failHistoryRead: true);
+        var conversationId = await fixture.InitializeAsync();
+        await fixture.Router.HandleAsync(
+            fixture.Request(
+                "sendTurn",
+                new SendTurnRequest(Guid.NewGuid(), conversationId, "trigger history failure")),
+            fixture.Peer);
+
+        var accepted = await fixture.Peer.ReadAsync();
+        Assert.Null(accepted.Error);
+        Assert.True(accepted.Payload.GetProperty("accepted").GetBoolean());
+
+        var error = await fixture.Peer.ReadAsync(TimeSpan.FromSeconds(3));
+        var completed = await fixture.Peer.ReadAsync(TimeSpan.FromSeconds(3));
+        Assert.Equal("error", error.Method);
+        Assert.Equal("turn_failed", error.Payload.GetProperty("code").GetString());
+        Assert.DoesNotContain(
+            FailingHistoryConversationStore.SensitiveFailureMarker,
+            error.Payload.GetProperty("message").GetString(),
+            StringComparison.Ordinal);
+        Assert.Equal("completed", completed.Method);
+        Assert.Equal("failed", completed.Payload.GetProperty("status").GetString());
     }
 
     [Fact]
@@ -214,6 +401,178 @@ public sealed class PipeRequestRouterTests
     }
 
     [Fact]
+    public async Task Stop_after_acceptance_is_observed_prevents_a_late_turn_from_starting()
+    {
+        await using var fixture = new RouterFixture();
+        var conversationId = await fixture.InitializeAsync();
+        var acceptancePeer = new GatedAcceptancePipePeer();
+        var routing = fixture.Router.HandleAsync(
+            fixture.Request(
+                "sendTurn",
+                new SendTurnRequest(Guid.NewGuid(), conversationId, "acceptance race")),
+            acceptancePeer);
+        await acceptancePeer.AcceptanceObserved.Task.WaitAsync(TimeSpan.FromSeconds(3));
+
+        try
+        {
+            await fixture.Coordinator.StopAsync().WaitAsync(TimeSpan.FromSeconds(3));
+        }
+        finally
+        {
+            acceptancePeer.ReleaseAcceptance.TrySetResult();
+        }
+        await routing.WaitAsync(TimeSpan.FromSeconds(3));
+        await fixture.Coordinator.StopAsync().WaitAsync(TimeSpan.FromSeconds(3));
+
+        Assert.Empty(await fixture.Store.GetMessagesAsync("project-1", conversationId));
+    }
+
+    [Fact]
+    public async Task Conversation_select_validates_page_size_and_exact_sequence_cursor()
+    {
+        await using var fixture = new RouterFixture();
+        var conversationId = await fixture.InitializeAsync();
+        var invalidRequests = new[]
+        {
+            new ConversationSelectRequest(Guid.Empty),
+            new ConversationSelectRequest(conversationId, BeforeMessageSequence: 0),
+            new ConversationSelectRequest(
+                conversationId,
+                BeforeMessageSequence: PipeProtocol.MaximumExactJsonInteger + 1),
+            new ConversationSelectRequest(conversationId, PageSize: 0),
+            new ConversationSelectRequest(
+                conversationId,
+                PageSize: PipeProtocol.MaximumConversationPageSize + 1),
+        };
+
+        foreach (var invalidRequest in invalidRequests)
+        {
+            await fixture.Router.HandleAsync(
+                fixture.Request("conversation.select", invalidRequest),
+                fixture.Peer);
+            var response = await fixture.Peer.ReadAsync();
+            Assert.Contains(
+                response.Error?.Code,
+                new[] { "invalid_conversation", "invalid_history_cursor", "invalid_page_size" });
+        }
+    }
+
+    [Fact]
+    public async Task Conversation_select_pages_all_history_within_the_four_mib_frame_limit()
+    {
+        await using var fixture = new RouterFixture();
+        var conversationId = await fixture.InitializeAsync();
+        var expectedIds = new List<Guid>();
+        var maximumEscapedContent = new string(
+            '\u0001',
+            PipeProtocol.MaximumConversationMessageCharacters);
+        for (var index = 0; index < 8; index++)
+        {
+            var message = new ConversationMessage(
+                Guid.NewGuid(),
+                conversationId,
+                "assistant",
+                maximumEscapedContent,
+                DateTimeOffset.UtcNow.AddMinutes(-index));
+            expectedIds.Add(message.Id);
+            await fixture.Store.AppendMessageAsync("project-1", message);
+        }
+
+        long? cursor = null;
+        var reconstructedChronologicalIds = new List<Guid>();
+        var pageCount = 0;
+        do
+        {
+            await fixture.Router.HandleAsync(
+                fixture.Request(
+                    "conversation.select",
+                    new ConversationSelectRequest(
+                        conversationId,
+                        cursor,
+                        PipeProtocol.MaximumConversationPageSize)),
+                fixture.Peer);
+            var response = await fixture.Peer.ReadAsync(TimeSpan.FromSeconds(10));
+            Assert.Null(response.Error);
+            var page = response.Payload.Deserialize<ConversationSelectResult>(
+                PipeJson.SerializerOptions)!;
+            Assert.NotEmpty(page.Messages);
+            Assert.True(
+                JsonSerializer.SerializeToUtf8Bytes(page, PipeJson.SerializerOptions).Length <=
+                PipeProtocol.MaximumConversationSelectPayloadBytes);
+            await using var frame = new MemoryStream();
+            await PipeFraming.WriteAsync(
+                frame,
+                response with { Sequence = long.MaxValue });
+            Assert.InRange(
+                frame.Length - sizeof(uint),
+                1,
+                PipeProtocol.MaximumFrameBytes);
+
+            reconstructedChronologicalIds.InsertRange(
+                0,
+                page.Messages.Select(message => message.Id));
+            pageCount++;
+            Assert.Equal(page.HasMoreMessages, page.OlderBeforeMessageSequence.HasValue);
+            if (pageCount == 1)
+            {
+                await fixture.Store.AppendMessageAsync(
+                    "project-1",
+                    new ConversationMessage(
+                        Guid.NewGuid(),
+                        conversationId,
+                        "assistant",
+                        "inserted after the latest-page cursor",
+                        DateTimeOffset.UtcNow));
+            }
+            if (!page.HasMoreMessages)
+            {
+                Assert.Null(page.OlderBeforeMessageSequence);
+                break;
+            }
+            cursor = Assert.IsType<long>(page.OlderBeforeMessageSequence);
+        }
+        while (true);
+
+        Assert.True(pageCount > 1);
+        Assert.Equal(expectedIds, reconstructedChronologicalIds);
+    }
+
+    [Fact]
+    public async Task Legacy_oversized_history_returns_a_small_error_and_keeps_the_connection_usable()
+    {
+        await using var fixture = new RouterFixture();
+        var conversationId = await fixture.InitializeAsync();
+        await fixture.SeedLegacyMessageAsync(
+            conversationId,
+            new string(
+                '\u0001',
+                PipeProtocol.MaximumConversationSelectPayloadBytes / 6 + 1024));
+
+        await fixture.Router.HandleAsync(
+            fixture.Request(
+                "conversation.select",
+                new ConversationSelectRequest(conversationId)),
+            fixture.Peer);
+        var rejected = await fixture.Peer.ReadAsync();
+
+        Assert.Equal("history_message_too_large", rejected.Error?.Code);
+        Assert.True(
+            JsonSerializer.SerializeToUtf8Bytes(
+                rejected,
+                PipeJson.SerializerOptions).Length < 16 * 1024);
+
+        await fixture.Router.HandleAsync(
+            fixture.Request("conversation.list", new { }),
+            fixture.Peer);
+        var list = await fixture.Peer.ReadAsync();
+        Assert.Null(list.Error);
+        Assert.Equal(
+            conversationId,
+            list.Payload.Deserialize<ConversationListResult>(
+                PipeJson.SerializerOptions)!.ActiveConversationId);
+    }
+
+    [Fact]
     public void Command_line_requires_a_simple_pipe_name_and_positive_parent_pid()
     {
         Assert.True(CommandLineOptions.TryParse(
@@ -237,12 +596,18 @@ public sealed class PipeRequestRouterTests
             "D3D12LookDevPTwithAI.Chat.Tests",
             Guid.NewGuid().ToString("N"));
 
-        public RouterFixture()
+        public RouterFixture(
+            IChatInferenceRuntime? inferenceRuntime = null,
+            bool failHistoryRead = false)
         {
-            Coordinator = new ChatCoordinator(new SqliteConversationStore(new AppPaths(_dataDirectory)));
+            Store = new SqliteConversationStore(new AppPaths(_dataDirectory));
+            Coordinator = new ChatCoordinator(
+                failHistoryRead ? new FailingHistoryConversationStore(Store) : Store,
+                inferenceRuntime ?? new DeterministicChatInferenceRuntime());
             Router = new PipeRequestRouter(Coordinator, _lifetime);
         }
 
+        public SqliteConversationStore Store { get; }
         public ChatCoordinator Coordinator { get; }
         public PipeRequestRouter Router { get; }
         public RecordingPipePeer Peer { get; } = new();
@@ -266,11 +631,130 @@ public sealed class PipeRequestRouterTests
             return response.Payload.Deserialize<InitializeResult>(PipeJson.SerializerOptions)!.ActiveConversationId;
         }
 
+        public async Task SeedLegacyMessageAsync(
+            Guid conversationId,
+            string content)
+        {
+            await using var connection = new SqliteConnection(
+                new SqliteConnectionStringBuilder
+                {
+                    DataSource = Path.Combine(
+                        _dataDirectory,
+                        "chat-history.sqlite3"),
+                    Mode = SqliteOpenMode.ReadWrite,
+                    Pooling = false,
+                }.ToString());
+            await connection.OpenAsync();
+            var command = connection.CreateCommand();
+            command.CommandText = """
+                INSERT INTO messages(
+                    project_context_key,
+                    id,
+                    conversation_id,
+                    role,
+                    content,
+                    created_at,
+                    is_error)
+                VALUES($context, $id, $conversation, 'assistant', $content, $created, 0)
+                """;
+            command.Parameters.AddWithValue("$context", "project-1");
+            command.Parameters.AddWithValue("$id", Guid.NewGuid().ToString("D"));
+            command.Parameters.AddWithValue(
+                "$conversation",
+                conversationId.ToString("D"));
+            command.Parameters.AddWithValue("$content", content);
+            command.Parameters.AddWithValue(
+                "$created",
+                DateTimeOffset.UtcNow.ToString("O"));
+            await command.ExecuteNonQueryAsync();
+        }
+
         public async ValueTask DisposeAsync()
         {
             await Coordinator.StopAsync();
             if (Directory.Exists(_dataDirectory)) Directory.Delete(_dataDirectory, recursive: true);
         }
+    }
+
+    private sealed class ScriptedInferenceRuntime(params string[] chunks) : IChatInferenceRuntime
+    {
+        public const string Id = "scripted-test-runtime";
+        public const string SensitiveFailureMarker =
+            "C:\\private\\model-path\\sensitive-runtime-marker.gguf";
+        public List<ChatInferenceRequest> Requests { get; } = [];
+        public ChatInferenceRuntimeStatus Status { get; init; } = new(
+            Id,
+            "Scripted test runtime",
+            IsReady: true,
+            State: "ready");
+        public ChatInferenceException? Failure { get; init; }
+
+        public ValueTask<ChatInferenceRuntimeStatus> GetStatusAsync(
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return ValueTask.FromResult(Status);
+        }
+
+        public async IAsyncEnumerable<ChatInferenceChunk> StreamAsync(
+            ChatInferenceRequest request,
+            [EnumeratorCancellation] CancellationToken cancellationToken = default)
+        {
+            Requests.Add(request);
+            if (Failure is not null) throw Failure;
+            foreach (var chunk in chunks)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                yield return new ChatInferenceChunk(chunk);
+                await Task.Yield();
+            }
+        }
+    }
+
+    private sealed class FailingHistoryConversationStore(IConversationStore inner) : IConversationStore
+    {
+        public const string SensitiveFailureMarker = "sensitive-history-failure-marker";
+
+        public Task InitializeAsync(CancellationToken cancellationToken = default) =>
+            inner.InitializeAsync(cancellationToken);
+
+        public Task<IReadOnlyList<ConversationSummary>> ListAsync(
+            string projectContextKey,
+            CancellationToken cancellationToken = default) =>
+            inner.ListAsync(projectContextKey, cancellationToken);
+
+        public Task<ConversationSummary?> GetAsync(
+            string projectContextKey,
+            Guid conversationId,
+            CancellationToken cancellationToken = default) =>
+            inner.GetAsync(projectContextKey, conversationId, cancellationToken);
+
+        public Task<ConversationSummary> CreateAsync(
+            string projectContextKey,
+            string title,
+            CancellationToken cancellationToken = default) =>
+            inner.CreateAsync(projectContextKey, title, cancellationToken);
+
+        public Task<IReadOnlyList<ConversationMessage>> GetMessagesAsync(
+            string projectContextKey,
+            Guid conversationId,
+            CancellationToken cancellationToken = default) =>
+            inner.GetMessagesAsync(projectContextKey, conversationId, cancellationToken);
+
+        public Task<IReadOnlyList<SequencedConversationMessage>> ListMessagesBeforeAsync(
+            string projectContextKey,
+            Guid conversationId,
+            long? beforeMessageSequence,
+            int maximumMessages,
+            CancellationToken cancellationToken = default) =>
+            Task.FromException<IReadOnlyList<SequencedConversationMessage>>(
+                new InvalidOperationException(SensitiveFailureMarker));
+
+        public Task AppendMessageAsync(
+            string projectContextKey,
+            ConversationMessage message,
+            CancellationToken cancellationToken = default) =>
+            inner.AppendMessageAsync(projectContextKey, message, cancellationToken);
     }
 
     private sealed class AlwaysFailingPipePeer : IPipePeer
@@ -311,6 +795,31 @@ public sealed class PipeRequestRouterTests
             EventWriteStarted.TrySetResult();
             await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
         }
+    }
+
+    private sealed class GatedAcceptancePipePeer : IPipePeer
+    {
+        public TaskCompletionSource AcceptanceObserved { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource ReleaseAcceptance { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public async Task SendResponseAsync(
+            PipeEnvelope request,
+            object payload,
+            PipeError? error = null,
+            CancellationToken cancellationToken = default)
+        {
+            AcceptanceObserved.TrySetResult();
+            await ReleaseAcceptance.Task.WaitAsync(cancellationToken);
+        }
+
+        public Task SendEventAsync(
+            Guid requestId,
+            string method,
+            object payload,
+            CancellationToken cancellationToken = default) =>
+            Task.CompletedTask;
     }
 
     private sealed class RecordingPipePeer : IPipePeer

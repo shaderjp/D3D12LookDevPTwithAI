@@ -27,7 +27,12 @@ and project-scoped SQLite conversation history. The only executable window the
 user launches or operates is `D3D12LookDevPTwithAI.exe`.
 
 The current ChatHost produces deterministic placeholder responses so the IPC
-and UI can be exercised. Real llama.cpp inference, same-instance MCP tool
+and UI can be exercised. Generation is now isolated behind
+`IChatInferenceRuntime`; the registered implementation remains deterministic.
+The ChatHost history API uses SQLite sequence cursors and UTF-8 byte-bounded
+pages so long histories cannot exceed the 4 MiB IPC frame limit. The native UI
+currently displays the latest page; browsing older pages is a subsequent UI
+milestone. Real llama.cpp inference, same-instance MCP tool
 execution, one-time approval grants, model download, and the integrated
 portable/offline pack are subsequent milestones. See the
 [integrated architecture](docs/integrated-ai-architecture.ja.md).

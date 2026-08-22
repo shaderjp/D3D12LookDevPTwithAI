@@ -31,6 +31,14 @@ public static class PipeProtocol
 {
     public const int Version = 1;
     public const int MaximumFrameBytes = 4 * 1024 * 1024;
+    public const int ConversationSelectEnvelopeReserveBytes = 16 * 1024;
+    public const int MaximumConversationSelectPayloadBytes =
+        MaximumFrameBytes - ConversationSelectEnvelopeReserveBytes;
+    public const int DefaultConversationPageSize = 100;
+    public const int MaximumConversationPageSize = 200;
+    public const long MaximumExactJsonInteger = (1L << 53) - 1;
+    public const int MaximumConversationTitleCharacters = 200;
+    public const int MaximumConversationMessageCharacters = 128 * 1024;
 }
 
 public static class PipeJson
@@ -164,10 +172,15 @@ public sealed record ConversationListResult(
 
 public sealed record ConversationCreateRequest(string? Title = null);
 public sealed record ConversationCreateResult(ConversationSummary Conversation);
-public sealed record ConversationSelectRequest(Guid ConversationId);
+public sealed record ConversationSelectRequest(
+    Guid ConversationId,
+    long? BeforeMessageSequence = null,
+    int? PageSize = null);
 public sealed record ConversationSelectResult(
     ConversationSummary Conversation,
-    IReadOnlyList<ConversationMessage> Messages);
+    IReadOnlyList<ConversationMessage> Messages,
+    long? OlderBeforeMessageSequence = null,
+    bool HasMoreMessages = false);
 
 public sealed record SendTurnRequest(Guid TurnId, Guid ConversationId, string Text);
 public sealed record SendTurnResult(Guid TurnId, bool Accepted);

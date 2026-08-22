@@ -24,6 +24,10 @@ scene load、MCP `2026-07-28` transport も合流しています。
 `D3D12LookDevPTwithAI.exe` だけです。
 
 現段階の ChatHost は IPC と UI を検証する deterministic placeholder 応答です。
+応答生成は `IChatInferenceRuntime` 境界へ分離済みで、現在は deterministic 実装を
+登録しています。ChatHost の会話履歴 API は SQLite の連番 cursor による UTF-8
+byte 制限付きpageで取得するため、長期履歴でも4 MiBのIPC frame上限を超えません。
+Native UI が表示するのは現時点では最新pageで、過去pageの閲覧UIは後続milestoneです。
 実際の llama.cpp 推論、同一アプリの MCP Tool 実行、一回承認 grant、model download、
 一体型 portable / offline pack は次の milestone です。設計と境界は
 [統合アーキテクチャ](docs/integrated-ai-architecture.ja.md)を参照してください。

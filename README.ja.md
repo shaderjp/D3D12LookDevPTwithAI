@@ -151,6 +151,21 @@ project を開けます。移植元と
 `Bistro_v5_2` は local test asset であり、git の対象外です。配置については
 [Asset setup](docs/assets.ja.md) を参照してください。
 
+### glTF材質とtexture経路
+
+glTF / GLBはAssimpではなくtinygltfベースの専用経路でimportします。
+`TEXCOORD_0/1`、embedded / data URI画像、texture transform、specular、IOR、
+transmission、volume、clearcoat、`KHR_texture_basisu`に対応し、非破壊override用に
+`gltf:material/<index>`形式の安定IDを保持します。未対応の必須extensionはimportを
+停止し、任意extensionのfallbackはscene監査へ出力します。
+
+material textureはnative BC DDS / KTX2 mip、Basis ETC1S / UASTC KTX2、EXR、HDR、
+通常のdecode imageに対応します。旧512px material / HDRI制限は撤廃しました。
+slotごとのAuto / Source / 4K / 2K / 1K / 512とDXGI-awareなtexture budgetを使い、
+environment importance mapだけは独立した最大1024px sourceです。animation、
+skinning、morph target、hierarchy編集、raster fallbackは今回の対象外です。
+詳細は[Asset setup](docs/assets.ja.md)を参照してください。
+
 ## WinUI editor
 
 固定 IDE 型 layout には移植元と同じ9 panelがあります。
@@ -285,6 +300,7 @@ AOV artifactを取得できます。完了または中止後はcheckpointから�
 .\Scripts\TestOfflinePack.ps1
 .\Scripts\TestQualitySettingsJson.ps1
 .\Scripts\TestTextureLoader.ps1
+.\Scripts\TestGltfSceneImporter.ps1
 .\Scripts\TestBenchmarkHarness.ps1
 .\Scripts\TestBenchmarkSequenceAnalyzer.ps1
 .\Scripts\TestRendererCommandQueue.ps1
@@ -311,6 +327,8 @@ ImGui は含みません。その他は移植元と同じ revision へ固定し�
 | Streamline | `e8aaa6eaac968711fb62473d4ae8256dde20919b` |
 | Assimp | `e04b60f61522e1d5594ef25addcfae7cb156f085` |
 | TinyEXR | `1b106618644dbf8a0935c2348ba51a2d863dd7c2` |
+| tinygltf 2.9.6 | `26422192e2908a562b641175dde18489824e609e` |
+| Basis Universal 2.50 | `9bebe16726b3a61c8c213eeee3b7cffb462ef34e` |
 
 RTXDI の nested dependency `Libraries/Rtxdi` は
 `a14e079c727ed8c4fd3173bd2aea8244c9d9f6d6` です。
@@ -334,4 +352,8 @@ WinUI composition は DXGI 側で行い、UI 専用 shader pass は追加しま�
 
 ## License
 
-[LICENSE](LICENSE) を参照してください。ThirdParty は各 license に従います。
+[LICENSE](LICENSE) を参照してください。ThirdParty は各licenseに従います。
+Portable SuiteはtinygltfのMIT license、Basis UniversalのApache-2.0 license / NOTICE
+（Zstandard licenseを含む）を収集し、全同梱fileをlicense allowlistとSPDX 2.3 SBOMへ
+対応付けます。設計時に`nvpro-samples/vk_gltf_renderer`を参考にしましたが、Vulkan、
+`nvpro_core`、UI source codeは取り込んでいません。

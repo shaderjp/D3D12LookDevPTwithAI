@@ -83,6 +83,7 @@ struct TextureSlotItem
     std::wstring sourcePath;
     std::wstring currentPath;
     std::wstring status;
+    std::int32_t resolutionPolicy = 0;
 };
 
 struct NamedItem

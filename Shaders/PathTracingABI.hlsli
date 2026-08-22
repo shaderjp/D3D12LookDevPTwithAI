@@ -25,6 +25,14 @@ static const uint TextureSlotMetallic = 3;
 static const uint TextureSlotOcclusion = 4;
 static const uint TextureSlotEmissive = 5;
 static const uint TextureSlotAlpha = 6;
+static const uint TextureSlotSpecularColor = 7;
+static const uint TextureSlotSpecularFactor = 8;
+static const uint TextureSlotTransmission = 9;
+static const uint TextureSlotThickness = 10;
+static const uint TextureSlotClearcoat = 11;
+static const uint TextureSlotClearcoatRoughness = 12;
+static const uint TextureSlotClearcoatNormal = 13;
+static const uint TextureSlotCount = 14;
 static const uint MaterialFeaturePackedOcclusionRoughnessMetallic = 1u << 0;
 static const uint MaterialFeatureBaseColorTexture = 1u << 1;
 static const uint MaterialFeatureNormalTexture = 1u << 2;
@@ -33,6 +41,21 @@ static const uint MaterialFeatureMetallicTexture = 1u << 4;
 static const uint MaterialFeatureOcclusionTexture = 1u << 5;
 static const uint MaterialFeatureEmissiveTexture = 1u << 6;
 static const uint MaterialFeatureAlphaTexture = 1u << 7;
+static const uint MaterialFeatureSpecularColorTexture = 1u << 8;
+static const uint MaterialFeatureSpecularFactorTexture = 1u << 9;
+static const uint MaterialFeatureTransmissionTexture = 1u << 10;
+static const uint MaterialFeatureThicknessTexture = 1u << 11;
+static const uint MaterialFeatureClearcoatTexture = 1u << 12;
+static const uint MaterialFeatureClearcoatRoughnessTexture = 1u << 13;
+static const uint MaterialFeatureClearcoatNormalTexture = 1u << 14;
+static const uint MaterialFeatureGltfMetallicRoughness = 1u << 15;
+
+static const uint MaterialExtensionTextureTransform = 1u << 0;
+static const uint MaterialExtensionSpecular = 1u << 1;
+static const uint MaterialExtensionIor = 1u << 2;
+static const uint MaterialExtensionTransmission = 1u << 3;
+static const uint MaterialExtensionVolume = 1u << 4;
+static const uint MaterialExtensionClearcoat = 1u << 5;
 
 #include "PathTracingSceneConstants.hlsli"
 
@@ -42,6 +65,7 @@ struct MeshVertex
     float3 normal;
     float4 tangent;
     float2 texcoord;
+    float2 texcoord1;
 };
 
 struct RtMaterial
@@ -61,6 +85,20 @@ struct RtMaterial
     uint thinDielectric;
     uint materialPadding;
     float4 uvScaleOffset;
+};
+
+struct RtMaterialExtension
+{
+    float4 specularColorFactorAndFactor;
+    float4 attenuationColorAndDistance;
+    float4 transmissionThicknessIorFeatures;
+    float4 clearcoat;
+};
+
+struct RtTextureBinding
+{
+    float4 offsetScale;
+    float4 rotationTexCoordSampler;
 };
 
 bool HasMaterialFeature(RtMaterial material, uint feature)
@@ -95,6 +133,7 @@ struct ShadowPayload
     uint occluded;
     float rayConeWidth;
     float rayConeSpread;
+    float3 transmittance;
 };
 
 struct SurfaceData
@@ -104,6 +143,7 @@ struct SurfaceData
     float3 normal;
     float4 tangent;
     float2 texcoord;
+    float2 texcoord1;
     float3 baseColor;
     float3 normalTexture;
     float ao;
@@ -115,6 +155,13 @@ struct SurfaceData
     float rayConeWidth;
     float rayConeSpread;
     float coverage;
+    RtMaterialExtension extension;
+    float3 dielectricF0;
+    float transmission;
+    float thickness;
+    float clearcoat;
+    float clearcoatRoughness;
+    float3 clearcoatNormal;
 };
 
 // Shaded first-hit data is a RayGen-local value, not a DXR payload. Keeping it
@@ -172,8 +219,15 @@ VK_BINDING(5, 0) StructuredBuffer<uint> g_indices : register(t2, space0);
 VK_BINDING(6, 0) StructuredBuffer<RtGeometryRecord> g_geometries : register(t3, space0);
 VK_BINDING(7, 0) StructuredBuffer<RtMaterial> g_materials : register(t4, space0);
 VK_BINDING(8, 0) SamplerState g_linearSampler : register(s0, space0);
+VK_BINDING(69, 0) SamplerState g_linearClampSampler : register(s1, space0);
+VK_BINDING(70, 0) SamplerState g_linearMirrorSampler : register(s2, space0);
+VK_BINDING(71, 0) SamplerState g_nearestRepeatSampler : register(s3, space0);
+VK_BINDING(72, 0) SamplerState g_nearestClampSampler : register(s4, space0);
+VK_BINDING(73, 0) SamplerState g_nearestMirrorSampler : register(s5, space0);
 VK_BINDING(12, 0) StructuredBuffer<RtLight> g_lights : register(t5, space0);
 VK_BINDING(65, 0) StructuredBuffer<RtInstance> g_instances : register(t6, space0);
+VK_BINDING(67, 0) StructuredBuffer<RtMaterialExtension> g_materialExtensions : register(t7, space0);
+VK_BINDING(68, 0) StructuredBuffer<RtTextureBinding> g_textureBindings : register(t8, space0);
 VK_BINDING(13, 0) RWTexture2D<float4> g_denoiseAov0 : register(u5, space0);
 VK_BINDING(14, 0) RWTexture2D<float4> g_denoiseAov1 : register(u6, space0);
 VK_BINDING(15, 0) RWTexture2D<float4> g_denoiseAov2 : register(u7, space0);
@@ -533,6 +587,57 @@ float4 SampleTextureWithFootprint(uint textureIndex, float2 uv, float uvFootprin
     return g_textures[resourceIndex].SampleLevel(g_linearSampler, uv, mipLevel);
 }
 
+float4 SampleTextureWithSampler(uint textureIndex, float2 uv, float uvFootprint, uint samplerIndex)
+{
+    uint resourceIndex = NonUniformResourceIndex(textureIndex);
+    float mipLevel = TextureMipLevel(textureIndex, uvFootprint);
+    if (samplerIndex == 1u) return g_textures[resourceIndex].SampleLevel(g_linearClampSampler, uv, mipLevel);
+    if (samplerIndex == 2u) return g_textures[resourceIndex].SampleLevel(g_linearMirrorSampler, uv, mipLevel);
+    if (samplerIndex == 3u) return g_textures[resourceIndex].SampleLevel(g_nearestRepeatSampler, uv, mipLevel);
+    if (samplerIndex == 4u) return g_textures[resourceIndex].SampleLevel(g_nearestClampSampler, uv, mipLevel);
+    if (samplerIndex == 5u) return g_textures[resourceIndex].SampleLevel(g_nearestMirrorSampler, uv, mipLevel);
+    return g_textures[resourceIndex].SampleLevel(g_linearSampler, uv, mipLevel);
+}
+
+RtTextureBinding MaterialTextureBinding(uint materialIndex, uint textureSlot)
+{
+    return g_textureBindings[materialIndex * TextureSlotCount + textureSlot];
+}
+
+float2 TransformMaterialUv(uint materialIndex, uint textureSlot, float2 uv0, float2 uv1)
+{
+    RtTextureBinding binding = MaterialTextureBinding(materialIndex, textureSlot);
+    float2 uv = (uint)round(binding.rotationTexCoordSampler.y) == 1u ? uv1 : uv0;
+    float2 scaled = uv * binding.offsetScale.zw;
+    float cosine = cos(binding.rotationTexCoordSampler.x);
+    float sine = sin(binding.rotationTexCoordSampler.x);
+    return float2(
+        cosine * scaled.x - sine * scaled.y,
+        sine * scaled.x + cosine * scaled.y) + binding.offsetScale.xy;
+}
+
+float MaterialUvFootprintScale(uint materialIndex, uint textureSlot)
+{
+    float2 scale = MaterialTextureBinding(materialIndex, textureSlot).offsetScale.zw;
+    return max(max(abs(scale.x), abs(scale.y)), 1.0e-6f);
+}
+
+float4 SampleMaterialTexture(
+    uint materialIndex,
+    RtMaterial material,
+    uint textureSlot,
+    float2 uv0,
+    float2 uv1,
+    float uvFootprint)
+{
+    RtTextureBinding binding = MaterialTextureBinding(materialIndex, textureSlot);
+    return SampleTextureWithSampler(
+        material.textureBaseIndex + textureSlot,
+        TransformMaterialUv(materialIndex, textureSlot, uv0, uv1),
+        uvFootprint * MaterialUvFootprintScale(materialIndex, textureSlot),
+        (uint)round(binding.rotationTexCoordSampler.z));
+}
+
 float EnvironmentMipLevel(uint textureIndex, float3 rayDirection, float coneSpread)
 {
     uint resourceIndex = NonUniformResourceIndex(textureIndex);
@@ -706,6 +811,11 @@ float3 EvaluateMeshEmitterRadiance(
         g_vertices[tri.y].texcoord,
         g_vertices[tri.z].texcoord,
         barycentrics);
+    float2 texcoord1 = Interpolate2(
+        g_vertices[tri.x].texcoord1,
+        g_vertices[tri.y].texcoord1,
+        g_vertices[tri.z].texcoord1,
+        barycentrics);
     float3 emissiveTexture = 1.0f.xxx;
     if (HasMaterialFeature(material, MaterialFeatureEmissiveTexture))
     {
@@ -714,9 +824,12 @@ float3 EvaluateMeshEmitterRadiance(
             primitiveIndex,
             coneWidthAtHit,
             rayDirection);
-        emissiveTexture = SampleTextureWithFootprint(
-            material.textureBaseIndex + TextureSlotEmissive,
+        emissiveTexture = SampleMaterialTexture(
+            light.meshIdentity.z,
+            material,
+            TextureSlotEmissive,
             texcoord,
+            texcoord1,
             uvFootprint).rgb;
     }
     return emissiveTexture * material.emissiveFactor.rgb *
@@ -760,10 +873,12 @@ SurfaceData LoadSurface(
         dot(float4(localTangent.xyz, 0.0f), instance.objectToWorldColumn1),
         dot(float4(localTangent.xyz, 0.0f), instance.objectToWorldColumn2))), localTangent.w);
     surface.material = g_materials[geometry.materialIndex];
-    surface.texcoord = Interpolate2(v0.texcoord, v1.texcoord, v2.texcoord, bary) *
-        surface.material.uvScaleOffset.xy + surface.material.uvScaleOffset.zw;
-    uvFootprint *= max(max(abs(surface.material.uvScaleOffset.x), abs(surface.material.uvScaleOffset.y)), 1.0e-6f);
     surface.materialIndex = geometry.materialIndex;
+    surface.extension = g_materialExtensions[geometry.materialIndex];
+    float2 sourceTexcoord0 = Interpolate2(v0.texcoord, v1.texcoord, v2.texcoord, bary);
+    float2 sourceTexcoord1 = Interpolate2(v0.texcoord1, v1.texcoord1, v2.texcoord1, bary);
+    surface.texcoord = TransformMaterialUv(surface.materialIndex, TextureSlotBaseColor, sourceTexcoord0, sourceTexcoord1);
+    surface.texcoord1 = sourceTexcoord1;
     surface.rayConeWidth = coneWidthAtHit;
     surface.rayConeSpread = coneSpread;
 
@@ -774,27 +889,18 @@ SurfaceData LoadSurface(
     float4 baseSample = 1.0f.xxxx;
     if (HasMaterialFeature(surface.material, MaterialFeatureBaseColorTexture))
     {
-        baseSample = SampleTextureWithFootprint(
-            surface.material.textureBaseIndex + TextureSlotBaseColor,
-            surface.texcoord,
-            uvFootprint);
+        baseSample = SampleMaterialTexture(surface.materialIndex, surface.material, TextureSlotBaseColor, sourceTexcoord0, sourceTexcoord1, uvFootprint);
     }
     float3 normalTexture = float3(128.0f / 255.0f, 128.0f / 255.0f, 1.0f);
     if (HasMaterialFeature(surface.material, MaterialFeatureNormalTexture))
     {
-        normalTexture = SampleTextureWithFootprint(
-            surface.material.textureBaseIndex + TextureSlotNormal,
-            surface.texcoord,
-            uvFootprint).xyz;
+        normalTexture = SampleMaterialTexture(surface.materialIndex, surface.material, TextureSlotNormal, sourceTexcoord0, sourceTexcoord1, uvFootprint).xyz;
     }
     surface.baseColor = baseSample.rgb * surface.material.baseColorFactor.rgb;
     float alphaSample = baseSample.a;
     if (HasMaterialFeature(surface.material, MaterialFeatureAlphaTexture))
     {
-        alphaSample = SampleTextureWithFootprint(
-            surface.material.textureBaseIndex + TextureSlotAlpha,
-            surface.texcoord,
-            uvFootprint).r;
+        alphaSample = SampleMaterialTexture(surface.materialIndex, surface.material, TextureSlotAlpha, sourceTexcoord0, sourceTexcoord1, uvFootprint).r;
     }
     surface.coverage = surface.material.alphaMasked != 0u
         ? saturate(alphaSample * surface.material.baseColorFactor.a)
@@ -804,10 +910,7 @@ SurfaceData LoadSurface(
         float3 ormSample = defaultRoughnessTexel.xxx;
         if (HasMaterialFeature(surface.material, MaterialFeatureRoughnessTexture))
         {
-            ormSample = SampleTextureWithFootprint(
-                surface.material.textureBaseIndex + TextureSlotRoughness,
-                surface.texcoord,
-                uvFootprint).rgb;
+            ormSample = SampleMaterialTexture(surface.materialIndex, surface.material, TextureSlotRoughness, sourceTexcoord0, sourceTexcoord1, uvFootprint).rgb;
         }
         surface.ao = saturate(ormSample.r * surface.material.occlusionStrength);
         surface.roughness = clamp(ormSample.g * surface.material.roughnessFactor, 0.04f, 1.0f);
@@ -818,26 +921,19 @@ SurfaceData LoadSurface(
         float roughnessTexel = defaultRoughnessTexel;
         if (HasMaterialFeature(surface.material, MaterialFeatureRoughnessTexture))
         {
-            roughnessTexel = SampleTextureWithFootprint(
-                surface.material.textureBaseIndex + TextureSlotRoughness,
-                surface.texcoord,
-                uvFootprint).r;
+            float4 roughnessSample = SampleMaterialTexture(surface.materialIndex, surface.material, TextureSlotRoughness, sourceTexcoord0, sourceTexcoord1, uvFootprint);
+            roughnessTexel = HasMaterialFeature(surface.material, MaterialFeatureGltfMetallicRoughness) ? roughnessSample.g : roughnessSample.r;
         }
         float metallicTexel = 0.0f;
         if (HasMaterialFeature(surface.material, MaterialFeatureMetallicTexture))
         {
-            metallicTexel = SampleTextureWithFootprint(
-                surface.material.textureBaseIndex + TextureSlotMetallic,
-                surface.texcoord,
-                uvFootprint).r;
+            float4 metallicSample = SampleMaterialTexture(surface.materialIndex, surface.material, TextureSlotMetallic, sourceTexcoord0, sourceTexcoord1, uvFootprint);
+            metallicTexel = HasMaterialFeature(surface.material, MaterialFeatureGltfMetallicRoughness) ? metallicSample.b : metallicSample.r;
         }
         float occlusionTexel = 1.0f;
         if (HasMaterialFeature(surface.material, MaterialFeatureOcclusionTexture))
         {
-            occlusionTexel = SampleTextureWithFootprint(
-                surface.material.textureBaseIndex + TextureSlotOcclusion,
-                surface.texcoord,
-                uvFootprint).r;
+            occlusionTexel = SampleMaterialTexture(surface.materialIndex, surface.material, TextureSlotOcclusion, sourceTexcoord0, sourceTexcoord1, uvFootprint).r;
         }
         surface.ao = saturate(occlusionTexel * surface.material.occlusionStrength);
         surface.roughness = clamp(roughnessTexel * surface.material.roughnessFactor, 0.04f, 1.0f);
@@ -848,10 +944,7 @@ SurfaceData LoadSurface(
     float3 emissiveTexture = 1.0f.xxx;
     if (HasMaterialFeature(surface.material, MaterialFeatureEmissiveTexture))
     {
-        emissiveTexture = SampleTextureWithFootprint(
-            surface.material.textureBaseIndex + TextureSlotEmissive,
-            surface.texcoord,
-            uvFootprint).rgb;
+        emissiveTexture = SampleMaterialTexture(surface.materialIndex, surface.material, TextureSlotEmissive, sourceTexcoord0, sourceTexcoord1, uvFootprint).rgb;
     }
     surface.emissive = emissiveTexture * surface.material.emissiveFactor.rgb * surface.material.emissiveFactor.a * g_scene.lightOptions.y;
     surface.normalTexture = normalTexture;
@@ -868,6 +961,67 @@ SurfaceData LoadSurface(
     float3 t = normalize(surface.tangent.xyz - n * dot(n, surface.tangent.xyz));
     float3 b = normalize(cross(n, t) * surface.tangent.w);
     surface.normal = normalize(normalSample.x * t + normalSample.y * b + normalSample.z * n);
+
+    uint extensionFeatures = (uint)round(surface.extension.transmissionThicknessIorFeatures.w);
+    float ior = (extensionFeatures & MaterialExtensionIor) != 0u
+        ? clamp(surface.extension.transmissionThicknessIorFeatures.z, 1.0f, 3.0f)
+        : clamp(surface.material.indexOfRefraction, 1.0f, 3.0f);
+    float dielectricF0Scalar = (ior - 1.0f) / max(ior + 1.0f, 1.0e-6f);
+    float dielectricReflectance = dielectricF0Scalar * dielectricF0Scalar;
+    float specularFactor = (extensionFeatures & MaterialExtensionSpecular) != 0u
+        ? saturate(surface.extension.specularColorFactorAndFactor.w)
+        : 1.0f;
+    float3 specularColor = (extensionFeatures & MaterialExtensionSpecular) != 0u
+        ? saturate(surface.extension.specularColorFactorAndFactor.rgb)
+        : 1.0f.xxx;
+    if (HasMaterialFeature(surface.material, MaterialFeatureSpecularFactorTexture))
+    {
+        specularFactor *= SampleMaterialTexture(surface.materialIndex, surface.material, TextureSlotSpecularFactor, sourceTexcoord0, sourceTexcoord1, uvFootprint).a;
+    }
+    if (HasMaterialFeature(surface.material, MaterialFeatureSpecularColorTexture))
+    {
+        specularColor *= SampleMaterialTexture(surface.materialIndex, surface.material, TextureSlotSpecularColor, sourceTexcoord0, sourceTexcoord1, uvFootprint).rgb;
+    }
+    surface.dielectricF0 = saturate(dielectricReflectance * specularFactor * specularColor);
+
+    surface.transmission = (extensionFeatures & MaterialExtensionTransmission) != 0u
+        ? saturate(surface.extension.transmissionThicknessIorFeatures.x)
+        : saturate(surface.material.transmissionFactor);
+    if (HasMaterialFeature(surface.material, MaterialFeatureTransmissionTexture))
+    {
+        surface.transmission *= SampleMaterialTexture(surface.materialIndex, surface.material, TextureSlotTransmission, sourceTexcoord0, sourceTexcoord1, uvFootprint).r;
+    }
+    surface.thickness = (extensionFeatures & MaterialExtensionVolume) != 0u
+        ? max(surface.extension.transmissionThicknessIorFeatures.y, 0.0f)
+        : 0.0f;
+    if (HasMaterialFeature(surface.material, MaterialFeatureThicknessTexture))
+    {
+        surface.thickness *= SampleMaterialTexture(surface.materialIndex, surface.material, TextureSlotThickness, sourceTexcoord0, sourceTexcoord1, uvFootprint).g;
+    }
+
+    surface.clearcoat = (extensionFeatures & MaterialExtensionClearcoat) != 0u
+        ? saturate(surface.extension.clearcoat.x)
+        : 0.0f;
+    surface.clearcoatRoughness = clamp(surface.extension.clearcoat.y, 0.04f, 1.0f);
+    if (HasMaterialFeature(surface.material, MaterialFeatureClearcoatTexture))
+    {
+        surface.clearcoat *= SampleMaterialTexture(surface.materialIndex, surface.material, TextureSlotClearcoat, sourceTexcoord0, sourceTexcoord1, uvFootprint).r;
+    }
+    if (HasMaterialFeature(surface.material, MaterialFeatureClearcoatRoughnessTexture))
+    {
+        surface.clearcoatRoughness = clamp(
+            surface.clearcoatRoughness * SampleMaterialTexture(surface.materialIndex, surface.material, TextureSlotClearcoatRoughness, sourceTexcoord0, sourceTexcoord1, uvFootprint).g,
+            0.04f,
+            1.0f);
+    }
+    surface.clearcoatNormal = surface.normal;
+    if (HasMaterialFeature(surface.material, MaterialFeatureClearcoatNormalTexture))
+    {
+        float3 clearcoatNormalTexture = SampleMaterialTexture(surface.materialIndex, surface.material, TextureSlotClearcoatNormal, sourceTexcoord0, sourceTexcoord1, uvFootprint).xyz;
+        float2 clearcoatXY = (clearcoatNormalTexture.xy * 2.0f - 1.0f) * max(surface.extension.clearcoat.z, 0.0f);
+        float3 clearcoatSample = float3(clearcoatXY, sqrt(saturate(1.0f - dot(clearcoatXY, clearcoatXY))));
+        surface.clearcoatNormal = normalize(clearcoatSample.x * t + clearcoatSample.y * b + clearcoatSample.z * n);
+    }
     return surface;
 }
 
@@ -904,15 +1058,17 @@ bool IsAlphaTransparent(
     MeshVertex v1 = g_vertices[tri.y];
     MeshVertex v2 = g_vertices[tri.z];
     float3 bary = Barycentric3(barycentrics);
-    float2 texcoord = Interpolate2(v0.texcoord, v1.texcoord, v2.texcoord, bary) *
-        material.uvScaleOffset.xy + material.uvScaleOffset.zw;
+    float2 texcoord0 = Interpolate2(v0.texcoord, v1.texcoord, v2.texcoord, bary);
+    float2 texcoord1 = Interpolate2(v0.texcoord1, v1.texcoord1, v2.texcoord1, bary);
     float coneWidthAtHit = RayConeWidthAtDistance(coneWidth, coneSpread, hitDistance);
+    uint textureSlot = hasSeparateAlpha ? TextureSlotAlpha : TextureSlotBaseColor;
+    float2 texcoord = TransformMaterialUv(geometry.materialIndex, textureSlot, texcoord0, texcoord1);
     float uvFootprint = TriangleUvFootprint(geometryIndex, primitiveIndex, coneWidthAtHit, rayDirection) *
-        max(max(abs(material.uvScaleOffset.x), abs(material.uvScaleOffset.y)), 1.0e-6f);
-    uint textureIndex = material.textureBaseIndex + (hasSeparateAlpha ? TextureSlotAlpha : TextureSlotBaseColor);
-    uint resourceIndex = NonUniformResourceIndex(textureIndex);
+        MaterialUvFootprintScale(geometry.materialIndex, textureSlot);
+    uint textureIndex = material.textureBaseIndex + textureSlot;
     float mipLevel = TextureMipLevel(textureIndex, uvFootprint);
-    float4 alphaSample = g_textures[resourceIndex].SampleLevel(g_linearSampler, texcoord, mipLevel);
+    uint samplerIndex = (uint)round(MaterialTextureBinding(geometry.materialIndex, textureSlot).rotationTexCoordSampler.z);
+    float4 alphaSample = SampleTextureWithSampler(textureIndex, texcoord, uvFootprint, samplerIndex);
     float alpha = material.baseColorFactor.a * (hasSeparateAlpha ? alphaSample.r : alphaSample.a);
     return alpha < AlphaCoverageCutoff(material.alphaCutoff, mipLevel);
 }
@@ -920,7 +1076,38 @@ bool IsAlphaTransparent(
 bool IsTransmissiveGeometry(uint geometryIndex)
 {
     RtGeometryRecord geometry = g_geometries[geometryIndex];
-    return g_materials[geometry.materialIndex].transmissionFactor > 0.0f;
+    RtMaterialExtension extension = g_materialExtensions[geometry.materialIndex];
+    uint features = (uint)round(extension.transmissionThicknessIorFeatures.w);
+    return ((features & MaterialExtensionTransmission) != 0u
+        ? extension.transmissionThicknessIorFeatures.x
+        : g_materials[geometry.materialIndex].transmissionFactor) > 0.0f;
+}
+
+float3 ShadowMaterialTransmittance(uint geometryIndex)
+{
+    RtGeometryRecord geometry = g_geometries[geometryIndex];
+    RtMaterial material = g_materials[geometry.materialIndex];
+    RtMaterialExtension extension = g_materialExtensions[geometry.materialIndex];
+    uint features = (uint)round(extension.transmissionThicknessIorFeatures.w);
+    float transmission = (features & MaterialExtensionTransmission) != 0u
+        ? saturate(extension.transmissionThicknessIorFeatures.x)
+        : saturate(material.transmissionFactor);
+    // Any-hit sees each boundary independently. Splitting surface and volume
+    // transmittance across the usual enter/exit pair prevents the old binary
+    // transparent-shadow behavior while avoiding double Beer absorption.
+    float3 result = sqrt(transmission).xxx;
+    if ((features & MaterialExtensionVolume) != 0u)
+    {
+        float thickness = max(extension.transmissionThicknessIorFeatures.y, 0.0f);
+        float attenuationDistance = extension.attenuationColorAndDistance.w;
+        if (thickness > 0.0f && attenuationDistance > 1.0e-6f && attenuationDistance < 3.0e+38f)
+        {
+            result *= sqrt(pow(
+                max(extension.attenuationColorAndDistance.rgb, 1.0e-6f.xxx),
+                thickness / attenuationDistance));
+        }
+    }
+    return saturate(result);
 }
 
 float FresnelDielectric(float cosineIncident, float etaIncident, float etaTransmitted)
@@ -950,15 +1137,18 @@ bool SampleDielectricContinuation(
     float selector,
     out float3 nextDirection,
     out float3 originOffsetNormal,
-    out float throughputScale,
+    out float3 throughputScale,
     out bool reflected)
 {
     nextDirection = 0.0f.xxx;
     originOffsetNormal = surface.geometricNormal;
-    throughputScale = 0.0f;
+    throughputScale = 0.0f.xxx;
     reflected = false;
 
-    float materialEta = clamp(surface.material.indexOfRefraction, 1.0001f, 3.0f);
+    uint extensionFeatures = (uint)round(surface.extension.transmissionThicknessIorFeatures.w);
+    float materialEta = (extensionFeatures & MaterialExtensionIor) != 0u
+        ? clamp(surface.extension.transmissionThicknessIorFeatures.z, 1.0001f, 3.0f)
+        : clamp(surface.material.indexOfRefraction, 1.0001f, 3.0f);
     float etaIncident = frontFace ? 1.0f : materialEta;
     float etaTransmitted = frontFace ? materialEta : 1.0f;
     float cosineIncident = saturate(dot(-incidentDirection, surface.geometricNormal));
@@ -971,12 +1161,12 @@ bool SampleDielectricContinuation(
 
     float reflectionProbability = reflectance;
     float transmissionProbability =
-        (1.0f - reflectance) * saturate(surface.material.transmissionFactor);
+        (1.0f - reflectance) * saturate(surface.transmission);
     if (selector < reflectionProbability)
     {
         nextDirection = normalize(reflect(incidentDirection, surface.geometricNormal));
         originOffsetNormal = surface.geometricNormal;
-        throughputScale = 1.0f;
+        throughputScale = 1.0f.xxx;
         reflected = true;
         return true;
     }
@@ -989,7 +1179,7 @@ bool SampleDielectricContinuation(
     if (surface.material.thinDielectric != 0u)
     {
         nextDirection = normalize(incidentDirection);
-        throughputScale = 1.0f;
+        throughputScale = 1.0f.xxx;
     }
     else
     {
@@ -1000,14 +1190,23 @@ bool SampleDielectricContinuation(
             // Numerical total internal reflection at the critical angle.
             nextDirection = normalize(reflect(incidentDirection, surface.geometricNormal));
             originOffsetNormal = surface.geometricNormal;
-            throughputScale = 1.0f;
+            throughputScale = 1.0f.xxx;
             reflected = true;
             return true;
         }
         nextDirection = normalize(nextDirection);
         // Radiance transport across a specular dielectric interface carries
         // the squared relative-IOR Jacobian. Enter/exit pairs cancel it.
-        throughputScale = eta * eta;
+        throughputScale = (eta * eta).xxx;
+    }
+    if (!frontFace && (extensionFeatures & MaterialExtensionVolume) != 0u && surface.thickness > 0.0f)
+    {
+        float attenuationDistance = surface.extension.attenuationColorAndDistance.w;
+        if (attenuationDistance < 3.0e+38f && attenuationDistance > 1.0e-6f)
+        {
+            float3 attenuationColor = max(surface.extension.attenuationColorAndDistance.rgb, 1.0e-6f.xxx);
+            throughputScale *= pow(attenuationColor, surface.thickness / attenuationDistance);
+        }
     }
     originOffsetNormal = -surface.geometricNormal;
     return true;
@@ -1111,7 +1310,7 @@ float GeometrySmith(float3 normal, float3 viewDirection, float3 lightDirection, 
 
 float BsdfSpecularProbability(SurfaceData surface, float3 viewDirection)
 {
-    float3 f0 = lerp(0.04f.xxx, surface.baseColor, surface.metallic);
+    float3 f0 = lerp(surface.dielectricF0, surface.baseColor, surface.metallic);
     float fresnelWeight = saturate(MaxComponent(FresnelSchlick(saturate(dot(surface.normal, viewDirection)), f0)));
     float probability = 0.2f + 0.55f * (1.0f - surface.roughness) + 0.25f * surface.metallic + 0.25f * fresnelWeight;
     return clamp(probability, 0.05f, 0.95f);
@@ -1152,10 +1351,16 @@ float GGXReflectionPdf(SurfaceData surface, float3 viewDirection, float3 lightDi
 
 float EvaluateBsdfPdf(SurfaceData surface, float3 viewDirection, float3 lightDirection)
 {
-    float specularProbability = BsdfSpecularProbability(surface, viewDirection);
+    float clearcoatProbability = min(surface.clearcoat * 0.25f, 0.25f);
+    float specularProbability = (1.0f - clearcoatProbability) * BsdfSpecularProbability(surface, viewDirection);
     float diffusePdf = CosineHemispherePdf(surface.normal, lightDirection);
     float specularPdf = GGXReflectionPdf(surface, viewDirection, lightDirection);
-    return (1.0f - specularProbability) * diffusePdf + specularProbability * specularPdf;
+    SurfaceData clearcoatSurface = surface;
+    clearcoatSurface.normal = surface.clearcoatNormal;
+    clearcoatSurface.roughness = surface.clearcoatRoughness;
+    float clearcoatPdf = GGXReflectionPdf(clearcoatSurface, viewDirection, lightDirection);
+    float diffuseProbability = max(1.0f - specularProbability - clearcoatProbability, 0.0f);
+    return diffuseProbability * diffusePdf + specularProbability * specularPdf + clearcoatProbability * clearcoatPdf;
 }
 
 float PowerHeuristic(float pdfA, float pdfB)
@@ -1186,13 +1391,31 @@ void EvaluateBsdfLobes(
         return;
     }
     float3 halfVector = normalize(halfSum);
-    float3 f0 = lerp(0.04f.xxx, surface.baseColor, surface.metallic);
+    float3 f0 = lerp(surface.dielectricF0, surface.baseColor, surface.metallic);
     float3 fresnel = FresnelSchlick(saturate(dot(halfVector, viewDirection)), f0);
     float distribution = DistributionGGX(surface.normal, halfVector, surface.roughness);
     float geometry = GeometrySmith(surface.normal, viewDirection, lightDirection, surface.roughness);
     float nDotV = saturate(dot(surface.normal, viewDirection));
     specular = distribution * geometry * fresnel / max(4.0f * nDotV * nDotL, 0.0001f) * nDotL;
-    diffuse = (1.0f.xxx - fresnel) * (1.0f - surface.metallic) * surface.baseColor / PI * nDotL;
+    diffuse = (1.0f.xxx - fresnel) * (1.0f - surface.metallic) * (1.0f - surface.transmission) * surface.baseColor / PI * nDotL;
+
+    if (surface.clearcoat > 0.0f)
+    {
+        float clearcoatNDotL = saturate(dot(surface.clearcoatNormal, lightDirection));
+        float clearcoatNDotV = saturate(dot(surface.clearcoatNormal, viewDirection));
+        if (clearcoatNDotL > 0.0f && clearcoatNDotV > 0.0f)
+        {
+            float3 clearcoatHalf = normalize(viewDirection + lightDirection);
+            float clearcoatFresnel = FresnelSchlick(saturate(dot(clearcoatHalf, viewDirection)), 0.04f.xxx).x;
+            float clearcoatDistribution = DistributionGGX(surface.clearcoatNormal, clearcoatHalf, surface.clearcoatRoughness);
+            float clearcoatGeometry = GeometrySmith(surface.clearcoatNormal, viewDirection, lightDirection, surface.clearcoatRoughness);
+            float3 clearcoatSpecular = surface.clearcoat * clearcoatDistribution * clearcoatGeometry * clearcoatFresnel /
+                max(4.0f * clearcoatNDotV * clearcoatNDotL, 0.0001f) * clearcoatNDotL;
+            float baseAttenuation = 1.0f - surface.clearcoat * clearcoatFresnel;
+            diffuse *= baseAttenuation;
+            specular = specular * baseAttenuation + clearcoatSpecular;
+        }
+    }
 }
 
 float3 EvaluateBsdf(SurfaceData surface, float3 viewDirection, float3 lightDirection)
@@ -1203,7 +1426,7 @@ float3 EvaluateBsdf(SurfaceData surface, float3 viewDirection, float3 lightDirec
     return diffuse + specular;
 }
 
-float TraceVisibilityRay(
+float3 TraceVisibilityRay(
     float3 origin,
     float3 normal,
     float3 direction,
@@ -1215,6 +1438,7 @@ float TraceVisibilityRay(
     payload.occluded = 1;
     payload.rayConeWidth = coneWidth;
     payload.rayConeSpread = coneSpread;
+    payload.transmittance = 1.0f.xxx;
 
     RayDesc ray;
     ray.Origin = origin + normal * g_scene.rayOptions.x;
@@ -1226,7 +1450,7 @@ float TraceVisibilityRay(
         DispatchRaysDimensions().xy,
         QualityRayShadow);
     TraceRay(g_sceneAs, RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_SKIP_CLOSEST_HIT_SHADER, 0xff, 1, 0, 1, ray, payload);
-    return payload.occluded == 0 ? 1.0f : 0.0f;
+    return payload.occluded == 0 ? payload.transmittance : 0.0f.xxx;
 }
 
 float3 EvaluateSunNEE(
@@ -1252,14 +1476,14 @@ float3 EvaluateSunNEE(
         return 0.0f.xxx;
     }
 
-    float visibility = TraceVisibilityRay(
+    float3 visibility = TraceVisibilityRay(
         surface.position,
         surface.normal,
         lightDirection,
         g_scene.rayOptions.y,
         surface.rayConeWidth,
         surface.rayConeSpread);
-    if (visibility <= 0.0f)
+    if (MaxComponent(visibility) <= 0.0f)
     {
         return 0.0f.xxx;
     }
@@ -1302,14 +1526,14 @@ float3 EvaluateSkyNEE(
     {
         return 0.0f.xxx;
     }
-    float visibility = TraceVisibilityRay(
+    float3 visibility = TraceVisibilityRay(
         surface.position,
         surface.normal,
         direction,
         g_scene.rayOptions.y,
         surface.rayConeWidth,
         surface.rayConeSpread);
-    if (visibility <= 0.0f)
+    if (MaxComponent(visibility) <= 0.0f)
     {
         return 0.0f.xxx;
     }
@@ -1391,14 +1615,14 @@ float3 EvaluateAreaLightNEE(
         {
             return 0.0f.xxx;
         }
-        float visibility = TraceVisibilityRay(
+        float3 visibility = TraceVisibilityRay(
             surface.position,
             surface.normal,
             lightDirection,
             type >= 4.0f ? g_scene.rayOptions.y : distanceToLight - g_scene.rayOptions.x * 2.0f,
             surface.rayConeWidth,
             surface.rayConeSpread);
-        if (visibility <= 0.0f) return 0.0f.xxx;
+        if (MaxComponent(visibility) <= 0.0f) return 0.0f.xxx;
         EvaluateBsdfLobes(surface, viewDirection, lightDirection, diffuseContribution, specularContribution);
         float3 scale = radiance * visibility / max(techniqueProbability * selectionPdf, 1.0e-10f);
         diffuseContribution *= scale;
@@ -1446,14 +1670,14 @@ float3 EvaluateAreaLightNEE(
     }
     float areaPdf = techniqueProbability * selectionPdf / light.positionArea.w;
     float solidAnglePdf = areaPdf * distanceSquared / lightCos;
-    float visibility = TraceVisibilityRay(
+    float3 visibility = TraceVisibilityRay(
         surface.position,
         surface.normal,
         lightDirection,
         distanceToLight - g_scene.rayOptions.x * 2.0f,
         surface.rayConeWidth,
         surface.rayConeSpread);
-    if (visibility <= 0.0f)
+    if (MaxComponent(visibility) <= 0.0f)
     {
         return 0.0f.xxx;
     }
@@ -1867,7 +2091,7 @@ float3 TracePathSample(
             dot(surface.geometricNormal, -rayDirection) > 0.0f
             ? surface.geometricNormal
             : -surface.geometricNormal;
-        bool dielectric = surface.material.transmissionFactor > 0.0f;
+        bool dielectric = surface.transmission > 0.0f;
 
         if (dielectric)
         {
@@ -1878,7 +2102,7 @@ float3 TracePathSample(
                 BounceSampleDimension(bounce, SampleDimensionBsdfLobe));
             float3 nextDirection;
             float3 originOffsetNormal;
-            float throughputScale;
+            float3 throughputScale;
             bool reflected;
             bool continued = SampleDielectricContinuation(
                 surface,
@@ -2061,14 +2285,26 @@ float3 TracePathSample(
             break;
         }
 
-        float specularProbability = BsdfSpecularProbability(surface, viewDirection);
-        float chooseSpecular = OwenScrambledSobol1D(pixel, sampleIndex, BounceSampleDimension(bounce, SampleDimensionBsdfLobe));
+        float clearcoatProbability = min(surface.clearcoat * 0.25f, 0.25f);
+        float specularProbability = (1.0f - clearcoatProbability) * BsdfSpecularProbability(surface, viewDirection);
+        float chooseLobe = OwenScrambledSobol1D(pixel, sampleIndex, BounceSampleDimension(bounce, SampleDimensionBsdfLobe));
         float2 bsdfDirectionSample = OwenScrambledSobol2D(pixel, sampleIndex, BounceSampleDimension(bounce, SampleDimensionBsdfDirection));
         float3 nextDirection;
         float scatterConeSpread;
-        bool sampledSpecular = chooseSpecular < specularProbability;
+        bool sampledClearcoat = chooseLobe < clearcoatProbability;
+        bool sampledSpecular = sampledClearcoat || chooseLobe < clearcoatProbability + specularProbability;
 
-        if (sampledSpecular)
+        if (sampledClearcoat)
+        {
+            if (!firstContinuationClassified)
+            {
+                firstContinuationWasSpecular = true;
+                firstContinuationClassified = true;
+            }
+            nextDirection = SampleGGXDirection(bsdfDirectionSample, surface.clearcoatRoughness, surface.clearcoatNormal, viewDirection);
+            scatterConeSpread = surface.clearcoatRoughness * surface.clearcoatRoughness * 0.25f;
+        }
+        else if (sampledSpecular)
         {
             if (!firstContinuationClassified)
             {
@@ -2089,9 +2325,20 @@ float3 TracePathSample(
             scatterConeSpread = 0.25f;
         }
 
-        float conditionalPdf = sampledSpecular
-            ? GGXReflectionPdf(surface, viewDirection, nextDirection)
-            : CosineHemispherePdf(surface.normal, nextDirection);
+        float conditionalPdf;
+        if (sampledClearcoat)
+        {
+            SurfaceData clearcoatSurface = surface;
+            clearcoatSurface.normal = surface.clearcoatNormal;
+            clearcoatSurface.roughness = surface.clearcoatRoughness;
+            conditionalPdf = GGXReflectionPdf(clearcoatSurface, viewDirection, nextDirection);
+        }
+        else
+        {
+            conditionalPdf = sampledSpecular
+                ? GGXReflectionPdf(surface, viewDirection, nextDirection)
+                : CosineHemispherePdf(surface.normal, nextDirection);
+        }
         float mixturePdf = EvaluateBsdfPdf(surface, viewDirection, nextDirection);
         if (conditionalPdf <= 1.0e-10f || mixturePdf <= 1.0e-10f || dot(surface.normal, nextDirection) <= 0.0f)
         {
@@ -2456,6 +2703,26 @@ void RunPathPixel(
         averageBounces,
         g_scene.pathOptions.x,
         skyDebug);
+    if (firstHit.hit != 0u)
+    {
+        if (debugMode == 54u) debugColor = firstHit.surface.dielectricF0;
+        else if (debugMode == 55u) debugColor = firstHit.surface.transmission.xxx;
+        else if (debugMode == 56u)
+        {
+            float attenuationDistance = max(firstHit.surface.extension.attenuationColorAndDistance.w, 1.0e-6f);
+            debugColor = exp(-max(firstHit.surface.thickness, 0.0f) *
+                -log(max(firstHit.surface.extension.attenuationColorAndDistance.rgb, 1.0e-6f.xxx)) /
+                attenuationDistance);
+        }
+        else if (debugMode == 57u) debugColor = float3(firstHit.surface.clearcoat, firstHit.surface.clearcoatRoughness,
+            saturate(firstHit.surface.clearcoatNormal.z * 0.5f + 0.5f));
+        else if (debugMode == 58u)
+        {
+            RtTextureBinding binding = MaterialTextureBinding(firstHit.surface.materialIndex, TextureSlotBaseColor);
+            uint uvSet = (uint)round(binding.rotationTexCoordSampler.y);
+            debugColor = float3(frac(firstHit.surface.texcoord), (float)uvSet);
+        }
+    }
     color = ApplyMaterialFocus(color, firstHit.surface.materialIndex, firstHit.hit);
     diffuseSignal = ApplyMaterialFocus(diffuseSignal, firstHit.surface.materialIndex, firstHit.hit);
     specularSignal = ApplyMaterialFocus(specularSignal, firstHit.surface.materialIndex, firstHit.hit);
@@ -2791,7 +3058,7 @@ void ShadowAnyHit(inout ShadowPayload payload, in BuiltInTriangleIntersectionAtt
         DispatchRaysDimensions().xy,
         QualityRayAnyHit);
     const uint geometryIndex = InstanceID() + GeometryIndex();
-    if (IsTransmissiveGeometry(geometryIndex) || IsAlphaTransparent(
+    if (IsAlphaTransparent(
         geometryIndex,
         PrimitiveIndex(),
         attributes.barycentrics,
@@ -2801,6 +3068,15 @@ void ShadowAnyHit(inout ShadowPayload payload, in BuiltInTriangleIntersectionAtt
         WorldRayDirection()))
     {
         IgnoreHit();
+        return;
+    }
+    if (IsTransmissiveGeometry(geometryIndex))
+    {
+        payload.transmittance *= ShadowMaterialTransmittance(geometryIndex);
+        if (MaxComponent(payload.transmittance) > 1.0e-4f)
+        {
+            IgnoreHit();
+        }
     }
 }
 

@@ -119,6 +119,9 @@ struct MainWindow : MainWindowT<MainWindow>
     void OnTextureClick(
         Windows::Foundation::IInspectable const&,
         Microsoft::UI::Xaml::RoutedEventArgs const&);
+    void OnTextureResolutionSelectionChanged(
+        Windows::Foundation::IInspectable const&,
+        Microsoft::UI::Xaml::Controls::SelectionChangedEventArgs const&);
     void OnCopyToken(
         Windows::Foundation::IInspectable const&,
         Microsoft::UI::Xaml::RoutedEventArgs const&);

@@ -203,6 +203,8 @@ private:
         DescriptorMaterialBuffer,
         DescriptorLightBuffer,
         DescriptorInstanceBuffer,
+        DescriptorMaterialExtensionBuffer,
+        DescriptorTextureBindingBuffer,
         DescriptorTextureBase
     };
 
@@ -339,7 +341,12 @@ private:
         DXGI_FORMAT format = DXGI_FORMAT_R8G8B8A8_UNORM;
         uint32_t width = 1;
         uint32_t height = 1;
+        uint32_t sourceWidth = 1;
+        uint32_t sourceHeight = 1;
         uint32_t mipLevels = 1;
+        UINT64 residentBytes = 0;
+        std::string container;
+        std::string transcodeFormat;
         bool fallback = false;
     };
 
@@ -359,6 +366,7 @@ private:
 
     struct MaterialSnapshot
     {
+        std::string sourceMaterialId;
         XMFLOAT4 baseColorFactor = XMFLOAT4(1.0f, 1.0f, 1.0f, 1.0f);
         XMFLOAT4 emissiveFactor = XMFLOAT4(0.0f, 0.0f, 0.0f, 0.0f);
         float roughnessFactor = 0.48f;
@@ -368,8 +376,21 @@ private:
         float alphaCutoff = 0.33f;
         bool alphaMasked = false;
         bool packedOcclusionRoughnessMetallic = false;
+        uint32_t extensionFeatureMask = 0;
+        float specularFactor = 1.0f;
+        XMFLOAT3 specularColorFactor = XMFLOAT3(1.0f, 1.0f, 1.0f);
+        float indexOfRefraction = 1.5f;
+        float transmissionFactor = 0.0f;
+        float thicknessFactor = 0.0f;
+        XMFLOAT3 attenuationColor = XMFLOAT3(1.0f, 1.0f, 1.0f);
+        float attenuationDistance = FLT_MAX;
+        float clearcoatFactor = 0.0f;
+        float clearcoatRoughnessFactor = 0.0f;
+        float clearcoatNormalScale = 1.0f;
         std::array<std::wstring, TextureSlotCount> textures;
+        std::array<Bistro::TextureBinding, TextureSlotCount> textureBindings;
         std::array<bool, TextureSlotCount> textureOverrideEnabled = {};
+        std::array<bool, TextureSlotCount> textureBindingOverrideEnabled = {};
     };
 
     struct MaterialVariant
@@ -559,6 +580,9 @@ private:
     UINT m_qualityCounterTileCount = 1;
     UINT64 m_qualityCounterBufferSize = sizeof(lookdevpt::benchmark::QualityCounterTileV1);
     UINT64 m_frameHistoryResourceBytes = 0;
+    UINT64 m_textureBudgetBytes = 512ull * 1024ull * 1024ull;
+    UINT64 m_textureResidentBytes = 0;
+    UINT64 m_adapterDedicatedVideoMemory = 0;
     UINT64 m_gpuTimestampFrequency = 0;
     bool m_gpuTimingSupported = false;
     bool m_gpuTimingValid = false;
@@ -590,6 +614,8 @@ private:
     Bistro::Scene m_scene;
     std::vector<Bistro::RtGeometryRecord> m_geometryRecords;
     std::vector<Bistro::RtMaterial> m_rtMaterials;
+    std::vector<Bistro::RtMaterialExtension> m_rtMaterialExtensions;
+    std::vector<Bistro::RtTextureBinding> m_rtTextureBindings;
     std::vector<Bistro::RtInstance> m_rtInstances;
     std::vector<GpuTexture> m_textures;
     std::vector<std::array<UINT, Bistro::TextureSlotCount>> m_materialTextureIndices;
@@ -598,6 +624,8 @@ private:
     ComPtr<ID3D12Resource> m_indexBuffer;
     ComPtr<ID3D12Resource> m_geometryBuffer;
     ComPtr<ID3D12Resource> m_materialBuffer;
+    ComPtr<ID3D12Resource> m_materialExtensionBuffer;
+    ComPtr<ID3D12Resource> m_textureBindingBuffer;
     ComPtr<ID3D12Resource> m_lightBuffer;
     ComPtr<ID3D12Resource> m_instanceBuffer;
     std::vector<ComPtr<ID3D12Resource>> m_uploadBuffers;
@@ -806,6 +834,7 @@ private:
     std::vector<Bistro::RtLight> m_lights;
     std::vector<Bistro::Material> m_sourceMaterials;
     std::vector<std::array<bool, TextureSlotCount>> m_textureOverrideEnabled;
+    std::vector<std::array<bool, TextureSlotCount>> m_textureBindingOverrideEnabled;
     std::vector<MaterialUsage> m_materialUsage;
     uint64_t m_sceneSubmittedIndexCount = 0;
     uint64_t m_scenePrimitiveCount = 0;
@@ -1005,7 +1034,8 @@ private:
         const uint8_t fallback[4],
         std::map<std::wstring, UINT>& cache,
         float alphaCoverageCutoff = -1.0f,
-        bool environmentRadiance = false);
+        bool environmentRadiance = false,
+        rb::TextureResolutionPolicy resolutionPolicy = rb::TextureResolutionPolicy::Auto);
     ComPtr<ID3D12Resource> CreateDefaultBuffer(const void* data, UINT64 size, D3D12_RESOURCE_FLAGS flags, D3D12_RESOURCE_STATES finalState, const wchar_t* name);
     ComPtr<ID3D12Resource> CreateUploadBuffer(const void* data, UINT64 size, const wchar_t* name);
     ComPtr<ID3D12Resource> CreateUavBuffer(UINT64 size, D3D12_RESOURCE_STATES initialState, const wchar_t* name);

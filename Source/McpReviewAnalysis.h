@@ -37,6 +37,10 @@ struct SceneAuditSummary
     uint32_t textureReferenceCount = 0;
     uint32_t analyticLightCount = 0;
     uint32_t degenerateTriangleCount = 0;
+    uint32_t materialFeatureMask = 0;
+    std::vector<std::string> extensionsUsed;
+    std::vector<std::string> extensionsRequired;
+    std::vector<std::string> unsupportedExtensions;
     std::vector<SceneDiagnostic> diagnostics;
 };
 
@@ -58,6 +62,9 @@ struct AuditRuntimeState
     bool nrdAvailable = false;
     bool dlssRequested = false;
     bool dlssAvailable = false;
+    uint64_t textureBudgetBytes = 0;
+    uint64_t textureResidentBytes = 0;
+    uint64_t dedicatedVideoMemoryBytes = 0;
 };
 
 struct AuditReport
@@ -68,6 +75,9 @@ struct AuditReport
     uint32_t infoCount = 0;
     uint32_t warningCount = 0;
     uint32_t errorCount = 0;
+    uint64_t textureBudgetBytes = 0;
+    uint64_t textureResidentBytes = 0;
+    uint64_t dedicatedVideoMemoryBytes = 0;
 };
 
 SceneAuditSummary AnalyzeScene(const Bistro::Scene& scene);

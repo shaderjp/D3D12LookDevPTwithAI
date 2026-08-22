@@ -60,6 +60,13 @@ if ($EnforceLock) {
 
 & git -C $repo submodule update --init
 if ($LASTEXITCODE -ne 0) { throw 'D3D12 submodule restore failed.' }
+foreach ($dependency in @(
+    @{ Name = 'tinygltf'; Path = (Join-Path $repo 'ThirdParty\tinygltf'); Commit = [string]$lock.dependencies.tinygltf.commit },
+    @{ Name = 'Basis Universal'; Path = (Join-Path $repo 'ThirdParty\basis_universal'); Commit = [string]$lock.dependencies.basisUniversal.commit }
+)) {
+    if ($dependency.Commit -notmatch '^[0-9a-f]{40}$') { throw "$($dependency.Name) lock is missing or invalid." }
+    Test-LockedCommit $dependency.Path $dependency.Commit $dependency.Name
+}
 & dotnet restore (Join-Path $LocalMcpRepository 'LocalMCPChatClient.sln')
 if ($LASTEXITCODE -ne 0) { throw 'LocalMCPChatClient restore failed.' }
 

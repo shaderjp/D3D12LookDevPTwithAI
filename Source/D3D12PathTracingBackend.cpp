@@ -89,12 +89,14 @@ namespace
         UINT occluded;
         float rayConeWidth;
         float rayConeSpread;
+        XMFLOAT3 transmittance;
     };
     static_assert(sizeof(PathPayloadAbi) == 32u);
     static_assert(offsetof(PathPayloadAbi, hitT) == 8u);
     static_assert(offsetof(PathPayloadAbi, primitiveIndex) == 28u);
-    static_assert(sizeof(ShadowPayloadAbi) == 12u);
+    static_assert(sizeof(ShadowPayloadAbi) == 24u);
     static_assert(offsetof(ShadowPayloadAbi, rayConeSpread) == 8u);
+    static_assert(offsetof(ShadowPayloadAbi, transmittance) == 12u);
 
     const wchar_t* RayGenShaderName = L"RayGen";
     const wchar_t* PrimaryRayGenShaderName = L"PrimaryRayGen";
@@ -159,8 +161,17 @@ namespace
     {
         "baseline", "restir_gi", "restir_di", "restir_gi_di", "restir_pt", "restir_pt_di"
     };
-    constexpr const char* TextureSlotLabels[] = { "Base Color", "Normal", "Roughness", "Metallic", "Occlusion", "Emissive", "Alpha" };
-    constexpr const char* TextureSlotKeys[] = { "baseColor", "normal", "roughness", "metallic", "occlusion", "emissive", "alpha" };
+    constexpr const char* TextureSlotLabels[] = {
+        "Base Color", "Normal", "Roughness", "Metallic", "Occlusion", "Emissive", "Alpha",
+        "Specular Color", "Specular Factor", "Transmission", "Thickness", "Clearcoat",
+        "Clearcoat Roughness", "Clearcoat Normal" };
+    constexpr const char* TextureSlotKeys[] = {
+        "baseColor", "normal", "roughness", "metallic", "occlusion", "emissive", "alpha",
+        "specularColor", "specularFactor", "transmission", "thickness", "clearcoat",
+        "clearcoatRoughness", "clearcoatNormal" };
+    static_assert(_countof(TextureSlotLabels) == Bistro::TextureSlotCount);
+    static_assert(_countof(TextureSlotKeys) == Bistro::TextureSlotCount);
+    std::string WideToUtf8(const std::wstring& text);
     constexpr const char* MaterialFocusLabels[] = { "Normal", "Isolate", "Dim" };
     constexpr const char* ToneMapperLabels[] = { "None", "Reinhard", "ACES" };
     constexpr const char* DebugViewLabels[] =
@@ -176,7 +187,8 @@ namespace
         "NRD World Normal", "NRD Roughness", "NRD Linear View-Z", "NRD 2.5D Motion",
         "NRD Disocclusion / History", "NRD Input Validation", "TAA History Length",
         "TAA History Acceptance", "GI Weight", "GI Age", "GI Validity",
-        "GI Temporal Acceptance", "GI Initial vs Resampled"
+        "GI Temporal Acceptance", "GI Initial vs Resampled", "Specular F0", "Transmission",
+        "Thickness / Attenuation", "Clearcoat", "UV Set"
     };
     constexpr int DebugViewMax = static_cast<int>(_countof(DebugViewLabels)) - 1;
 
@@ -236,6 +248,115 @@ namespace
         }
         out << "]}";
         return out.str();
+    }
+
+    const char* TextureSamplerName(uint32_t sampler)
+    {
+        static constexpr const char* Names[] = {
+            "linearRepeat", "linearClamp", "linearMirror",
+            "nearestRepeat", "nearestClamp", "nearestMirror" };
+        return Names[(std::min)(sampler, static_cast<uint32_t>(_countof(Names) - 1))];
+    }
+
+    const char* TextureResolutionPolicyName(uint32_t policy)
+    {
+        static constexpr const char* Names[] = { "auto", "source", "4k", "2k", "1k", "512" };
+        return Names[(std::min)(policy, static_cast<uint32_t>(_countof(Names) - 1))];
+    }
+
+    uint32_t TextureSamplerFromName(const std::string& name, uint32_t fallback)
+    {
+        static constexpr const char* Names[] = {
+            "linearRepeat", "linearClamp", "linearMirror",
+            "nearestRepeat", "nearestClamp", "nearestMirror" };
+        for (uint32_t i = 0; i < _countof(Names); ++i)
+        {
+            if (name == Names[i]) return i;
+        }
+        return fallback;
+    }
+
+    uint32_t TextureResolutionPolicyFromName(const std::string& name, uint32_t fallback)
+    {
+        static constexpr const char* Names[] = { "auto", "source", "4k", "2k", "1k", "512" };
+        for (uint32_t i = 0; i < _countof(Names); ++i)
+        {
+            if (name == Names[i]) return i;
+        }
+        return fallback;
+    }
+
+    template<typename MaterialLike>
+    void WriteGltfExtensionsJson(std::ostream& out, const MaterialLike& material)
+    {
+        out << "{\"featureMask\":" << material.extensionFeatureMask
+            << ",\"specularFactor\":" << material.specularFactor
+            << ",\"specularColorFactor\":[" << material.specularColorFactor.x << "," << material.specularColorFactor.y << "," << material.specularColorFactor.z << "]"
+            << ",\"ior\":" << material.indexOfRefraction
+            << ",\"transmissionFactor\":" << material.transmissionFactor
+            << ",\"thicknessFactor\":" << material.thicknessFactor
+            << ",\"attenuationColor\":[" << material.attenuationColor.x << "," << material.attenuationColor.y << "," << material.attenuationColor.z << "]"
+            << ",\"attenuationDistance\":" << material.attenuationDistance
+            << ",\"clearcoatFactor\":" << material.clearcoatFactor
+            << ",\"clearcoatRoughnessFactor\":" << material.clearcoatRoughnessFactor
+            << ",\"clearcoatNormalScale\":" << material.clearcoatNormalScale << "}";
+    }
+
+    template<typename MaterialLike>
+    void WriteTextureBindingsJson(std::ostream& out, const MaterialLike& material,
+        const std::array<bool, Bistro::TextureSlotCount>& overrideEnabled)
+    {
+        out << "{";
+        for (UINT slot = 0; slot < Bistro::TextureSlotCount; ++slot)
+        {
+            if (slot > 0) out << ",";
+            const Bistro::TextureBinding& binding = material.textureBindings[slot];
+            out << "\"" << TextureSlotKeys[slot] << "\":{" 
+                << "\"path\":\"" << cld::EscapeJson(WideToUtf8(material.textures[slot])) << "\""
+                << ",\"uvSet\":" << binding.texCoord
+                << ",\"offset\":[" << binding.offset.x << "," << binding.offset.y << "]"
+                << ",\"scale\":[" << binding.scale.x << "," << binding.scale.y << "]"
+                << ",\"rotation\":" << binding.rotation
+                << ",\"sampler\":\"" << TextureSamplerName(binding.samplerIndex) << "\""
+                << ",\"resolutionPolicy\":\"" << TextureResolutionPolicyName(binding.resolutionPolicy) << "\""
+                << ",\"overridden\":" << (overrideEnabled[slot] ? "true" : "false") << "}";
+        }
+        out << "}";
+    }
+
+    template<typename MaterialLike>
+    void ReadGltfExtensionsJson(const cld::JsonValue& owner, MaterialLike& material)
+    {
+        const cld::JsonValue* gltf = cld::FindMember(owner, "gltfExtensions");
+        if (!gltf || gltf->type != cld::JsonValue::Type::Object) return;
+        const double featureMask = cld::JsonNumberOr(*gltf, "featureMask", material.extensionFeatureMask);
+        material.extensionFeatureMask = static_cast<uint32_t>(std::clamp(
+            featureMask,
+            0.0,
+            static_cast<double>(std::numeric_limits<uint32_t>::max())));
+        material.specularFactor = std::clamp(static_cast<float>(cld::JsonNumberOr(*gltf, "specularFactor", material.specularFactor)), 0.0f, 2.0f);
+        const std::array<float, 3> specular = cld::JsonFloat3Or(*gltf, "specularColorFactor", { material.specularColorFactor.x, material.specularColorFactor.y, material.specularColorFactor.z });
+        material.specularColorFactor = XMFLOAT3(specular[0], specular[1], specular[2]);
+        material.indexOfRefraction = std::clamp(static_cast<float>(cld::JsonNumberOr(*gltf, "ior", material.indexOfRefraction)), 1.0f, 3.0f);
+        material.transmissionFactor = std::clamp(static_cast<float>(cld::JsonNumberOr(*gltf, "transmissionFactor", material.transmissionFactor)), 0.0f, 1.0f);
+        material.thicknessFactor = (std::max)(0.0f, static_cast<float>(cld::JsonNumberOr(*gltf, "thicknessFactor", material.thicknessFactor)));
+        const std::array<float, 3> attenuation = cld::JsonFloat3Or(*gltf, "attenuationColor", { material.attenuationColor.x, material.attenuationColor.y, material.attenuationColor.z });
+        material.attenuationColor = XMFLOAT3(attenuation[0], attenuation[1], attenuation[2]);
+        material.attenuationDistance = (std::max)(0.0f, static_cast<float>(cld::JsonNumberOr(*gltf, "attenuationDistance", material.attenuationDistance)));
+        material.clearcoatFactor = std::clamp(static_cast<float>(cld::JsonNumberOr(*gltf, "clearcoatFactor", material.clearcoatFactor)), 0.0f, 1.0f);
+        material.clearcoatRoughnessFactor = std::clamp(static_cast<float>(cld::JsonNumberOr(*gltf, "clearcoatRoughnessFactor", material.clearcoatRoughnessFactor)), 0.0f, 1.0f);
+        material.clearcoatNormalScale = std::clamp(static_cast<float>(cld::JsonNumberOr(*gltf, "clearcoatNormalScale", material.clearcoatNormalScale)), 0.0f, 2.0f);
+    }
+
+    XMFLOAT2 JsonFloat2Or(const cld::JsonValue& owner, const char* name, const XMFLOAT2& fallback)
+    {
+        const cld::JsonValue* value = cld::FindMember(owner, name);
+        if (!value || value->type != cld::JsonValue::Type::Array || value->array.size() != 2 ||
+            value->array[0].type != cld::JsonValue::Type::Number || value->array[1].type != cld::JsonValue::Type::Number)
+        {
+            return fallback;
+        }
+        return XMFLOAT2(static_cast<float>(value->array[0].number), static_cast<float>(value->array[1].number));
     }
 
     bool TryParseDebugView(const cld::JsonValue& value, int& debugView)
@@ -1196,7 +1317,7 @@ namespace
                 mesh.boundsMax = sourceMesh.boundsMax;
                 for (const rb::SceneVertex& src : sourceMesh.vertices)
                 {
-                    scene.vertices.push_back({ src.position, src.normal, src.tangent, src.texcoord });
+                    scene.vertices.push_back({ src.position, src.normal, src.tangent, src.texcoord, src.texcoord1 });
                 }
                 for (const uint32_t localIndex : sourceMesh.indices)
                 {
@@ -1220,7 +1341,7 @@ namespace
             scene.vertices.reserve(imported.vertices.size());
             for (const rb::SceneVertex& src : imported.vertices)
             {
-                scene.vertices.push_back({ src.position, src.normal, src.tangent, src.texcoord });
+                scene.vertices.push_back({ src.position, src.normal, src.tangent, src.texcoord, src.texcoord1 });
             }
             scene.indices = imported.indices;
             for (const rb::SceneDraw& src : imported.draws)
@@ -1229,6 +1350,10 @@ namespace
             }
         }
         scene.hasAuthoredLighting = imported.hasAuthoredLighting;
+        scene.extensionsUsed = imported.extensionsUsed;
+        scene.extensionsRequired = imported.extensionsRequired;
+        scene.unsupportedExtensions = imported.unsupportedExtensions;
+        scene.materialFeatureMask = imported.materialFeatureMask;
         scene.analyticLights.reserve(imported.lights.size());
         for (const rb::SceneLight& sourceLight : imported.lights)
         {
@@ -1250,6 +1375,7 @@ namespace
         {
             Bistro::Material material;
             material.name = Utf8ToWide(src.assignment.materialName);
+            material.sourceMaterialId = src.sourceMaterialId;
             material.textures[Bistro::TextureSlotBaseColor] = src.assignment.textureOverrideEnabled[static_cast<size_t>(rb::TextureSlot::BaseColor)] ? src.assignment.textureOverrides[static_cast<size_t>(rb::TextureSlot::BaseColor)] : src.baseColorTexturePath;
             material.textures[Bistro::TextureSlotNormal] = src.assignment.textureOverrideEnabled[static_cast<size_t>(rb::TextureSlot::Normal)] ? src.assignment.textureOverrides[static_cast<size_t>(rb::TextureSlot::Normal)] : src.normalTexturePath;
             material.textures[Bistro::TextureSlotRoughness] = src.assignment.textureOverrideEnabled[static_cast<size_t>(rb::TextureSlot::Roughness)] ? src.assignment.textureOverrides[static_cast<size_t>(rb::TextureSlot::Roughness)] : src.roughnessTexturePath;
@@ -1257,6 +1383,26 @@ namespace
             material.textures[Bistro::TextureSlotOcclusion] = src.assignment.textureOverrideEnabled[static_cast<size_t>(rb::TextureSlot::Occlusion)] ? src.assignment.textureOverrides[static_cast<size_t>(rb::TextureSlot::Occlusion)] : src.occlusionTexturePath;
             material.textures[Bistro::TextureSlotEmissive] = src.assignment.textureOverrideEnabled[static_cast<size_t>(rb::TextureSlot::Emissive)] ? src.assignment.textureOverrides[static_cast<size_t>(rb::TextureSlot::Emissive)] : src.emissiveTexturePath;
             material.textures[Bistro::TextureSlotAlpha] = src.assignment.textureOverrideEnabled[static_cast<size_t>(rb::TextureSlot::Alpha)] ? src.assignment.textureOverrides[static_cast<size_t>(rb::TextureSlot::Alpha)] : src.alphaTexturePath;
+            for (UINT slot = Bistro::TextureSlotSpecularColor; slot < Bistro::TextureSlotCount; ++slot)
+            {
+                const size_t editorSlot = static_cast<size_t>(slot);
+                material.textures[slot] = src.assignment.textureOverrideEnabled[editorSlot]
+                    ? src.assignment.textureOverrides[editorSlot]
+                    : src.textureBindings[editorSlot].path;
+            }
+            for (UINT slot = 0; slot < Bistro::TextureSlotCount; ++slot)
+            {
+                const rb::TextureBinding& sourceBinding = src.assignment.textureBindingOverrideEnabled[slot]
+                    ? src.assignment.textureBindings[slot]
+                    : src.textureBindings[slot];
+                Bistro::TextureBinding& targetBinding = material.textureBindings[slot];
+                targetBinding.offset = XMFLOAT2(sourceBinding.transform.offset[0], sourceBinding.transform.offset[1]);
+                targetBinding.scale = XMFLOAT2(sourceBinding.transform.scale[0], sourceBinding.transform.scale[1]);
+                targetBinding.rotation = sourceBinding.transform.rotation;
+                targetBinding.texCoord = std::min(sourceBinding.transform.texCoord, 1u);
+                targetBinding.samplerIndex = static_cast<uint32_t>(sourceBinding.sampler);
+                targetBinding.resolutionPolicy = static_cast<uint32_t>(sourceBinding.resolutionPolicy);
+            }
             material.baseColorFactor = XMFLOAT4(src.assignment.baseColorFactor[0], src.assignment.baseColorFactor[1], src.assignment.baseColorFactor[2], src.assignment.baseColorFactor[3]);
             material.emissiveFactor = XMFLOAT4(src.assignment.emissiveFactor[0], src.assignment.emissiveFactor[1], src.assignment.emissiveFactor[2], src.assignment.emissiveFactor[3]);
             material.roughnessFactor = src.assignment.roughnessFactor;
@@ -1267,10 +1413,25 @@ namespace
             material.alphaMasked = src.assignment.alphaMode == rb::AlphaMode::Mask || src.assignment.baseColorFactor[3] < 0.99f;
             material.twoSidedEmission = src.twoSidedEmission;
             material.packedOcclusionRoughnessMetallic = src.assignment.packedOcclusionRoughnessMetallic;
+            material.gltfMetallicRoughness = !src.sourceMaterialId.empty();
             material.transmissionFactor = src.transmissionFactor;
             material.indexOfRefraction = src.indexOfRefraction;
             material.thinDielectric = src.thinDielectric;
             material.uvScaleOffset = src.uvScaleOffset;
+            const rb::GltfMaterialExtensions& gltf = src.assignment.gltfExtensions.featureMask != 0
+                ? src.assignment.gltfExtensions
+                : src.gltfExtensions;
+            material.extensionFeatureMask = gltf.featureMask;
+            material.specularFactor = gltf.specularFactor;
+            material.specularColorFactor = XMFLOAT3(gltf.specularColorFactor[0], gltf.specularColorFactor[1], gltf.specularColorFactor[2]);
+            material.indexOfRefraction = gltf.ior;
+            material.transmissionFactor = gltf.transmissionFactor;
+            material.thicknessFactor = gltf.thicknessFactor;
+            material.attenuationColor = XMFLOAT3(gltf.attenuationColor[0], gltf.attenuationColor[1], gltf.attenuationColor[2]);
+            material.attenuationDistance = gltf.attenuationDistance;
+            material.clearcoatFactor = gltf.clearcoatFactor;
+            material.clearcoatRoughnessFactor = gltf.clearcoatRoughnessFactor;
+            material.clearcoatNormalScale = gltf.clearcoatNormalScale;
             scene.materials.push_back(material);
         }
         if (scene.materials.empty())
@@ -1385,6 +1546,19 @@ void D3D12PathTracingBackend::LoadPipeline()
     if (hardwareAdapter && SUCCEEDED(hardwareAdapter->GetDesc1(&adapterDesc)))
     {
         m_adapterDescription = adapterDesc.Description;
+        m_adapterDedicatedVideoMemory = adapterDesc.DedicatedVideoMemory;
+        const UINT64 lower = 512ull * 1024ull * 1024ull;
+        const UINT64 upper = 4ull * 1024ull * 1024ull * 1024ull;
+        m_textureBudgetBytes = std::clamp(m_adapterDedicatedVideoMemory / 4ull, lower, upper);
+        ComPtr<IDXGIAdapter3> adapter3;
+        if (SUCCEEDED(hardwareAdapter.As(&adapter3)))
+        {
+            DXGI_QUERY_VIDEO_MEMORY_INFO memoryInfo{};
+            if (SUCCEEDED(adapter3->QueryVideoMemoryInfo(0, DXGI_MEMORY_SEGMENT_GROUP_LOCAL, &memoryInfo)) && memoryInfo.Budget > memoryInfo.CurrentUsage)
+            {
+                m_textureBudgetBytes = std::min(m_textureBudgetBytes, memoryInfo.Budget - memoryInfo.CurrentUsage);
+            }
+        }
     }
     ComPtr<ID3D12Device2> baseDevice;
     ThrowIfFailed(D3D12CreateDevice(hardwareAdapter.Get(), D3D_FEATURE_LEVEL_12_1, IID_PPV_ARGS(&baseDevice)));
@@ -1704,9 +1878,12 @@ void D3D12PathTracingBackend::CreateGpuResourcesForCurrentScene()
     ApplyConfiguredRenderScale(false);
     m_geometryRecords.clear();
     m_rtMaterials.clear();
+    m_rtMaterialExtensions.clear();
+    m_rtTextureBindings.clear();
     m_rtInstances.clear();
     m_materialTextureIndices.clear();
     m_textures.clear();
+    m_textureResidentBytes = 0;
     m_uploadBuffers.clear();
 
     LogDiagnostic("CreateGpuResourcesForCurrentScene: building light list.");
@@ -1828,8 +2005,11 @@ void D3D12PathTracingBackend::RefreshEditableGpuResources(bool reloadTextures, b
     if (reloadTextures)
     {
         m_rtMaterials.clear();
+        m_rtMaterialExtensions.clear();
+        m_rtTextureBindings.clear();
         m_materialTextureIndices.clear();
         m_textures.clear();
+        m_textureResidentBytes = 0;
         CreateTextures();
     }
     else
@@ -2010,6 +2190,7 @@ bool D3D12PathTracingBackend::CommitImportedScene(
     const bool previousProjectDirty = m_projectDirty;
     const auto previousSourceMaterials = m_sourceMaterials;
     const auto previousTextureOverrides = m_textureOverrideEnabled;
+    const auto previousTextureBindingOverrides = m_textureBindingOverrideEnabled;
     const auto previousMaterialUsage = m_materialUsage;
     const auto previousSceneAuditSummary = m_mcpSceneAuditSummary;
 
@@ -2137,6 +2318,7 @@ bool D3D12PathTracingBackend::CommitImportedScene(
         m_projectDirty = previousProjectDirty;
         m_sourceMaterials = previousSourceMaterials;
         m_textureOverrideEnabled = previousTextureOverrides;
+        m_textureBindingOverrideEnabled = previousTextureBindingOverrides;
         m_materialUsage = previousMaterialUsage;
         m_mcpSceneAuditSummary = previousSceneAuditSummary;
         m_mcpSceneAuditFresh = true;
@@ -2206,6 +2388,7 @@ void D3D12PathTracingBackend::InitializeMaterialLookDevState(bool clearVariants)
 {
     m_sourceMaterials = m_scene.materials;
     m_textureOverrideEnabled.assign(m_scene.materials.size(), {});
+    m_textureBindingOverrideEnabled.assign(m_scene.materials.size(), {});
     m_selectedMaterial = std::clamp(m_selectedMaterial, 0, (std::max)(0, static_cast<int>(m_scene.materials.size()) - 1));
     m_hasMaterialCompareA = false;
     m_hasMaterialCompareB = false;
@@ -2267,6 +2450,7 @@ D3D12PathTracingBackend::MaterialSnapshot D3D12PathTracingBackend::CaptureMateri
         return snapshot;
     }
     const Bistro::Material& material = m_scene.materials[materialIndex];
+    snapshot.sourceMaterialId = material.sourceMaterialId;
     snapshot.baseColorFactor = material.baseColorFactor;
     snapshot.emissiveFactor = material.emissiveFactor;
     snapshot.roughnessFactor = material.roughnessFactor;
@@ -2276,10 +2460,26 @@ D3D12PathTracingBackend::MaterialSnapshot D3D12PathTracingBackend::CaptureMateri
     snapshot.alphaCutoff = material.alphaCutoff;
     snapshot.alphaMasked = material.alphaMasked;
     snapshot.packedOcclusionRoughnessMetallic = material.packedOcclusionRoughnessMetallic;
+    snapshot.extensionFeatureMask = material.extensionFeatureMask;
+    snapshot.specularFactor = material.specularFactor;
+    snapshot.specularColorFactor = material.specularColorFactor;
+    snapshot.indexOfRefraction = material.indexOfRefraction;
+    snapshot.transmissionFactor = material.transmissionFactor;
+    snapshot.thicknessFactor = material.thicknessFactor;
+    snapshot.attenuationColor = material.attenuationColor;
+    snapshot.attenuationDistance = material.attenuationDistance;
+    snapshot.clearcoatFactor = material.clearcoatFactor;
+    snapshot.clearcoatRoughnessFactor = material.clearcoatRoughnessFactor;
+    snapshot.clearcoatNormalScale = material.clearcoatNormalScale;
     snapshot.textures = material.textures;
+    snapshot.textureBindings = material.textureBindings;
     if (static_cast<size_t>(materialIndex) < m_textureOverrideEnabled.size())
     {
         snapshot.textureOverrideEnabled = m_textureOverrideEnabled[materialIndex];
+    }
+    if (static_cast<size_t>(materialIndex) < m_textureBindingOverrideEnabled.size())
+    {
+        snapshot.textureBindingOverrideEnabled = m_textureBindingOverrideEnabled[materialIndex];
     }
     return snapshot;
 }
@@ -2291,7 +2491,18 @@ bool D3D12PathTracingBackend::RequiresMaterialTextureReload(
     // Alpha coverage is baked into the base-color mip chain. Changing any
     // part of its effective threshold therefore requires regenerating the
     // texture resource even when the source path itself is unchanged.
+    bool bindingChanged = false;
+    for (UINT slot = 0; slot < TextureSlotCount; ++slot)
+    {
+        const Bistro::TextureBinding& a = before.textureBindings[slot];
+        const Bistro::TextureBinding& b = after.textureBindings[slot];
+        bindingChanged = bindingChanged || a.offset.x != b.offset.x || a.offset.y != b.offset.y ||
+            a.scale.x != b.scale.x || a.scale.y != b.scale.y || a.rotation != b.rotation ||
+            a.texCoord != b.texCoord || a.samplerIndex != b.samplerIndex ||
+            a.resolutionPolicy != b.resolutionPolicy;
+    }
     return before.textures != after.textures
+        || bindingChanged
         || before.alphaMasked != after.alphaMasked
         || before.alphaCutoff != after.alphaCutoff
         || before.baseColorFactor.w != after.baseColorFactor.w;
@@ -2315,6 +2526,7 @@ void D3D12PathTracingBackend::ApplyMaterialSnapshot(int materialIndex, const Mat
     }
     Bistro::Material& material = m_scene.materials[materialIndex];
     const bool alphaModeChanged = material.alphaMasked != snapshot.alphaMasked;
+    material.sourceMaterialId = snapshot.sourceMaterialId;
     material.baseColorFactor = snapshot.baseColorFactor;
     material.emissiveFactor = snapshot.emissiveFactor;
     material.roughnessFactor = snapshot.roughnessFactor;
@@ -2324,10 +2536,26 @@ void D3D12PathTracingBackend::ApplyMaterialSnapshot(int materialIndex, const Mat
     material.alphaCutoff = snapshot.alphaCutoff;
     material.alphaMasked = snapshot.alphaMasked;
     material.packedOcclusionRoughnessMetallic = snapshot.packedOcclusionRoughnessMetallic;
+    material.extensionFeatureMask = snapshot.extensionFeatureMask;
+    material.specularFactor = snapshot.specularFactor;
+    material.specularColorFactor = snapshot.specularColorFactor;
+    material.indexOfRefraction = snapshot.indexOfRefraction;
+    material.transmissionFactor = snapshot.transmissionFactor;
+    material.thicknessFactor = snapshot.thicknessFactor;
+    material.attenuationColor = snapshot.attenuationColor;
+    material.attenuationDistance = snapshot.attenuationDistance;
+    material.clearcoatFactor = snapshot.clearcoatFactor;
+    material.clearcoatRoughnessFactor = snapshot.clearcoatRoughnessFactor;
+    material.clearcoatNormalScale = snapshot.clearcoatNormalScale;
     material.textures = snapshot.textures;
+    material.textureBindings = snapshot.textureBindings;
     if (useSnapshotTextureFlags && static_cast<size_t>(materialIndex) < m_textureOverrideEnabled.size())
     {
         m_textureOverrideEnabled[materialIndex] = snapshot.textureOverrideEnabled;
+    }
+    if (useSnapshotTextureFlags && static_cast<size_t>(materialIndex) < m_textureBindingOverrideEnabled.size())
+    {
+        m_textureBindingOverrideEnabled[materialIndex] = snapshot.textureBindingOverrideEnabled;
     }
     InvalidateHistory(alphaModeChanged ? rb::FrameChangeMask::Geometry : rb::FrameChangeMask::Material);
 }
@@ -2343,6 +2571,10 @@ void D3D12PathTracingBackend::ResetMaterialToSource(int materialIndex)
     if (static_cast<size_t>(materialIndex) < m_textureOverrideEnabled.size())
     {
         m_textureOverrideEnabled[materialIndex].fill(false);
+    }
+    if (static_cast<size_t>(materialIndex) < m_textureBindingOverrideEnabled.size())
+    {
+        m_textureBindingOverrideEnabled[materialIndex].fill(false);
     }
     InvalidateHistory(rb::FrameChangeMask::Material);
 }
@@ -2640,8 +2872,12 @@ bool D3D12PathTracingBackend::SaveProjectToDisk(const std::wstring& path)
     for (size_t i = 0; i < m_scene.materials.size(); ++i)
     {
         const Bistro::Material& material = m_scene.materials[i];
+        const std::array<bool, TextureSlotCount> bindingOverrides = i < m_textureBindingOverrideEnabled.size()
+            ? m_textureBindingOverrideEnabled[i]
+            : std::array<bool, TextureSlotCount>{};
         file << "    {\"index\": " << i
              << ", \"name\": \"" << cld::EscapeJson(WideToUtf8(material.name)) << "\""
+             << ", \"sourceMaterialId\": \"" << cld::EscapeJson(material.sourceMaterialId) << "\""
              << ", \"baseColor\": [" << material.baseColorFactor.x << ", " << material.baseColorFactor.y << ", " << material.baseColorFactor.z << ", " << material.baseColorFactor.w << "]"
              << ", \"emissive\": [" << material.emissiveFactor.x << ", " << material.emissiveFactor.y << ", " << material.emissiveFactor.z << ", " << material.emissiveFactor.w << "]"
              << ", \"roughness\": " << material.roughnessFactor
@@ -2671,7 +2907,11 @@ bool D3D12PathTracingBackend::SaveProjectToDisk(const std::wstring& path)
             const bool enabled = i < m_textureOverrideEnabled.size() && m_textureOverrideEnabled[i][slot];
             file << "\"" << TextureSlotKeys[slot] << "\": " << (enabled ? "true" : "false");
         }
-        file << "}"
+        file << "}, \"gltfExtensions\": ";
+        WriteGltfExtensionsJson(file, material);
+        file << ", \"textureBindings\": ";
+        WriteTextureBindingsJson(file, material, bindingOverrides);
+        file << ""
              << "}" << (i + 1 < m_scene.materials.size() ? "," : "") << "\n";
     }
     file << "  ],\n";
@@ -2683,6 +2923,7 @@ bool D3D12PathTracingBackend::SaveProjectToDisk(const std::wstring& path)
         file << "    {\"name\": \"" << cld::EscapeJson(variant.name) << "\""
              << ", \"materialIndex\": " << variant.materialIndex
              << ", \"materialName\": \"" << cld::EscapeJson(WideToUtf8(variant.materialName)) << "\""
+             << ", \"sourceMaterialId\": \"" << cld::EscapeJson(snapshot.sourceMaterialId) << "\""
              << ", \"baseColor\": [" << snapshot.baseColorFactor.x << ", " << snapshot.baseColorFactor.y << ", " << snapshot.baseColorFactor.z << ", " << snapshot.baseColorFactor.w << "]"
              << ", \"emissive\": [" << snapshot.emissiveFactor.x << ", " << snapshot.emissiveFactor.y << ", " << snapshot.emissiveFactor.z << ", " << snapshot.emissiveFactor.w << "]"
              << ", \"roughness\": " << snapshot.roughnessFactor
@@ -2704,7 +2945,11 @@ bool D3D12PathTracingBackend::SaveProjectToDisk(const std::wstring& path)
             if (slot > 0) file << ", ";
             file << "\"" << TextureSlotKeys[slot] << "\": " << (snapshot.textureOverrideEnabled[slot] ? "true" : "false");
         }
-        file << "}}" << (i + 1 < m_materialVariants.size() ? "," : "") << "\n";
+        file << "}, \"gltfExtensions\": ";
+        WriteGltfExtensionsJson(file, snapshot);
+        file << ", \"textureBindings\": ";
+        WriteTextureBindingsJson(file, snapshot, snapshot.textureBindingOverrideEnabled);
+        file << "}" << (i + 1 < m_materialVariants.size() ? "," : "") << "\n";
     }
     file << "  ],\n";
     file << "  \"pathTracing\": {\"samplesPerFrame\": " << m_giSamplesPerFrame << ", \"maxBounces\": " << m_maxPathBounces << ", \"minBounces\": " << m_minPathBounces
@@ -2864,8 +3109,21 @@ bool D3D12PathTracingBackend::LoadProjectFromDisk(const std::wstring& path, std:
                     continue;
                 }
 
-                int materialIndex = static_cast<int>(cld::JsonNumberOr(overrideValue, "index", -1.0));
+                const int storedMaterialIndex = static_cast<int>(cld::JsonNumberOr(overrideValue, "index", -1.0));
+                int materialIndex = -1;
+                const std::string sourceMaterialId = cld::JsonStringOr(overrideValue, "sourceMaterialId");
                 const std::string name = cld::JsonStringOr(overrideValue, "name");
+                if (!sourceMaterialId.empty())
+                {
+                    for (size_t i = 0; i < m_scene.materials.size(); ++i)
+                    {
+                        if (m_scene.materials[i].sourceMaterialId == sourceMaterialId)
+                        {
+                            materialIndex = static_cast<int>(i);
+                            break;
+                        }
+                    }
+                }
                 if (materialIndex < 0 && !name.empty())
                 {
                     const std::wstring materialName = Utf8ToWide(name);
@@ -2877,6 +3135,10 @@ bool D3D12PathTracingBackend::LoadProjectFromDisk(const std::wstring& path, std:
                             break;
                         }
                     }
+                }
+                if (materialIndex < 0)
+                {
+                    materialIndex = storedMaterialIndex;
                 }
 
                 if (materialIndex < 0 || static_cast<size_t>(materialIndex) >= m_scene.materials.size())
@@ -2896,6 +3158,7 @@ bool D3D12PathTracingBackend::LoadProjectFromDisk(const std::wstring& path, std:
                 material.alphaCutoff = std::clamp(static_cast<float>(cld::JsonNumberOr(overrideValue, "alphaCutoff", material.alphaCutoff)), 0.0f, 1.0f);
                 material.alphaMasked = cld::JsonBoolOr(overrideValue, "alphaMasked", material.alphaMasked);
                 material.packedOcclusionRoughnessMetallic = cld::JsonBoolOr(overrideValue, "packedORM", material.packedOcclusionRoughnessMetallic);
+                ReadGltfExtensionsJson(overrideValue, material);
                 if (const cld::JsonValue* textures = cld::FindMember(overrideValue, "textures"); textures && textures->type == cld::JsonValue::Type::Object)
                 {
                     const cld::JsonValue* enabled = cld::FindMember(overrideValue, "textureOverridesEnabled");
@@ -2927,6 +3190,27 @@ bool D3D12PathTracingBackend::LoadProjectFromDisk(const std::wstring& path, std:
                         }
                     }
                 }
+                if (const cld::JsonValue* bindings = cld::FindMember(overrideValue, "textureBindings"); bindings && bindings->type == cld::JsonValue::Type::Object)
+                {
+                    for (UINT slot = 0; slot < TextureSlotCount; ++slot)
+                    {
+                        const cld::JsonValue* value = cld::FindMember(*bindings, TextureSlotKeys[slot]);
+                        if (!value || value->type != cld::JsonValue::Type::Object) continue;
+                        Bistro::TextureBinding& binding = material.textureBindings[slot];
+                        binding.texCoord = static_cast<uint32_t>(std::clamp(
+                            static_cast<int>(cld::JsonNumberOr(*value, "uvSet", binding.texCoord)), 0, 1));
+                        binding.offset = JsonFloat2Or(*value, "offset", binding.offset);
+                        binding.scale = JsonFloat2Or(*value, "scale", binding.scale);
+                        binding.rotation = static_cast<float>(cld::JsonNumberOr(*value, "rotation", binding.rotation));
+                        binding.samplerIndex = TextureSamplerFromName(cld::JsonStringOr(*value, "sampler"), binding.samplerIndex);
+                        binding.resolutionPolicy = TextureResolutionPolicyFromName(cld::JsonStringOr(*value, "resolutionPolicy"), binding.resolutionPolicy);
+                        const bool bindingOverridden = cld::JsonBoolOr(*value, "overridden", false);
+                        if (static_cast<size_t>(materialIndex) < m_textureBindingOverrideEnabled.size())
+                        {
+                            m_textureBindingOverrideEnabled[materialIndex][slot] = bindingOverridden;
+                        }
+                    }
+                }
                 materialOverridesChanged = true;
             }
         }
@@ -2949,6 +3233,7 @@ bool D3D12PathTracingBackend::LoadProjectFromDisk(const std::wstring& path, std:
                     variant.materialName = m_scene.materials[variant.materialIndex].name;
                 }
                 variant.snapshot = CaptureMaterialSnapshot(variant.materialIndex);
+                variant.snapshot.sourceMaterialId = cld::JsonStringOr(variantValue, "sourceMaterialId", variant.snapshot.sourceMaterialId);
                 const std::array<float, 4> baseColor = cld::JsonFloat4Or(variantValue, "baseColor", Float4ToArray(variant.snapshot.baseColorFactor));
                 const std::array<float, 4> emissive = cld::JsonFloat4Or(variantValue, "emissive", Float4ToArray(variant.snapshot.emissiveFactor));
                 variant.snapshot.baseColorFactor = XMFLOAT4(baseColor[0], baseColor[1], baseColor[2], baseColor[3]);
@@ -2960,6 +3245,7 @@ bool D3D12PathTracingBackend::LoadProjectFromDisk(const std::wstring& path, std:
                 variant.snapshot.alphaCutoff = std::clamp(static_cast<float>(cld::JsonNumberOr(variantValue, "alphaCutoff", variant.snapshot.alphaCutoff)), 0.0f, 1.0f);
                 variant.snapshot.alphaMasked = cld::JsonBoolOr(variantValue, "alphaMasked", variant.snapshot.alphaMasked);
                 variant.snapshot.packedOcclusionRoughnessMetallic = cld::JsonBoolOr(variantValue, "packedORM", variant.snapshot.packedOcclusionRoughnessMetallic);
+                ReadGltfExtensionsJson(variantValue, variant.snapshot);
                 if (const cld::JsonValue* textures = cld::FindMember(variantValue, "textures"); textures && textures->type == cld::JsonValue::Type::Object)
                 {
                     const cld::JsonValue* enabled = cld::FindMember(variantValue, "textureOverridesEnabled");
@@ -2976,6 +3262,23 @@ bool D3D12PathTracingBackend::LoadProjectFromDisk(const std::wstring& path, std:
                             return false;
                         }
                         variant.snapshot.textures[slot] = resolvedTexturePath.wstring();
+                    }
+                }
+                if (const cld::JsonValue* bindings = cld::FindMember(variantValue, "textureBindings"); bindings && bindings->type == cld::JsonValue::Type::Object)
+                {
+                    for (UINT slot = 0; slot < TextureSlotCount; ++slot)
+                    {
+                        const cld::JsonValue* value = cld::FindMember(*bindings, TextureSlotKeys[slot]);
+                        if (!value || value->type != cld::JsonValue::Type::Object) continue;
+                        Bistro::TextureBinding& binding = variant.snapshot.textureBindings[slot];
+                        binding.texCoord = static_cast<uint32_t>(std::clamp(
+                            static_cast<int>(cld::JsonNumberOr(*value, "uvSet", binding.texCoord)), 0, 1));
+                        binding.offset = JsonFloat2Or(*value, "offset", binding.offset);
+                        binding.scale = JsonFloat2Or(*value, "scale", binding.scale);
+                        binding.rotation = static_cast<float>(cld::JsonNumberOr(*value, "rotation", binding.rotation));
+                        binding.samplerIndex = TextureSamplerFromName(cld::JsonStringOr(*value, "sampler"), binding.samplerIndex);
+                        binding.resolutionPolicy = TextureResolutionPolicyFromName(cld::JsonStringOr(*value, "resolutionPolicy"), binding.resolutionPolicy);
+                        variant.snapshot.textureBindingOverrideEnabled[slot] = cld::JsonBoolOr(*value, "overridden", false);
                     }
                 }
                 m_materialVariants.push_back(std::move(variant));
@@ -3579,8 +3882,22 @@ bool D3D12PathTracingBackend::ApplyAction(const std::string& method, const cld::
                 next.alphaCutoff = source.alphaCutoff;
                 next.alphaMasked = source.alphaMasked;
                 next.packedOcclusionRoughnessMetallic = source.packedOcclusionRoughnessMetallic;
+                next.sourceMaterialId = source.sourceMaterialId;
+                next.extensionFeatureMask = source.extensionFeatureMask;
+                next.specularFactor = source.specularFactor;
+                next.specularColorFactor = source.specularColorFactor;
+                next.indexOfRefraction = source.indexOfRefraction;
+                next.transmissionFactor = source.transmissionFactor;
+                next.thicknessFactor = source.thicknessFactor;
+                next.attenuationColor = source.attenuationColor;
+                next.attenuationDistance = source.attenuationDistance;
+                next.clearcoatFactor = source.clearcoatFactor;
+                next.clearcoatRoughnessFactor = source.clearcoatRoughnessFactor;
+                next.clearcoatNormalScale = source.clearcoatNormalScale;
                 next.textures = source.textures;
+                next.textureBindings = source.textureBindings;
                 next.textureOverrideEnabled.fill(false);
+                next.textureBindingOverrideEnabled.fill(false);
             }
         }
         if (cld::FindMember(params, "baseColor")) next.baseColorFactor = XMFLOAT4(baseColor[0], baseColor[1], baseColor[2], baseColor[3]);
@@ -3592,6 +3909,16 @@ bool D3D12PathTracingBackend::ApplyAction(const std::string& method, const cld::
         if (cld::FindMember(params, "alphaCutoff")) next.alphaCutoff = alphaCutoff;
         if (cld::FindMember(params, "alphaMasked")) next.alphaMasked = cld::JsonBoolOr(params, "alphaMasked", next.alphaMasked);
         if (cld::FindMember(params, "packedORM")) next.packedOcclusionRoughnessMetallic = cld::JsonBoolOr(params, "packedORM", next.packedOcclusionRoughnessMetallic);
+        ReadGltfExtensionsJson(params, next);
+        if (!AllFinite({ next.specularFactor, next.specularColorFactor.x, next.specularColorFactor.y,
+            next.specularColorFactor.z, next.indexOfRefraction, next.transmissionFactor,
+            next.thicknessFactor, next.attenuationColor.x, next.attenuationColor.y,
+            next.attenuationColor.z, next.attenuationDistance, next.clearcoatFactor,
+            next.clearcoatRoughnessFactor, next.clearcoatNormalScale }))
+        {
+            diagnostics = "glTF material extensions contain non-finite values.";
+            return false;
+        }
 
         if (const cld::JsonValue* textures = cld::FindMember(params, "textures"); textures && textures->type == cld::JsonValue::Type::Object)
         {
@@ -3663,26 +3990,62 @@ bool D3D12PathTracingBackend::ApplyAction(const std::string& method, const cld::
         const bool resetToSource = cld::JsonBoolOr(params, "resetToSource", false);
         const bool clearTexture = cld::JsonBoolOr(params, "clear", false);
         const std::wstring texturePath = clearTexture || resetToSource ? std::wstring() : Utf8ToWide(cld::JsonStringOr(params, "path"));
-        if (!resetToSource && !clearTexture && texturePath.empty())
+        const bool hasBindingEdit = cld::FindMember(params, "uvSet") || cld::FindMember(params, "offset") ||
+            cld::FindMember(params, "scale") || cld::FindMember(params, "rotation") ||
+            cld::FindMember(params, "sampler") || cld::FindMember(params, "resolutionPolicy");
+        if (!resetToSource && !clearTexture && texturePath.empty() && !hasBindingEdit)
         {
-            diagnostics = "set_material_texture requires path, clear, or resetToSource.";
+            diagnostics = "set_material_texture requires a path, binding edit, clear, or resetToSource.";
             return false;
         }
         if (!resetToSource && !clearTexture && !ValidateMaterialTexturePath(texturePath, diagnostics))
         {
             return false;
         }
+        const MaterialSnapshot before = CaptureMaterialSnapshot(materialIndex);
+        MaterialSnapshot next = before;
+        if (resetToSource)
+        {
+            if (static_cast<size_t>(materialIndex) >= m_sourceMaterials.size())
+            {
+                diagnostics = "The source material is unavailable.";
+                return false;
+            }
+            next.textures[slot] = m_sourceMaterials[materialIndex].textures[slot];
+            next.textureBindings[slot] = m_sourceMaterials[materialIndex].textureBindings[slot];
+            next.textureOverrideEnabled[slot] = false;
+            next.textureBindingOverrideEnabled[slot] = false;
+        }
+        else
+        {
+            if (clearTexture || !texturePath.empty())
+            {
+                next.textures[slot] = texturePath;
+                next.textureOverrideEnabled[slot] = true;
+            }
+            Bistro::TextureBinding& binding = next.textureBindings[slot];
+            if (cld::FindMember(params, "uvSet"))
+            {
+                binding.texCoord = static_cast<uint32_t>(std::clamp(
+                    static_cast<int>(cld::JsonNumberOr(params, "uvSet", binding.texCoord)), 0, 1));
+            }
+            if (cld::FindMember(params, "offset")) binding.offset = JsonFloat2Or(params, "offset", binding.offset);
+            if (cld::FindMember(params, "scale")) binding.scale = JsonFloat2Or(params, "scale", binding.scale);
+            if (cld::FindMember(params, "rotation")) binding.rotation = static_cast<float>(cld::JsonNumberOr(params, "rotation", binding.rotation));
+            if (cld::FindMember(params, "sampler")) binding.samplerIndex = TextureSamplerFromName(cld::JsonStringOr(params, "sampler"), binding.samplerIndex);
+            if (cld::FindMember(params, "resolutionPolicy")) binding.resolutionPolicy = TextureResolutionPolicyFromName(cld::JsonStringOr(params, "resolutionPolicy"), binding.resolutionPolicy);
+            if (hasBindingEdit) next.textureBindingOverrideEnabled[slot] = true;
+        }
+        if (!std::isfinite(next.textureBindings[slot].offset.x) || !std::isfinite(next.textureBindings[slot].offset.y) ||
+            !std::isfinite(next.textureBindings[slot].scale.x) || !std::isfinite(next.textureBindings[slot].scale.y) ||
+            !std::isfinite(next.textureBindings[slot].rotation))
+        {
+            diagnostics = "Texture binding contains non-finite values.";
+            return false;
+        }
         if (!validateOnly)
         {
-            const MaterialSnapshot before = CaptureMaterialSnapshot(materialIndex);
-            if (resetToSource)
-            {
-                ApplyMaterialTextureOverride(materialIndex, slot, {}, false, diagnostics);
-            }
-            else
-            {
-                ApplyMaterialTextureOverride(materialIndex, slot, texturePath, true, diagnostics);
-            }
+            ApplyMaterialSnapshot(materialIndex, next, true);
             try
             {
                 RefreshEditableGpuResources(true, true);
@@ -4421,7 +4784,7 @@ std::optional<mcp::ToolResult> D3D12PathTracingBackend::CallMcpReviewTool(
         const std::string preset = cld::JsonStringOr(arguments, "preset", "quick");
         std::vector<int> views;
         if (preset == "quick") views = { 0, 1, 2, 4, 32, 33, 40 };
-        else if (preset == "material") views = { 0, 1, 2, 3, 4, 5, 6, 7 };
+        else if (preset == "material") views = { 0, 1, 4, 54, 55, 56, 57, 58 };
         else if (preset == "lighting") views = { 0, 32, 33, 12, 8, 9, 34, 23 };
         else if (preset == "temporal") views = { 0, 19, 20, 21, 35, 36, 46, 40 };
         else return MakeMcpJsonToolResult(false, "Unknown review preset.",
@@ -4494,7 +4857,7 @@ mcp::ResourceResult D3D12PathTracingBackend::ReadMcpResource(const std::string& 
         result.mimeType = "application/json";
         result.text = "{\"application\":{\"name\":\"D3D12LookDevPTWinUI\",\"version\":\"" +
             std::string(mcp::ApplicationVersion) + "\"},\"contractVersion\":\"" + mcp::ContractVersion +
-            R"json(","features":{"imageArtifacts":true,"structuredContent":true,"resourceTemplates":true,"prompts":true,"resourceSubscriptions":true,"sceneAudit":true,"viewportCapture":true,"asyncReview":true,"comparisonHeatmap":true,"surfaceProbe":true,"pairing":true,"checkpoints":true,"benchmarks":true},"artifactLimits":{"maxImageBytes":16777216,"maxImagesPerToolCall":8,"maxTurnBytes":67108864,"maxDecodedPixels":64000000}})json";
+            R"json(","features":{"imageArtifacts":true,"structuredContent":true,"resourceTemplates":true,"prompts":true,"resourceSubscriptions":true,"sceneAudit":true,"viewportCapture":true,"asyncReview":true,"comparisonHeatmap":true,"surfaceProbe":true,"pairing":true,"checkpoints":true,"benchmarks":true,"gltfMaterialExtensionsV1":true,"textureResidencyV1":true},"artifactLimits":{"maxImageBytes":16777216,"maxImagesPerToolCall":8,"maxTurnBytes":67108864,"maxDecodedPixels":64000000}})json";
         return result;
     }
     if (uri == "lookdevpt://actions/schema")
@@ -6164,6 +6527,10 @@ std::string D3D12PathTracingBackend::BuildMcpStatsJson() const
         << ",\"taaOutputHistoryAliased\":" << (m_accumulationAliasesTaaHistory ? "true" : "false")
         << ",\"withinBudget\":" << (m_frameHistoryResourceBytes <= 512ull * 1024ull * 1024ull ? "true" : "false")
         << ",\"allocationProfile\":\"" << resourceProfile << "\"},";
+    out << "\"textureResidency\":{\"budgetBytes\":" << m_textureBudgetBytes
+        << ",\"residentBytes\":" << m_textureResidentBytes
+        << ",\"dedicatedVideoMemoryBytes\":" << m_adapterDedicatedVideoMemory
+        << ",\"withinBudget\":" << (m_textureResidentBytes <= m_textureBudgetBytes ? "true" : "false") << "},";
     out << "\"secondaryShading\":{\"requested\":\""
         << rb::SecondaryShadingRateName(m_qualitySettings.secondaryShadingRate)
         << "\",\"effective\":\"" << (m_activeSecondaryShadingRate < 0.75f ? "adaptive_half" : "full")
@@ -6198,7 +6565,8 @@ std::string D3D12PathTracingBackend::BuildMcpMaterialsJson() const
             out << ",";
         }
         const Bistro::Material& material = m_scene.materials[i];
-        out << "{\"index\":" << i << ",\"name\":\"" << cld::EscapeJson(WideToUtf8(material.name)) << "\",";
+        out << "{\"index\":" << i << ",\"name\":\"" << cld::EscapeJson(WideToUtf8(material.name))
+            << "\",\"sourceMaterialId\":\"" << cld::EscapeJson(material.sourceMaterialId) << "\",";
         out << "\"baseColor\":";
         AppendJsonFloat4(out, material.baseColorFactor);
         out << ",\"emissive\":";
@@ -6207,6 +6575,8 @@ std::string D3D12PathTracingBackend::BuildMcpMaterialsJson() const
         out << ",\"occlusionStrength\":" << material.occlusionStrength << ",\"normalStrength\":" << material.normalStrength;
         out << ",\"alphaCutoff\":" << material.alphaCutoff << ",\"alphaMasked\":" << (material.alphaMasked ? "true" : "false");
         out << ",\"packedORM\":" << (material.packedOcclusionRoughnessMetallic ? "true" : "false");
+        out << ",\"gltfExtensions\":";
+        WriteGltfExtensionsJson(out, material);
         if (i < m_materialUsage.size())
         {
             out << ",\"meshCount\":" << m_materialUsage[i].meshCount << ",\"triangleCount\":" << m_materialUsage[i].triangleCount;
@@ -6235,11 +6605,20 @@ std::string D3D12PathTracingBackend::BuildMaterialTexturesJson(size_t materialIn
                 out << ",";
             }
             const bool overrideEnabled = materialIndex < m_textureOverrideEnabled.size() && m_textureOverrideEnabled[materialIndex][slot];
+            const bool bindingOverrideEnabled = materialIndex < m_textureBindingOverrideEnabled.size() && m_textureBindingOverrideEnabled[materialIndex][slot];
             const std::wstring sourcePath = materialIndex < m_sourceMaterials.size() ? m_sourceMaterials[materialIndex].textures[slot] : std::wstring();
             out << "{\"slot\":" << slot << ",\"key\":\"" << TextureSlotKeys[slot] << "\",\"label\":\"" << TextureSlotLabels[slot] << "\"";
             out << ",\"sourcePath\":\"" << cld::EscapeJson(WideToUtf8(sourcePath)) << "\"";
             out << ",\"path\":\"" << cld::EscapeJson(WideToUtf8(material.textures[slot])) << "\"";
             out << ",\"overrideEnabled\":" << (overrideEnabled ? "true" : "false");
+            const Bistro::TextureBinding& binding = material.textureBindings[slot];
+            out << ",\"binding\":{\"uvSet\":" << binding.texCoord
+                << ",\"offset\":[" << binding.offset.x << ',' << binding.offset.y << ']'
+                << ",\"scale\":[" << binding.scale.x << ',' << binding.scale.y << ']'
+                << ",\"rotation\":" << binding.rotation
+                << ",\"sampler\":\"" << TextureSamplerName(binding.samplerIndex) << "\""
+                << ",\"resolutionPolicy\":\"" << TextureResolutionPolicyName(binding.resolutionPolicy) << "\""
+                << ",\"overrideEnabled\":" << (bindingOverrideEnabled ? "true" : "false") << '}';
             const bool exists = materialIndex < m_materialTextureExists.size() &&
                 m_materialTextureExists[materialIndex][slot];
             out << ",\"exists\":" << (exists ? "true" : "false");
@@ -6249,9 +6628,14 @@ std::string D3D12PathTracingBackend::BuildMaterialTexturesJson(size_t materialIn
                 if (textureIndex < m_textures.size())
                 {
                     const GpuTexture& texture = m_textures[textureIndex];
-                    out << ",\"width\":" << texture.width << ",\"height\":" << texture.height
+                    out << ",\"sourceWidth\":" << texture.sourceWidth << ",\"sourceHeight\":" << texture.sourceHeight
+                        << ",\"residentWidth\":" << texture.width << ",\"residentHeight\":" << texture.height
                         << ",\"mipLevels\":" << texture.mipLevels << ",\"format\":" << static_cast<int>(texture.format)
-                        << ",\"fallback\":" << (texture.fallback ? "true" : "false");
+                        << ",\"container\":\"" << cld::EscapeJson(texture.container) << "\""
+                        << ",\"transcodeFormat\":\"" << cld::EscapeJson(texture.transcodeFormat) << "\""
+                        << ",\"residentBytes\":" << texture.residentBytes
+                        << ",\"fallback\":" << (texture.fallback ? "true" : "false")
+                        << ",\"fallbackReason\":\"" << (texture.fallback ? "decode_or_budget_fallback" : "") << "\"";
                 }
             }
             out << "}";
@@ -6773,6 +7157,9 @@ void D3D12PathTracingBackend::RefreshMcpAuditCache()
     runtime.nrdAvailable = m_nrdBackendRuntime.Status().evaluationReady;
     runtime.dlssRequested = IsDlssSelected();
     runtime.dlssAvailable = m_dlssBackendRuntime.Status().evaluationReady;
+    runtime.textureBudgetBytes = m_textureBudgetBytes;
+    runtime.textureResidentBytes = m_textureResidentBytes;
+    runtime.dedicatedVideoMemoryBytes = m_adapterDedicatedVideoMemory;
     const lookdevpt::review::AuditReport report =
         lookdevpt::review::BuildAuditReport(m_mcpSceneAuditSummary, runtime);
     const std::string json = lookdevpt::review::BuildAuditJson(report);
@@ -8890,7 +9277,7 @@ void D3D12PathTracingBackend::CreateGlobalRootSignature()
     CD3DX12_DESCRIPTOR_RANGE uavRange;
     uavRange.Init(D3D12_DESCRIPTOR_RANGE_TYPE_UAV, DescriptorVertexBuffer, 0, 0);
     CD3DX12_DESCRIPTOR_RANGE sceneBufferRange;
-    sceneBufferRange.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 6, 1, 0);
+    sceneBufferRange.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 8, 1, 0);
     CD3DX12_DESCRIPTOR_RANGE textureRange;
     textureRange.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, static_cast<UINT>(m_scene.materials.size()) * TextureSlotCount + 2u, 0, 1);
 
@@ -8901,20 +9288,30 @@ void D3D12PathTracingBackend::CreateGlobalRootSignature()
     rootParameters[RootSceneBuffers].InitAsDescriptorTable(1, &sceneBufferRange, D3D12_SHADER_VISIBILITY_ALL);
     rootParameters[RootTextureTable].InitAsDescriptorTable(1, &textureRange, D3D12_SHADER_VISIBILITY_ALL);
 
-    D3D12_STATIC_SAMPLER_DESC sampler = {};
-    sampler.Filter = D3D12_FILTER_ANISOTROPIC;
-    sampler.AddressU = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
-    sampler.AddressV = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
-    sampler.AddressW = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
-    sampler.MaxAnisotropy = 8;
-    sampler.ShaderRegister = 0;
-    sampler.RegisterSpace = 0;
-    sampler.ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
-    sampler.MinLOD = 0.0f;
-    sampler.MaxLOD = D3D12_FLOAT32_MAX;
+    std::array<D3D12_STATIC_SAMPLER_DESC, 6> samplers = {};
+    const D3D12_TEXTURE_ADDRESS_MODE addressModes[] = {
+        D3D12_TEXTURE_ADDRESS_MODE_WRAP,
+        D3D12_TEXTURE_ADDRESS_MODE_CLAMP,
+        D3D12_TEXTURE_ADDRESS_MODE_MIRROR };
+    for (UINT i = 0; i < samplers.size(); ++i)
+    {
+        D3D12_STATIC_SAMPLER_DESC& sampler = samplers[i];
+        sampler.Filter = i < 3 ? D3D12_FILTER_MIN_MAG_MIP_LINEAR : D3D12_FILTER_MIN_MAG_MIP_POINT;
+        sampler.AddressU = addressModes[i % 3];
+        sampler.AddressV = addressModes[i % 3];
+        sampler.AddressW = addressModes[i % 3];
+        sampler.MaxAnisotropy = 1;
+        sampler.ComparisonFunc = D3D12_COMPARISON_FUNC_NEVER;
+        sampler.ShaderRegister = i;
+        sampler.RegisterSpace = 0;
+        sampler.ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+        sampler.MinLOD = 0.0f;
+        sampler.MaxLOD = D3D12_FLOAT32_MAX;
+    }
 
     CD3DX12_ROOT_SIGNATURE_DESC rootSignatureDesc;
-    rootSignatureDesc.Init(_countof(rootParameters), rootParameters, 1, &sampler, D3D12_ROOT_SIGNATURE_FLAG_NONE);
+    rootSignatureDesc.Init(_countof(rootParameters), rootParameters,
+        static_cast<UINT>(samplers.size()), samplers.data(), D3D12_ROOT_SIGNATURE_FLAG_NONE);
 
     ComPtr<ID3DBlob> signature;
     ComPtr<ID3DBlob> error;
@@ -9010,9 +9407,22 @@ UINT D3D12PathTracingBackend::CreateTextureResource(
     const uint8_t fallback[4],
     std::map<std::wstring, UINT>& cache,
     float alphaCoverageCutoff,
-    bool environmentRadiance)
+    bool environmentRadiance,
+    rb::TextureResolutionPolicy resolutionPolicy)
 {
+    uint32_t maxDimension = 4096u;
+    switch (resolutionPolicy)
+    {
+    case rb::TextureResolutionPolicy::Source: maxDimension = Bistro::RenderableTextureMaxDimension; break;
+    case rb::TextureResolutionPolicy::Max4096: maxDimension = 4096u; break;
+    case rb::TextureResolutionPolicy::Max2048: maxDimension = 2048u; break;
+    case rb::TextureResolutionPolicy::Max1024: maxDimension = 1024u; break;
+    case rb::TextureResolutionPolicy::Max512: maxDimension = 512u; break;
+    case rb::TextureResolutionPolicy::Auto:
+    default: maxDimension = m_textureBudgetBytes >= 2ull * 1024ull * 1024ull * 1024ull ? 8192u : 4096u; break;
+    }
     std::wstring key = path.empty() ? (std::wstring(L"fallback:") + std::to_wstring(fallback[0]) + L"," + std::to_wstring(fallback[1]) + L"," + std::to_wstring(fallback[2]) + L"," + std::to_wstring(fallback[3]) + (srgb ? L":srgb" : L":linear")) : path + (srgb ? L":srgb" : L":linear");
+    key += L":max:" + std::to_wstring(maxDimension);
     if (alphaCoverageCutoff >= 0.0f)
     {
         key += L":coverage:" + std::to_wstring(alphaCoverageCutoff);
@@ -9028,14 +9438,32 @@ UINT D3D12PathTracingBackend::CreateTextureResource(
     }
 
     Bistro::TextureData image = environmentRadiance
-        ? Bistro::LoadEnvironmentRadianceTexture(path, fallback)
-        : Bistro::LoadTextureD3D12(path, srgb, fallback, alphaCoverageCutoff);
+        ? Bistro::LoadEnvironmentRadianceTexture(path, fallback, maxDimension)
+        : Bistro::LoadTextureD3D12(path, srgb, fallback, alphaCoverageCutoff, maxDimension);
+    if (resolutionPolicy == rb::TextureResolutionPolicy::Auto)
+    {
+        while (!image.fallback && m_textureResidentBytes + image.residentBytes > m_textureBudgetBytes && maxDimension > 512u)
+        {
+            maxDimension /= 2u;
+            image = environmentRadiance
+                ? Bistro::LoadEnvironmentRadianceTexture(path, fallback, maxDimension)
+                : Bistro::LoadTextureD3D12(path, srgb, fallback, alphaCoverageCutoff, maxDimension);
+        }
+        if (!image.fallback && m_textureResidentBytes + image.residentBytes > m_textureBudgetBytes)
+        {
+            image = Bistro::LoadTextureD3D12(L"", srgb, fallback, alphaCoverageCutoff, 1u);
+        }
+    }
     GpuTexture texture;
     texture.path = path;
     texture.format = image.format;
     texture.width = image.width;
     texture.height = image.height;
+    texture.sourceWidth = image.sourceWidth;
+    texture.sourceHeight = image.sourceHeight;
     texture.mipLevels = image.mipLevels;
+    texture.container = image.container;
+    texture.transcodeFormat = image.transcodeFormat;
     texture.fallback = image.fallback;
     if (image.mipLevels > 0xffffu)
     {
@@ -9045,6 +9473,7 @@ UINT D3D12PathTracingBackend::CreateTextureResource(
     D3D12_RESOURCE_DESC textureDesc = CD3DX12_RESOURCE_DESC::Tex2D(image.format, image.width, image.height, 1, textureMipLevels);
     auto defaultHeapProps = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT);
     ThrowIfFailed(m_device->CreateCommittedResource(&defaultHeapProps, D3D12_HEAP_FLAG_NONE, &textureDesc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&texture.resource)));
+    texture.residentBytes = m_device->GetResourceAllocationInfo(0, 1, &textureDesc).SizeInBytes;
     const UINT64 uploadBufferSize = GetRequiredIntermediateSize(texture.resource.Get(), 0, image.mipLevels);
     auto uploadHeapProps = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD);
     auto uploadDesc = CD3DX12_RESOURCE_DESC::Buffer(uploadBufferSize);
@@ -9064,6 +9493,7 @@ UINT D3D12PathTracingBackend::CreateTextureResource(
 
     const UINT index = static_cast<UINT>(m_textures.size());
     m_textures.push_back(texture);
+    m_textureResidentBytes += texture.residentBytes;
     cache[key] = index;
     return index;
 }
@@ -9071,6 +9501,8 @@ UINT D3D12PathTracingBackend::CreateTextureResource(
 void D3D12PathTracingBackend::CreateMaterialBuffer()
 {
     m_rtMaterials.resize(m_scene.materials.size());
+    m_rtMaterialExtensions.resize(m_scene.materials.size());
+    m_rtTextureBindings.resize(m_scene.materials.size() * TextureSlotCount);
     m_materialTextureExists.resize(m_scene.materials.size());
     for (size_t materialIndex = 0; materialIndex < m_scene.materials.size(); ++materialIndex)
     {
@@ -9095,6 +9527,10 @@ void D3D12PathTracingBackend::CreateMaterialBuffer()
         uint32_t materialFeatures = material.packedOcclusionRoughnessMetallic
             ? Bistro::RtMaterialFeaturePackedOcclusionRoughnessMetallic
             : 0u;
+        if (material.gltfMetallicRoughness)
+        {
+            materialFeatures |= Bistro::RtMaterialFeatureGltfMetallicRoughness;
+        }
         if (textureExists[Bistro::TextureSlotBaseColor])
         {
             materialFeatures |= Bistro::RtMaterialFeatureBaseColorTexture;
@@ -9123,12 +9559,61 @@ void D3D12PathTracingBackend::CreateMaterialBuffer()
         {
             materialFeatures |= Bistro::RtMaterialFeatureAlphaTexture;
         }
+        if (textureExists[Bistro::TextureSlotSpecularColor]) materialFeatures |= Bistro::RtMaterialFeatureSpecularColorTexture;
+        if (textureExists[Bistro::TextureSlotSpecularFactor]) materialFeatures |= Bistro::RtMaterialFeatureSpecularFactorTexture;
+        if (textureExists[Bistro::TextureSlotTransmission]) materialFeatures |= Bistro::RtMaterialFeatureTransmissionTexture;
+        if (textureExists[Bistro::TextureSlotThickness]) materialFeatures |= Bistro::RtMaterialFeatureThicknessTexture;
+        if (textureExists[Bistro::TextureSlotClearcoat]) materialFeatures |= Bistro::RtMaterialFeatureClearcoatTexture;
+        if (textureExists[Bistro::TextureSlotClearcoatRoughness]) materialFeatures |= Bistro::RtMaterialFeatureClearcoatRoughnessTexture;
+        if (textureExists[Bistro::TextureSlotClearcoatNormal]) materialFeatures |= Bistro::RtMaterialFeatureClearcoatNormalTexture;
         rtMaterial.materialFeatures = materialFeatures;
         rtMaterial.transmissionFactor = std::clamp(material.transmissionFactor, 0.0f, 1.0f);
         rtMaterial.indexOfRefraction = std::clamp(material.indexOfRefraction, 1.0001f, 3.0f);
         rtMaterial.thinDielectric = material.thinDielectric ? 1u : 0u;
         rtMaterial.uvScaleOffset = material.uvScaleOffset;
         m_rtMaterials[materialIndex] = rtMaterial;
+
+        Bistro::RtMaterialExtension extension{};
+        extension.specularColorFactorAndFactor = XMFLOAT4(
+            material.specularColorFactor.x,
+            material.specularColorFactor.y,
+            material.specularColorFactor.z,
+            std::clamp(material.specularFactor, 0.0f, 1.0f));
+        extension.attenuationColorAndDistance = XMFLOAT4(
+            std::max(material.attenuationColor.x, 0.0f),
+            std::max(material.attenuationColor.y, 0.0f),
+            std::max(material.attenuationColor.z, 0.0f),
+            material.attenuationDistance > 0.0f ? material.attenuationDistance : FLT_MAX);
+        extension.transmissionThicknessIorFeatures = XMFLOAT4(
+            std::clamp(material.transmissionFactor, 0.0f, 1.0f),
+            std::max(material.thicknessFactor, 0.0f),
+            std::clamp(material.indexOfRefraction, 1.0f, 3.0f),
+            static_cast<float>(material.extensionFeatureMask));
+        extension.clearcoat = XMFLOAT4(
+            std::clamp(material.clearcoatFactor, 0.0f, 1.0f),
+            std::clamp(material.clearcoatRoughnessFactor, 0.0f, 1.0f),
+            std::max(material.clearcoatNormalScale, 0.0f),
+            0.0f);
+        m_rtMaterialExtensions[materialIndex] = extension;
+
+        for (UINT slot = 0; slot < TextureSlotCount; ++slot)
+        {
+            const Bistro::TextureBinding& source = material.textureBindings[slot];
+            Bistro::RtTextureBinding& binding = m_rtTextureBindings[materialIndex * TextureSlotCount + slot];
+            // PBRT uses the legacy material-wide scale/offset. glTF bindings
+            // add a per-slot transform, so compose the legacy affine terms
+            // into the fixed binding ABI instead of dropping PBRT mapping.
+            binding.offsetScale = XMFLOAT4(
+                source.offset.x + material.uvScaleOffset.z,
+                source.offset.y + material.uvScaleOffset.w,
+                source.scale.x * material.uvScaleOffset.x,
+                source.scale.y * material.uvScaleOffset.y);
+            binding.rotationTexCoordSampler = XMFLOAT4(
+                source.rotation,
+                static_cast<float>(std::min(source.texCoord, 1u)),
+                static_cast<float>(source.samplerIndex),
+                static_cast<float>(source.resolutionPolicy));
+        }
     }
 
     m_materialBuffer = CreateDefaultBuffer(
@@ -9143,6 +9628,32 @@ void D3D12PathTracingBackend::CreateMaterialBuffer()
     materialSrv.Buffer.NumElements = static_cast<UINT>(m_rtMaterials.size());
     materialSrv.Buffer.StructureByteStride = sizeof(Bistro::RtMaterial);
     m_device->CreateShaderResourceView(m_materialBuffer.Get(), &materialSrv, CpuDescriptor(DescriptorMaterialBuffer));
+
+    m_materialExtensionBuffer = CreateDefaultBuffer(
+        m_rtMaterialExtensions.data(),
+        m_rtMaterialExtensions.size() * sizeof(Bistro::RtMaterialExtension),
+        D3D12_RESOURCE_FLAG_NONE,
+        D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+        L"RtMaterialExtensions");
+    D3D12_SHADER_RESOURCE_VIEW_DESC extensionSrv = {};
+    extensionSrv.ViewDimension = D3D12_SRV_DIMENSION_BUFFER;
+    extensionSrv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    extensionSrv.Buffer.NumElements = static_cast<UINT>(m_rtMaterialExtensions.size());
+    extensionSrv.Buffer.StructureByteStride = sizeof(Bistro::RtMaterialExtension);
+    m_device->CreateShaderResourceView(m_materialExtensionBuffer.Get(), &extensionSrv, CpuDescriptor(DescriptorMaterialExtensionBuffer));
+
+    m_textureBindingBuffer = CreateDefaultBuffer(
+        m_rtTextureBindings.data(),
+        m_rtTextureBindings.size() * sizeof(Bistro::RtTextureBinding),
+        D3D12_RESOURCE_FLAG_NONE,
+        D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+        L"RtTextureBindings");
+    D3D12_SHADER_RESOURCE_VIEW_DESC bindingSrv = {};
+    bindingSrv.ViewDimension = D3D12_SRV_DIMENSION_BUFFER;
+    bindingSrv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    bindingSrv.Buffer.NumElements = static_cast<UINT>(m_rtTextureBindings.size());
+    bindingSrv.Buffer.StructureByteStride = sizeof(Bistro::RtTextureBinding);
+    m_device->CreateShaderResourceView(m_textureBindingBuffer.Get(), &bindingSrv, CpuDescriptor(DescriptorTextureBindingBuffer));
 }
 
 void D3D12PathTracingBackend::CreateTextures()
@@ -9166,13 +9677,21 @@ void D3D12PathTracingBackend::CreateTextures()
             ? std::clamp(material.alphaCutoff / std::max(material.baseColorFactor.w, 1.0e-6f), 0.0f, 1.0f)
             : -1.0f;
         indices[Bistro::TextureSlotBaseColor] = CreateTextureResource(
-            material.textures[Bistro::TextureSlotBaseColor], true, white, cache, alphaCoverageCutoff);
-        indices[Bistro::TextureSlotNormal] = CreateTextureResource(material.textures[Bistro::TextureSlotNormal], false, normal, cache);
-        indices[Bistro::TextureSlotRoughness] = CreateTextureResource(material.textures[Bistro::TextureSlotRoughness], false, roughness, cache);
-        indices[Bistro::TextureSlotMetallic] = CreateTextureResource(material.textures[Bistro::TextureSlotMetallic], false, metallic, cache);
-        indices[Bistro::TextureSlotOcclusion] = CreateTextureResource(material.textures[Bistro::TextureSlotOcclusion], false, white, cache);
-        indices[Bistro::TextureSlotEmissive] = CreateTextureResource(material.textures[Bistro::TextureSlotEmissive], true, black, cache);
-        indices[Bistro::TextureSlotAlpha] = CreateTextureResource(material.textures[Bistro::TextureSlotAlpha], false, white, cache, alphaCoverageCutoff);
+            material.textures[Bistro::TextureSlotBaseColor], true, white, cache, alphaCoverageCutoff, false,
+            static_cast<rb::TextureResolutionPolicy>(material.textureBindings[Bistro::TextureSlotBaseColor].resolutionPolicy));
+        indices[Bistro::TextureSlotNormal] = CreateTextureResource(material.textures[Bistro::TextureSlotNormal], false, normal, cache, -1.0f, false, static_cast<rb::TextureResolutionPolicy>(material.textureBindings[Bistro::TextureSlotNormal].resolutionPolicy));
+        indices[Bistro::TextureSlotRoughness] = CreateTextureResource(material.textures[Bistro::TextureSlotRoughness], false, roughness, cache, -1.0f, false, static_cast<rb::TextureResolutionPolicy>(material.textureBindings[Bistro::TextureSlotRoughness].resolutionPolicy));
+        indices[Bistro::TextureSlotMetallic] = CreateTextureResource(material.textures[Bistro::TextureSlotMetallic], false, metallic, cache, -1.0f, false, static_cast<rb::TextureResolutionPolicy>(material.textureBindings[Bistro::TextureSlotMetallic].resolutionPolicy));
+        indices[Bistro::TextureSlotOcclusion] = CreateTextureResource(material.textures[Bistro::TextureSlotOcclusion], false, white, cache, -1.0f, false, static_cast<rb::TextureResolutionPolicy>(material.textureBindings[Bistro::TextureSlotOcclusion].resolutionPolicy));
+        indices[Bistro::TextureSlotEmissive] = CreateTextureResource(material.textures[Bistro::TextureSlotEmissive], true, black, cache, -1.0f, false, static_cast<rb::TextureResolutionPolicy>(material.textureBindings[Bistro::TextureSlotEmissive].resolutionPolicy));
+        indices[Bistro::TextureSlotAlpha] = CreateTextureResource(material.textures[Bistro::TextureSlotAlpha], false, white, cache, alphaCoverageCutoff, false, static_cast<rb::TextureResolutionPolicy>(material.textureBindings[Bistro::TextureSlotAlpha].resolutionPolicy));
+        indices[Bistro::TextureSlotSpecularColor] = CreateTextureResource(material.textures[Bistro::TextureSlotSpecularColor], true, white, cache, -1.0f, false, static_cast<rb::TextureResolutionPolicy>(material.textureBindings[Bistro::TextureSlotSpecularColor].resolutionPolicy));
+        indices[Bistro::TextureSlotSpecularFactor] = CreateTextureResource(material.textures[Bistro::TextureSlotSpecularFactor], false, white, cache, -1.0f, false, static_cast<rb::TextureResolutionPolicy>(material.textureBindings[Bistro::TextureSlotSpecularFactor].resolutionPolicy));
+        indices[Bistro::TextureSlotTransmission] = CreateTextureResource(material.textures[Bistro::TextureSlotTransmission], false, white, cache, -1.0f, false, static_cast<rb::TextureResolutionPolicy>(material.textureBindings[Bistro::TextureSlotTransmission].resolutionPolicy));
+        indices[Bistro::TextureSlotThickness] = CreateTextureResource(material.textures[Bistro::TextureSlotThickness], false, white, cache, -1.0f, false, static_cast<rb::TextureResolutionPolicy>(material.textureBindings[Bistro::TextureSlotThickness].resolutionPolicy));
+        indices[Bistro::TextureSlotClearcoat] = CreateTextureResource(material.textures[Bistro::TextureSlotClearcoat], false, white, cache, -1.0f, false, static_cast<rb::TextureResolutionPolicy>(material.textureBindings[Bistro::TextureSlotClearcoat].resolutionPolicy));
+        indices[Bistro::TextureSlotClearcoatRoughness] = CreateTextureResource(material.textures[Bistro::TextureSlotClearcoatRoughness], false, white, cache, -1.0f, false, static_cast<rb::TextureResolutionPolicy>(material.textureBindings[Bistro::TextureSlotClearcoatRoughness].resolutionPolicy));
+        indices[Bistro::TextureSlotClearcoatNormal] = CreateTextureResource(material.textures[Bistro::TextureSlotClearcoatNormal], false, normal, cache, -1.0f, false, static_cast<rb::TextureResolutionPolicy>(material.textureBindings[Bistro::TextureSlotClearcoatNormal].resolutionPolicy));
 
         for (UINT slot = 0; slot < TextureSlotCount; ++slot)
         {
@@ -9292,7 +9811,7 @@ void D3D12PathTracingBackend::CreatePathtracingStateObject()
     // shadow TraceRay call. DXR requires every shader reachable from that
     // call graph to use a compatible shader configuration, so associating two
     // different payload maxima makes CreateStateObject fail with E_INVALIDARG.
-    // The payload values themselves remain 32 and 12 bytes in HLSL; this
+    // The payload values themselves remain 32 and 24 bytes in HLSL; this
     // pipeline-wide maximum only declares the largest reachable payload.
     auto shaderConfig = pipeline.CreateSubobject<CD3DX12_RAYTRACING_SHADER_CONFIG_SUBOBJECT>();
     shaderConfig->Config(sizeof(PathPayloadAbi), sizeof(XMFLOAT2));

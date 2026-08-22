@@ -19,6 +19,13 @@ enum class TextureSlot : std::uint32_t
     Occlusion,
     Emissive,
     Alpha,
+    SpecularColor,
+    SpecularFactor,
+    Transmission,
+    Thickness,
+    Clearcoat,
+    ClearcoatRoughness,
+    ClearcoatNormal,
     Count
 };
 static_assert(static_cast<std::uint32_t>(TextureSlot::BaseColor) == 0u);
@@ -26,6 +33,72 @@ static_assert(static_cast<std::uint32_t>(TextureSlot::Emissive) == 5u,
     "Existing project texture-slot values must remain stable.");
 static_assert(static_cast<std::uint32_t>(TextureSlot::Alpha) == 6u,
     "Alpha must remain the appended seventh texture slot.");
+static_assert(static_cast<std::uint32_t>(TextureSlot::SpecularColor) == 7u,
+    "glTF extension texture slots must only be appended.");
+static_assert(static_cast<std::uint32_t>(TextureSlot::ClearcoatNormal) == 13u,
+    "The glTF material extension texture ABI changed.");
+
+enum class TextureSamplerPreset : std::uint32_t
+{
+    LinearRepeat,
+    LinearClamp,
+    LinearMirror,
+    NearestRepeat,
+    NearestClamp,
+    NearestMirror
+};
+
+enum class TextureResolutionPolicy : std::uint32_t
+{
+    Auto,
+    Source,
+    Max4096,
+    Max2048,
+    Max1024,
+    Max512
+};
+
+struct TextureTransform
+{
+    std::array<float, 2> offset = { 0.0f, 0.0f };
+    std::array<float, 2> scale = { 1.0f, 1.0f };
+    float rotation = 0.0f;
+    std::uint32_t texCoord = 0;
+};
+
+struct TextureBinding
+{
+    std::wstring path;
+    TextureTransform transform;
+    TextureSamplerPreset sampler = TextureSamplerPreset::LinearRepeat;
+    TextureResolutionPolicy resolutionPolicy = TextureResolutionPolicy::Auto;
+};
+
+enum GltfMaterialFeature : std::uint32_t
+{
+    GltfMaterialFeatureTextureTransform = 1u << 0,
+    GltfMaterialFeatureSpecular = 1u << 1,
+    GltfMaterialFeatureIor = 1u << 2,
+    GltfMaterialFeatureTransmission = 1u << 3,
+    GltfMaterialFeatureVolume = 1u << 4,
+    GltfMaterialFeatureClearcoat = 1u << 5,
+    GltfMaterialFeatureBasisu = 1u << 6,
+};
+
+struct GltfMaterialExtensions
+{
+    std::uint32_t featureMask = 0;
+    float specularFactor = 1.0f;
+    std::array<float, 3> specularColorFactor = { 1.0f, 1.0f, 1.0f };
+    float ior = 1.5f;
+    float transmissionFactor = 0.0f;
+    float thicknessFactor = 0.0f;
+    std::array<float, 3> attenuationColor = { 1.0f, 1.0f, 1.0f };
+    float attenuationDistance = 3.402823466e+38F;
+    float clearcoatFactor = 0.0f;
+    float clearcoatRoughnessFactor = 0.0f;
+    float clearcoatNormalScale = 1.0f;
+};
 
 enum class AlphaMode : std::uint32_t
 {
@@ -77,6 +150,9 @@ struct MaterialAssignment
     AlphaMode alphaMode = AlphaMode::Opaque;
     bool packedOcclusionRoughnessMetallic = false;
     bool flipNormalGreen = false;
+    GltfMaterialExtensions gltfExtensions;
+    std::array<TextureBinding, static_cast<std::size_t>(TextureSlot::Count)> textureBindings;
+    std::array<bool, static_cast<std::size_t>(TextureSlot::Count)> textureBindingOverrideEnabled = {};
 };
 
 struct ViewportCamera

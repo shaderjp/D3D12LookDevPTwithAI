@@ -1,4 +1,5 @@
 #include "SceneImporter.h"
+#include "GltfSceneImporter.h"
 #include "PbrtSceneImporter.h"
 
 #include <assimp/Importer.hpp>
@@ -238,6 +239,7 @@ void ProcessNode(const aiScene* sourceScene, const aiNode* node, const XMMATRIX&
             const aiVector3D p = mesh->mVertices[vertexIndex];
             const aiVector3D n = mesh->HasNormals() ? mesh->mNormals[vertexIndex] : aiVector3D(0.0f, 1.0f, 0.0f);
             const aiVector3D uv = mesh->HasTextureCoords(0) ? mesh->mTextureCoords[0][vertexIndex] : aiVector3D(0.0f, 0.0f, 0.0f);
+            const aiVector3D uv1 = mesh->HasTextureCoords(1) ? mesh->mTextureCoords[1][vertexIndex] : aiVector3D(0.0f, 0.0f, 0.0f);
             const aiVector3D t = mesh->HasTangentsAndBitangents() ? mesh->mTangents[vertexIndex] : aiVector3D(1.0f, 0.0f, 0.0f);
             const aiVector3D b = mesh->HasTangentsAndBitangents() ? mesh->mBitangents[vertexIndex] : aiVector3D(0.0f, 0.0f, 1.0f);
 
@@ -253,6 +255,7 @@ void ProcessNode(const aiScene* sourceScene, const aiNode* node, const XMMATRIX&
             XMStoreFloat3(&vertex.normal, normal);
             XMStoreFloat4(&vertex.tangent, XMVectorSetW(tangent, tangentSign));
             vertex.texcoord = XMFLOAT2(uv.x, uv.y);
+            vertex.texcoord1 = XMFLOAT2(uv1.x, uv1.y);
             scene.vertices.push_back(vertex);
             ExpandBounds(scene, vertex.position);
         }
@@ -301,6 +304,11 @@ SceneImportResult SceneImporter::ImportScene(const std::wstring& path)
     if (IsPbrtScenePath(scenePath))
     {
         return ImportPbrtScene(path);
+    }
+    if (SceneExtensionEquals(scenePath.extension().wstring(), L".gltf") ||
+        SceneExtensionEquals(scenePath.extension().wstring(), L".glb"))
+    {
+        return ImportGltfScene(path);
     }
 
     Assimp::Importer importer;

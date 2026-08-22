@@ -159,6 +159,22 @@ the same paths used by the original application:
 `Bistro_v5_2` is a local test asset directory and is intentionally ignored by
 git. See [Asset setup](docs/assets.md).
 
+### glTF material and texture path
+
+glTF / GLB is imported through the dedicated tinygltf-based path instead of
+Assimp. It supports `TEXCOORD_0/1`, embedded/data-URI images, texture transforms,
+specular, IOR, transmission, volume, clearcoat, and `KHR_texture_basisu` while
+preserving stable `gltf:material/<index>` IDs for non-destructive overrides.
+Unsupported required extensions stop import; optional fallbacks are reported by
+the scene audit.
+
+Material textures accept native BC DDS/KTX2 mip chains, Basis ETC1S/UASTC KTX2,
+EXR, HDR, and ordinary decoded image formats. The old 512-pixel material/HDRI
+cap has been removed. Per-slot Auto / Source / 4K / 2K / 1K / 512 policies use
+a DXGI-aware texture budget; the environment importance map remains a separate
+1024-pixel source. Animation, skinning, morph targets, hierarchy editing, and a
+raster fallback are not included in this release. See [Asset setup](docs/assets.md).
+
 ## WinUI editor
 
 The fixed IDE-style layout contains the same nine editor panels as the source
@@ -303,6 +319,7 @@ Run the inherited and WinUI boundary tests from PowerShell:
 .\Scripts\TestOfflinePack.ps1
 .\Scripts\TestQualitySettingsJson.ps1
 .\Scripts\TestTextureLoader.ps1
+.\Scripts\TestGltfSceneImporter.ps1
 .\Scripts\TestBenchmarkHarness.ps1
 .\Scripts\TestBenchmarkSequenceAnalyzer.ps1
 .\Scripts\TestRendererCommandQueue.ps1
@@ -330,6 +347,8 @@ source baseline:
 | Streamline | `e8aaa6eaac968711fb62473d4ae8256dde20919b` |
 | Assimp | `e04b60f61522e1d5594ef25addcfae7cb156f085` |
 | TinyEXR | `1b106618644dbf8a0935c2348ba51a2d863dd7c2` |
+| tinygltf 2.9.6 | `26422192e2908a562b641175dde18489824e609e` |
+| Basis Universal 2.50 | `9bebe16726b3a61c8c213eeee3b7cffb462ef34e` |
 
 The RTXDI repository records its `Libraries/Rtxdi` nested dependency at
 `a14e079c727ed8c4fd3173bd2aea8244c9d9f6d6`.
@@ -354,4 +373,9 @@ DXGI concern and does not add a UI shader pass.
 
 ## License
 
-See [LICENSE](LICENSE). Third-party components retain their own licenses.
+See [LICENSE](LICENSE). Third-party components retain their own licenses. The
+Portable Suite collects the tinygltf MIT license and Basis Universal Apache-2.0
+license/NOTICE (including its Zstandard license) and maps every shipped file in
+the generated license allowlist and SPDX 2.3 SBOM. The implementation was
+designed with reference to `nvpro-samples/vk_gltf_renderer`; no Vulkan,
+`nvpro_core`, or UI source is included.

@@ -303,6 +303,11 @@ namespace
         Require(list.find("\"ttlMs\":3600000") != std::string::npos && list.find("\"cacheScope\":\"private\"") != std::string::npos, "list cache metadata missing");
         Require(list.find("\"annotations\":{\"readOnlyHint\":true}") != std::string::npos, "read-only annotation missing");
         Require(list.find("lookdevpt.get_stats") < list.find("lookdevpt.get_state"), "tool order is not deterministic");
+        Require(list.find("gltfExtensions") != std::string::npos &&
+            list.find("clearcoatNormal") != std::string::npos &&
+            list.find("resolutionPolicy") != std::string::npos &&
+            list.find("uvSet") != std::string::npos,
+            "glTF material mutation schema is missing");
         Require(list.find("lookdevpt.audit_scene") != std::string::npos &&
             list.find("lookdevpt.probe_surfaces") != std::string::npos &&
             list.find("lookdevpt.compare_captures") != std::string::npos &&
@@ -406,6 +411,10 @@ namespace
         const std::string sessionId = HeaderValueFromResponse(initialized, "MCP-Session-Id");
         Require(!sessionId.empty(), "legacy initialize did not create a session");
         Require(initialized.find("\"protocolVersion\":\"2025-11-25\"") != std::string::npos, "legacy version negotiation failed");
+        Require(initialized.find("\"contractVersion\":\"1.0\"") != std::string::npos &&
+            initialized.find("\"gltfMaterialExtensionsV1\":true") != std::string::npos &&
+            initialized.find("\"textureResidencyV1\":true") != std::string::npos,
+            "glTF compatibility features are missing from initialize");
 
         const std::string notificationBody = "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}";
         const std::string notification = Exchange(port, RequestText(port, "POST", notificationBody, "2025-11-25", {}, {}, sessionId));

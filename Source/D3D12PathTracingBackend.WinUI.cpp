@@ -375,6 +375,19 @@ void D3D12PathTracingBackend::ApplyEditorCommand(
                 diagnostics);
             m_projectDiagnostics = diagnostics;
         }
+        else if (action == L"material.texture.resolution" &&
+                 m_selectedMaterial >= 0 && static_cast<size_t>(m_selectedMaterial) < m_scene.materials.size())
+        {
+            const UINT slot = static_cast<UINT>(std::clamp(command.index, 0, static_cast<int>(TextureSlotCount) - 1));
+            Bistro::Material& material = m_scene.materials[m_selectedMaterial];
+            material.textureBindings[slot].resolutionPolicy = static_cast<uint32_t>(std::clamp(
+                static_cast<int>(std::get<std::int64_t>(command.value)), 0, 5));
+            if (static_cast<size_t>(m_selectedMaterial) < m_textureBindingOverrideEnabled.size())
+            {
+                m_textureBindingOverrideEnabled[m_selectedMaterial][slot] = true;
+            }
+            materialChanged(true);
+        }
         else if (action == L"material.compare.setA")
         {
             m_materialCompareA =
@@ -1912,6 +1925,7 @@ D3D12PathTracingBackend::CaptureEditorSnapshot() const
                 m_materialTextureExists[selected][slot];
             item.status = overridden ? L"Override" : L"Source";
             item.status += exists ? L" · loaded" : L" · fallback";
+            item.resolutionPolicy = static_cast<std::int32_t>(material.textureBindings[slot].resolutionPolicy);
             if (selected < m_materialTextureIndices.size())
             {
                 const UINT textureIndex =

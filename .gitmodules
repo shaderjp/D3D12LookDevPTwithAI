@@ -23,3 +23,9 @@
 	path = ThirdParty/tinyexr
 	url = https://github.com/syoyo/tinyexr.git
 	branch = release
+[submodule "ThirdParty/tinygltf"]
+	path = ThirdParty/tinygltf
+	url = https://github.com/syoyo/tinygltf.git
+[submodule "ThirdParty/basis_universal"]
+	path = ThirdParty/basis_universal
+	url = https://github.com/BinomialLLC/basis_universal.git

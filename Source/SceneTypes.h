@@ -17,6 +17,7 @@ struct SceneVertex
     DirectX::XMFLOAT3 normal;
     DirectX::XMFLOAT2 texcoord;
     DirectX::XMFLOAT4 tangent = DirectX::XMFLOAT4(1.0f, 0.0f, 0.0f, 1.0f);
+    DirectX::XMFLOAT2 texcoord1 = DirectX::XMFLOAT2(0.0f, 0.0f);
 };
 
 struct SceneDraw
@@ -30,6 +31,7 @@ struct SceneDraw
 struct SceneMaterial
 {
     MaterialAssignment assignment;
+    std::string sourceMaterialId;
     std::wstring baseColorTexturePath;
     std::wstring normalTexturePath;
     std::wstring roughnessTexturePath;
@@ -51,6 +53,8 @@ struct SceneMaterial
     float indexOfRefraction = 1.5f;
     bool thinDielectric = false;
     DirectX::XMFLOAT4 uvScaleOffset = DirectX::XMFLOAT4(1.0f, 1.0f, 0.0f, 0.0f);
+    GltfMaterialExtensions gltfExtensions;
+    std::array<TextureBinding, static_cast<std::size_t>(TextureSlot::Count)> textureBindings;
 };
 
 struct SceneMesh
@@ -120,6 +124,10 @@ struct ImportedScene
     std::optional<SceneCamera> camera;
     std::optional<SceneEnvironment> environment;
     std::vector<SceneLight> lights;
+    std::vector<std::string> extensionsUsed;
+    std::vector<std::string> extensionsRequired;
+    std::vector<std::string> unsupportedExtensions;
+    std::uint32_t materialFeatureMask = 0;
     bool hasAuthoredLighting = false;
     DirectX::XMFLOAT3 boundsMin = DirectX::XMFLOAT3(0.0f, 0.0f, 0.0f);
     DirectX::XMFLOAT3 boundsMax = DirectX::XMFLOAT3(0.0f, 0.0f, 0.0f);

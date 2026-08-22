@@ -208,6 +208,20 @@
                             <TabViewItem Header="Textures" IsClosable="False">
                                 <ScrollViewer VerticalScrollBarVisibility="Auto">
                                     <StackPanel Padding="8" Spacing="8">
+                                        <TextBlock Text="Resident Resolution" FontWeight="SemiBold" />
+                                        <StackPanel Orientation="Horizontal" Spacing="6">
+                                            <ComboBox x:Name="TextureResolutionTargetCombo" Width="170" SelectedIndex="0" SelectionChanged="OnTextureResolutionSelectionChanged">
+                                                <ComboBoxItem Content="Base Color" /><ComboBoxItem Content="Normal" /><ComboBoxItem Content="Roughness" />
+                                                <ComboBoxItem Content="Metallic" /><ComboBoxItem Content="Occlusion" /><ComboBoxItem Content="Emissive" />
+                                                <ComboBoxItem Content="Alpha" /><ComboBoxItem Content="Specular Color" /><ComboBoxItem Content="Specular Factor" />
+                                                <ComboBoxItem Content="Transmission" /><ComboBoxItem Content="Thickness" /><ComboBoxItem Content="Clearcoat" />
+                                                <ComboBoxItem Content="Clearcoat Roughness" /><ComboBoxItem Content="Clearcoat Normal" />
+                                            </ComboBox>
+                                            <ComboBox x:Name="TextureResolutionPolicyCombo" Width="110" SelectedIndex="0" SelectionChanged="OnTextureResolutionSelectionChanged">
+                                                <ComboBoxItem Content="Auto" /><ComboBoxItem Content="Source" /><ComboBoxItem Content="4K" />
+                                                <ComboBoxItem Content="2K" /><ComboBoxItem Content="1K" /><ComboBoxItem Content="512" />
+                                            </ComboBox>
+                                        </StackPanel>
                                         <TextBlock x:Name="Texture0Text" Text="Base Color" TextWrapping="Wrap" />
                                         <StackPanel Orientation="Horizontal" Spacing="5">
                                             <Button Content="Load" Tag="load:0" Click="OnTextureClick" />
@@ -250,6 +264,20 @@
                                             <Button Content="Clear" Tag="clear:6" Click="OnTextureClick" />
                                             <Button Content="Reset" Tag="reset:6" Click="OnTextureClick" />
                                         </StackPanel>
+                                        <TextBlock x:Name="Texture7Text" Text="Specular Color" TextWrapping="Wrap" />
+                                        <StackPanel Orientation="Horizontal" Spacing="5"><Button Content="Load" Tag="load:7" Click="OnTextureClick" /><Button Content="Clear" Tag="clear:7" Click="OnTextureClick" /><Button Content="Reset" Tag="reset:7" Click="OnTextureClick" /></StackPanel>
+                                        <TextBlock x:Name="Texture8Text" Text="Specular Factor" TextWrapping="Wrap" />
+                                        <StackPanel Orientation="Horizontal" Spacing="5"><Button Content="Load" Tag="load:8" Click="OnTextureClick" /><Button Content="Clear" Tag="clear:8" Click="OnTextureClick" /><Button Content="Reset" Tag="reset:8" Click="OnTextureClick" /></StackPanel>
+                                        <TextBlock x:Name="Texture9Text" Text="Transmission" TextWrapping="Wrap" />
+                                        <StackPanel Orientation="Horizontal" Spacing="5"><Button Content="Load" Tag="load:9" Click="OnTextureClick" /><Button Content="Clear" Tag="clear:9" Click="OnTextureClick" /><Button Content="Reset" Tag="reset:9" Click="OnTextureClick" /></StackPanel>
+                                        <TextBlock x:Name="Texture10Text" Text="Thickness" TextWrapping="Wrap" />
+                                        <StackPanel Orientation="Horizontal" Spacing="5"><Button Content="Load" Tag="load:10" Click="OnTextureClick" /><Button Content="Clear" Tag="clear:10" Click="OnTextureClick" /><Button Content="Reset" Tag="reset:10" Click="OnTextureClick" /></StackPanel>
+                                        <TextBlock x:Name="Texture11Text" Text="Clearcoat" TextWrapping="Wrap" />
+                                        <StackPanel Orientation="Horizontal" Spacing="5"><Button Content="Load" Tag="load:11" Click="OnTextureClick" /><Button Content="Clear" Tag="clear:11" Click="OnTextureClick" /><Button Content="Reset" Tag="reset:11" Click="OnTextureClick" /></StackPanel>
+                                        <TextBlock x:Name="Texture12Text" Text="Clearcoat Roughness" TextWrapping="Wrap" />
+                                        <StackPanel Orientation="Horizontal" Spacing="5"><Button Content="Load" Tag="load:12" Click="OnTextureClick" /><Button Content="Clear" Tag="clear:12" Click="OnTextureClick" /><Button Content="Reset" Tag="reset:12" Click="OnTextureClick" /></StackPanel>
+                                        <TextBlock x:Name="Texture13Text" Text="Clearcoat Normal" TextWrapping="Wrap" />
+                                        <StackPanel Orientation="Horizontal" Spacing="5"><Button Content="Load" Tag="load:13" Click="OnTextureClick" /><Button Content="Clear" Tag="clear:13" Click="OnTextureClick" /><Button Content="Reset" Tag="reset:13" Click="OnTextureClick" /></StackPanel>
                                     </StackPanel>
                                 </ScrollViewer>
                             </TabViewItem>

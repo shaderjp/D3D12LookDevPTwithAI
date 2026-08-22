@@ -82,6 +82,10 @@ $licenseSources = [ordered]@{
     'TINYEXR-LICENSE.txt' = (Join-Path $repo 'ThirdParty\tinyexr\LICENSE')
     'TINYEXR-NOTICE.txt' = (Join-Path $repo 'ThirdParty\tinyexr\NOTICE')
     'TINYEXR-ZSTD-LICENSE.txt' = (Join-Path $repo 'ThirdParty\tinyexr\deps\zstd\LICENSE')
+    'TINYGLTF-LICENSE.txt' = (Join-Path $repo 'ThirdParty\tinygltf\LICENSE')
+    'BASIS-UNIVERSAL-LICENSE.txt' = (Join-Path $repo 'ThirdParty\basis_universal\LICENSE')
+    'BASIS-UNIVERSAL-NOTICE.txt' = (Join-Path $repo 'ThirdParty\basis_universal\NOTICE')
+    'BASIS-UNIVERSAL-ZSTD-LICENSE.txt' = (Join-Path $repo 'ThirdParty\basis_universal\zstd\LICENSE')
     'WINDOWS-APP-SDK-LICENSE.txt' = (Join-Path $nugetRoot 'microsoft.windowsappsdk\2.4.0\license.txt')
     'WINDOWS-APP-SDK-NOTICE.txt' = (Join-Path $nugetRoot 'microsoft.windowsappsdk\2.4.0\NOTICE.txt')
     'WINDOWS-APP-SDK-BASE-LICENSE.txt' = (Join-Path $nugetRoot 'microsoft.windowsappsdk.base\2.0.4\license.txt')
@@ -117,7 +121,8 @@ This distribution includes D3D12LookDevPTWinUI and LocalMCPChatClient plus
 redistributable runtime components and statically linked libraries. The
 corresponding license and notice texts are included below this suite root:
 
-- licenses/D3D12LookDevPTWinUI: Assimp, zlib, DirectXTex, TinyEXR, zstd,
+- licenses/D3D12LookDevPTWinUI: Assimp, zlib, DirectXTex, TinyEXR, tinygltf,
+  Basis Universal, zstd,
   Windows App SDK, C++/WinRT, WebView2, D3D12 Agility SDK, and DirectX
   Shader Compiler.
 - LocalMCPChatClient/licenses and LocalMCPChatClient/THIRD-PARTY-NOTICES.txt:

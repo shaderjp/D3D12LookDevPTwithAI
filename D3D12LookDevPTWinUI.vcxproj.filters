@@ -91,6 +91,12 @@
     <ClCompile Include="Source\FpsCamera.cpp">
       <Filter>Source Files\Core</Filter>
     </ClCompile>
+    <ClCompile Include="Source\BasisKtx2Loader.cpp">
+      <Filter>Source Files\Rendering</Filter>
+    </ClCompile>
+    <ClCompile Include="Source\GltfSceneImporter.cpp">
+      <Filter>Source Files\Rendering</Filter>
+    </ClCompile>
     <ClCompile Include="Source\stdafx.cpp">
       <Filter>Source Files\Core</Filter>
     </ClCompile>
@@ -125,6 +131,8 @@
       <Filter>Source Files\Rendering</Filter>
     </ClCompile>
     <ClCompile Include="ThirdParty\tinyexr\deps\zstd\tinyexr_zstd.c"><Filter>Source Files\Rendering</Filter></ClCompile>
+    <ClCompile Include="ThirdParty\basis_universal\transcoder\basisu_transcoder.cpp"><Filter>Source Files\Rendering</Filter></ClCompile>
+    <ClCompile Include="ThirdParty\basis_universal\zstd\zstd.c"><Filter>Source Files\Rendering</Filter></ClCompile>
     <ClCompile Include="ThirdParty\tinyexr\src\exr_attr.c"><Filter>Source Files\Rendering</Filter></ClCompile>
     <ClCompile Include="ThirdParty\tinyexr\src\exr_b44.c"><Filter>Source Files\Rendering</Filter></ClCompile>
     <ClCompile Include="ThirdParty\tinyexr\src\exr_codec.c"><Filter>Source Files\Rendering</Filter></ClCompile>
@@ -169,6 +177,9 @@
     </ClCompile>
     <ClCompile Include="Tests\McpReviewAnalysisTests.cpp">
       <Filter>Source Files\Services</Filter>
+    </ClCompile>
+    <ClCompile Include="Tests\GltfSceneImporterTests.cpp">
+      <Filter>Source Files\Rendering</Filter>
     </ClCompile>
     <ClCompile Include="Source\QualitySettingsJson.cpp">
       <Filter>Source Files\Services</Filter>
@@ -230,6 +241,12 @@
       <Filter>Header Files\Rendering</Filter>
     </ClInclude>
     <ClInclude Include="Source\NrdBackend.h">
+      <Filter>Header Files\Rendering</Filter>
+    </ClInclude>
+    <ClInclude Include="Source\BasisKtx2Loader.h">
+      <Filter>Header Files\Rendering</Filter>
+    </ClInclude>
+    <ClInclude Include="Source\GltfSceneImporter.h">
       <Filter>Header Files\Rendering</Filter>
     </ClInclude>
     <ClInclude Include="Source\PathTracingScene.h">
@@ -435,6 +452,9 @@
       <Filter>Build Scripts</Filter>
     </None>
     <None Include="Scripts\TestMcpReviewAnalysis.ps1">
+      <Filter>Build Scripts</Filter>
+    </None>
+    <None Include="Scripts\TestGltfSceneImporter.ps1">
       <Filter>Build Scripts</Filter>
     </None>
   </ItemGroup>

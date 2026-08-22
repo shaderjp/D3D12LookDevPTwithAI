@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <limits>
 #include <objbase.h>
@@ -116,6 +117,47 @@ namespace
             Require(std::memcmp(expectedRow, actualRow, rowBytes) == 0, context);
         }
     }
+
+    void WriteU32(std::vector<uint8_t>& bytes, size_t offset, uint32_t value)
+    {
+        std::memcpy(bytes.data() + offset, &value, sizeof(value));
+    }
+
+    void WriteU64(std::vector<uint8_t>& bytes, size_t offset, uint64_t value)
+    {
+        std::memcpy(bytes.data() + offset, &value, sizeof(value));
+    }
+
+    void WriteNativeBc7Ktx2(const std::filesystem::path& path, bool truncateSecondMip)
+    {
+        constexpr uint8_t identifier[12] = {
+            0xAB, 0x4B, 0x54, 0x58, 0x20, 0x32, 0x30, 0xBB, 0x0D, 0x0A, 0x1A, 0x0A };
+        constexpr size_t levelIndexEnd = 80 + 2 * 24;
+        constexpr size_t mip0Bytes = 64;
+        constexpr size_t mip1Bytes = 16;
+        std::vector<uint8_t> bytes(levelIndexEnd + mip0Bytes + (truncateSecondMip ? 8 : mip1Bytes), 0);
+        std::memcpy(bytes.data(), identifier, sizeof(identifier));
+        WriteU32(bytes, 12, 145); // VK_FORMAT_BC7_UNORM_BLOCK
+        WriteU32(bytes, 16, 1);
+        WriteU32(bytes, 20, 8);
+        WriteU32(bytes, 24, 8);
+        WriteU32(bytes, 36, 1);
+        WriteU32(bytes, 40, 2);
+        WriteU64(bytes, 80, levelIndexEnd);
+        WriteU64(bytes, 88, mip0Bytes);
+        WriteU64(bytes, 96, mip0Bytes);
+        WriteU64(bytes, 104, levelIndexEnd + mip0Bytes);
+        WriteU64(bytes, 112, mip1Bytes);
+        WriteU64(bytes, 120, mip1Bytes);
+        for (size_t index = levelIndexEnd; index < bytes.size(); ++index)
+        {
+            bytes[index] = static_cast<uint8_t>(index & 0xffu);
+        }
+        std::ofstream output(path, std::ios::binary);
+        Require(output && static_cast<bool>(output.write(
+            reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()))),
+            "failed to write native KTX2 fixture");
+    }
 }
 
 int wmain()
@@ -132,7 +174,9 @@ int wmain()
         const std::filesystem::path ddsPath = temporaryDirectory / (baseName + L".dds");
         const std::filesystem::path hdrPath = temporaryDirectory / (baseName + L".hdr");
         const std::filesystem::path wicPath = temporaryDirectory / (baseName + L".png");
-        temporaryPaths = { ddsPath, hdrPath, wicPath };
+        const std::filesystem::path ktx2Path = temporaryDirectory / (baseName + L".ktx2");
+        const std::filesystem::path brokenKtx2Path = temporaryDirectory / (baseName + L"-broken.ktx2");
+        temporaryPaths = { ddsPath, hdrPath, wicPath, ktx2Path, brokenKtx2Path };
 
         DirectX::ScratchImage ddsSource;
         RequireSucceeded(
@@ -202,15 +246,30 @@ int wmain()
                 wicPath.c_str()),
             "failed to write test WIC image");
 
+        WriteNativeBc7Ktx2(ktx2Path, false);
+        WriteNativeBc7Ktx2(brokenKtx2Path, true);
+
         const uint8_t fallback[4] = { 0, 0, 0, 255 };
+        const Bistro::TextureData nativeKtx2 = Bistro::LoadTextureD3D12(
+            ktx2Path.wstring(), true, fallback, -1.0f, 4);
+        Require(!nativeKtx2.fallback && nativeKtx2.container == "ktx2-native",
+            "native KTX2 did not use the direct-upload path");
+        Require(nativeKtx2.format == DXGI_FORMAT_BC7_UNORM_SRGB &&
+            nativeKtx2.sourceWidth == 8 && nativeKtx2.sourceHeight == 8 &&
+            nativeKtx2.width == 4 && nativeKtx2.height == 4 &&
+            nativeKtx2.mips.size() == 1 && nativeKtx2.residentBytes == 16,
+            "native KTX2 resident mip selection is invalid");
+        const Bistro::TextureData brokenKtx2 = Bistro::LoadTextureD3D12(
+            brokenKtx2Path.wstring(), false, fallback, -1.0f, 8);
+        Require(brokenKtx2.fallback, "truncated KTX2 mip payload was accepted");
         const auto verifyEnvironmentPair = [&](const std::filesystem::path& path, const char* context)
         {
             const Bistro::TextureData importance = Bistro::LoadEnvironmentImportanceSource(
                 path.wstring(), fallback, 4096);
             const Bistro::TextureData radiance = Bistro::LoadEnvironmentRadianceTexture(
                 path.wstring(), fallback, 4096);
-            ValidateLinearRadiance(importance, 512, 128, false, context);
-            ValidateLinearRadiance(radiance, 512, 128, true, context);
+            ValidateLinearRadiance(importance, 1024, 256, false, context);
+            ValidateLinearRadiance(radiance, 1024, 256, true, context);
             RequireMipZeroMatches(importance, radiance, context);
             return importance;
         };

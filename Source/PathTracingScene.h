@@ -10,7 +10,7 @@
 
 namespace Bistro
 {
-    static constexpr uint32_t TextureSlotCount = 7;
+    static constexpr uint32_t TextureSlotCount = 14;
     static constexpr uint32_t TextureSlotBaseColor = 0;
     static constexpr uint32_t TextureSlotNormal = 1;
     static constexpr uint32_t TextureSlotRoughness = 2;
@@ -18,6 +18,13 @@ namespace Bistro
     static constexpr uint32_t TextureSlotOcclusion = 4;
     static constexpr uint32_t TextureSlotEmissive = 5;
     static constexpr uint32_t TextureSlotAlpha = 6;
+    static constexpr uint32_t TextureSlotSpecularColor = 7;
+    static constexpr uint32_t TextureSlotSpecularFactor = 8;
+    static constexpr uint32_t TextureSlotTransmission = 9;
+    static constexpr uint32_t TextureSlotThickness = 10;
+    static constexpr uint32_t TextureSlotClearcoat = 11;
+    static constexpr uint32_t TextureSlotClearcoatRoughness = 12;
+    static constexpr uint32_t TextureSlotClearcoatNormal = 13;
 
     enum RtMaterialFeature : uint32_t
     {
@@ -29,6 +36,14 @@ namespace Bistro
         RtMaterialFeatureOcclusionTexture = 1u << 5,
         RtMaterialFeatureEmissiveTexture = 1u << 6,
         RtMaterialFeatureAlphaTexture = 1u << 7,
+        RtMaterialFeatureSpecularColorTexture = 1u << 8,
+        RtMaterialFeatureSpecularFactorTexture = 1u << 9,
+        RtMaterialFeatureTransmissionTexture = 1u << 10,
+        RtMaterialFeatureThicknessTexture = 1u << 11,
+        RtMaterialFeatureClearcoatTexture = 1u << 12,
+        RtMaterialFeatureClearcoatRoughnessTexture = 1u << 13,
+        RtMaterialFeatureClearcoatNormalTexture = 1u << 14,
+        RtMaterialFeatureGltfMetallicRoughness = 1u << 15,
     };
 
     struct Vertex
@@ -37,12 +52,36 @@ namespace Bistro
         DirectX::XMFLOAT3 normal;
         DirectX::XMFLOAT4 tangent;
         DirectX::XMFLOAT2 texcoord;
+        DirectX::XMFLOAT2 texcoord1;
+    };
+
+    enum MaterialExtensionFeature : uint32_t
+    {
+        MaterialExtensionTextureTransform = 1u << 0,
+        MaterialExtensionSpecular = 1u << 1,
+        MaterialExtensionIor = 1u << 2,
+        MaterialExtensionTransmission = 1u << 3,
+        MaterialExtensionVolume = 1u << 4,
+        MaterialExtensionClearcoat = 1u << 5,
+        MaterialExtensionBasisu = 1u << 6,
+    };
+
+    struct TextureBinding
+    {
+        DirectX::XMFLOAT2 offset = DirectX::XMFLOAT2(0.0f, 0.0f);
+        DirectX::XMFLOAT2 scale = DirectX::XMFLOAT2(1.0f, 1.0f);
+        float rotation = 0.0f;
+        uint32_t texCoord = 0;
+        uint32_t samplerIndex = 0;
+        uint32_t resolutionPolicy = 0;
     };
 
     struct Material
     {
         std::wstring name;
+        std::string sourceMaterialId;
         std::array<std::wstring, TextureSlotCount> textures;
+        std::array<TextureBinding, TextureSlotCount> textureBindings;
         DirectX::XMFLOAT4 baseColorFactor = DirectX::XMFLOAT4(1.0f, 1.0f, 1.0f, 1.0f);
         DirectX::XMFLOAT4 emissiveFactor = DirectX::XMFLOAT4(0.0f, 0.0f, 0.0f, 0.0f);
         float roughnessFactor = 0.48f;
@@ -53,10 +92,20 @@ namespace Bistro
         bool alphaMasked = false;
         bool twoSidedEmission = false;
         bool packedOcclusionRoughnessMetallic = false;
+        bool gltfMetallicRoughness = false;
         float transmissionFactor = 0.0f;
         float indexOfRefraction = 1.5f;
         bool thinDielectric = false;
         DirectX::XMFLOAT4 uvScaleOffset = DirectX::XMFLOAT4(1.0f, 1.0f, 0.0f, 0.0f);
+        uint32_t extensionFeatureMask = 0;
+        float specularFactor = 1.0f;
+        DirectX::XMFLOAT3 specularColorFactor = DirectX::XMFLOAT3(1.0f, 1.0f, 1.0f);
+        float thicknessFactor = 0.0f;
+        DirectX::XMFLOAT3 attenuationColor = DirectX::XMFLOAT3(1.0f, 1.0f, 1.0f);
+        float attenuationDistance = 3.402823466e+38F;
+        float clearcoatFactor = 0.0f;
+        float clearcoatRoughnessFactor = 0.0f;
+        float clearcoatNormalScale = 1.0f;
     };
 
     struct DrawItem
@@ -127,6 +176,26 @@ namespace Bistro
     static_assert(offsetof(RtMaterial, transmissionFactor) == 64, "RtMaterial transmission ABI offset changed.");
     static_assert(offsetof(RtMaterial, uvScaleOffset) == 80, "RtMaterial UV-transform ABI offset changed.");
 
+    struct RtMaterialExtension
+    {
+        DirectX::XMFLOAT4 specularColorFactorAndFactor = DirectX::XMFLOAT4(1.0f, 1.0f, 1.0f, 1.0f);
+        DirectX::XMFLOAT4 attenuationColorAndDistance = DirectX::XMFLOAT4(1.0f, 1.0f, 1.0f, 3.402823466e+38F);
+        DirectX::XMFLOAT4 transmissionThicknessIorFeatures = DirectX::XMFLOAT4(0.0f, 0.0f, 1.5f, 0.0f);
+        DirectX::XMFLOAT4 clearcoat = DirectX::XMFLOAT4(0.0f, 0.0f, 1.0f, 0.0f);
+    };
+    static_assert(sizeof(RtMaterialExtension) == 64, "RtMaterialExtension must match HLSL.");
+    static_assert(offsetof(RtMaterialExtension, attenuationColorAndDistance) == 16, "RtMaterialExtension attenuation ABI offset changed.");
+    static_assert(offsetof(RtMaterialExtension, transmissionThicknessIorFeatures) == 32, "RtMaterialExtension transmission ABI offset changed.");
+    static_assert(offsetof(RtMaterialExtension, clearcoat) == 48, "RtMaterialExtension clearcoat ABI offset changed.");
+
+    struct RtTextureBinding
+    {
+        DirectX::XMFLOAT4 offsetScale = DirectX::XMFLOAT4(0.0f, 0.0f, 1.0f, 1.0f);
+        DirectX::XMFLOAT4 rotationTexCoordSampler = DirectX::XMFLOAT4(0.0f, 0.0f, 0.0f, 0.0f);
+    };
+    static_assert(sizeof(RtTextureBinding) == 32, "RtTextureBinding must match HLSL.");
+    static_assert(offsetof(RtTextureBinding, rotationTexCoordSampler) == 16, "RtTextureBinding sampler ABI offset changed.");
+
     struct RtGeometryRecord
     {
         uint32_t indexOffset = 0;
@@ -186,6 +255,10 @@ namespace Bistro
         std::vector<MeshRange> meshes;
         std::vector<SceneInstance> instances;
         std::vector<AnalyticLight> analyticLights;
+        std::vector<std::string> extensionsUsed;
+        std::vector<std::string> extensionsRequired;
+        std::vector<std::string> unsupportedExtensions;
+        uint32_t materialFeatureMask = 0;
         bool hasAuthoredLighting = false;
         DirectX::XMFLOAT3 boundsMin = DirectX::XMFLOAT3(0.0f, 0.0f, 0.0f);
         DirectX::XMFLOAT3 boundsMax = DirectX::XMFLOAT3(0.0f, 0.0f, 0.0f);

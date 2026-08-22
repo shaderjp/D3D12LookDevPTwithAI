@@ -122,7 +122,7 @@
       <PrecompiledHeaderOutputFile>$(IntDir)pch.pch</PrecompiledHeaderOutputFile>
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>WIN32;_DEBUG;_WINDOWS;UNICODE;_UNICODE;NOMINMAX;WIN32_LEAN_AND_MEAN;_CRT_SECURE_NO_WARNINGS;_Atomic=;D3D12LOOKDEVPT_WINUI=1;DISABLE_XAML_GENERATED_MAIN;D3D12LOOKDEVPT_WITH_DLSS=$(D3D12LookDevPtWithDlss);D3D12LOOKDEVPT_WITH_NRD=$(D3D12LookDevPtWithNrd);D3D12LOOKDEVPT_RTXDI_REQUESTED=$(D3D12LookDevPtRtxdiRequested);D3D12LOOKDEVPT_RTXDI_SDK_AVAILABLE=$(RtxdiSdkAvailable);D3D12LOOKDEVPT_WITH_RTXDI=$(D3D12LookDevPtWithRtxdi);%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>$(ProjectDir)Source\WinUI;$(GeneratedFilesDir);$(GeneratedFilesDir)Source\WinUI;$(ProjectDir)Source;$(ProjectDir)Shaders;$(ProjectDir)ThirdParty\DirectXTex\DirectXTex;$(ProjectDir)ThirdParty\DirectXTex\Common;$(ProjectDir)ThirdParty\assimp\include;$(AssimpBuildRoot)\include;$(ProjectDir)ThirdParty\tinyexr\include;$(ProjectDir)ThirdParty\tinyexr\src;$(ProjectDir)ThirdParty\tinyexr\deps\zstd;$(DlssIncludeDirs)$(NrdIncludeDirs)$(RtxdiIncludeDirs)%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir)Source\WinUI;$(GeneratedFilesDir);$(GeneratedFilesDir)Source\WinUI;$(ProjectDir)Source;$(ProjectDir)Shaders;$(ProjectDir)ThirdParty\DirectXTex\DirectXTex;$(ProjectDir)ThirdParty\DirectXTex\Common;$(ProjectDir)ThirdParty\assimp\include;$(AssimpBuildRoot)\include;$(ProjectDir)ThirdParty\tinygltf;$(ProjectDir)ThirdParty\basis_universal\transcoder;$(ProjectDir)ThirdParty\tinyexr\include;$(ProjectDir)ThirdParty\tinyexr\src;$(ProjectDir)ThirdParty\tinyexr\deps\zstd;$(DlssIncludeDirs)$(NrdIncludeDirs)$(RtxdiIncludeDirs)%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <LanguageStandard>stdcpp20</LanguageStandard>
       <ConformanceMode>true</ConformanceMode>
       <MultiProcessorCompilation>true</MultiProcessorCompilation>
@@ -146,7 +146,7 @@
       <IntrinsicFunctions>true</IntrinsicFunctions>
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>WIN32;NDEBUG;_WINDOWS;UNICODE;_UNICODE;NOMINMAX;WIN32_LEAN_AND_MEAN;_CRT_SECURE_NO_WARNINGS;_Atomic=;D3D12LOOKDEVPT_WINUI=1;DISABLE_XAML_GENERATED_MAIN;D3D12LOOKDEVPT_WITH_DLSS=$(D3D12LookDevPtWithDlss);D3D12LOOKDEVPT_WITH_NRD=$(D3D12LookDevPtWithNrd);D3D12LOOKDEVPT_RTXDI_REQUESTED=$(D3D12LookDevPtRtxdiRequested);D3D12LOOKDEVPT_RTXDI_SDK_AVAILABLE=$(RtxdiSdkAvailable);D3D12LOOKDEVPT_WITH_RTXDI=$(D3D12LookDevPtWithRtxdi);%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>$(ProjectDir)Source\WinUI;$(GeneratedFilesDir);$(GeneratedFilesDir)Source\WinUI;$(ProjectDir)Source;$(ProjectDir)Shaders;$(ProjectDir)ThirdParty\DirectXTex\DirectXTex;$(ProjectDir)ThirdParty\DirectXTex\Common;$(ProjectDir)ThirdParty\assimp\include;$(AssimpBuildRoot)\include;$(ProjectDir)ThirdParty\tinyexr\include;$(ProjectDir)ThirdParty\tinyexr\src;$(ProjectDir)ThirdParty\tinyexr\deps\zstd;$(DlssIncludeDirs)$(NrdIncludeDirs)$(RtxdiIncludeDirs)%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir)Source\WinUI;$(GeneratedFilesDir);$(GeneratedFilesDir)Source\WinUI;$(ProjectDir)Source;$(ProjectDir)Shaders;$(ProjectDir)ThirdParty\DirectXTex\DirectXTex;$(ProjectDir)ThirdParty\DirectXTex\Common;$(ProjectDir)ThirdParty\assimp\include;$(AssimpBuildRoot)\include;$(ProjectDir)ThirdParty\tinygltf;$(ProjectDir)ThirdParty\basis_universal\transcoder;$(ProjectDir)ThirdParty\tinyexr\include;$(ProjectDir)ThirdParty\tinyexr\src;$(ProjectDir)ThirdParty\tinyexr\deps\zstd;$(DlssIncludeDirs)$(NrdIncludeDirs)$(RtxdiIncludeDirs)%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <LanguageStandard>stdcpp20</LanguageStandard>
       <ConformanceMode>true</ConformanceMode>
       <MultiProcessorCompilation>true</MultiProcessorCompilation>
@@ -164,11 +164,13 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="Source\BenchmarkHarness.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="Source\BasisKtx2Loader.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="Source\D3D12PathTracingBackend.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="Source\D3D12PathTracingBackend.WinUI.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="Source\DlssBackend.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="Source\DXSample.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="Source\FpsCamera.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="Source\GltfSceneImporter.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="Source\McpDispatcher.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="Source\McpReviewAnalysis.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="Source\McpServer.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
@@ -182,6 +184,12 @@
     <ClCompile Include="Source\stdafx.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="Source\TextureLoader.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="Source\TinyExrLoader.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="ThirdParty\basis_universal\transcoder\basisu_transcoder.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <PreprocessorDefinitions>BASISD_SUPPORT_KTX2_ZSTD=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <DisableSpecificWarnings>4100;4127;4244;4267;4456;4701;%(DisableSpecificWarnings)</DisableSpecificWarnings>
+    </ClCompile>
+    <ClCompile Include="ThirdParty\basis_universal\zstd\zstd.c"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="ThirdParty\tinyexr\deps\zstd\tinyexr_zstd.c"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="ThirdParty\tinyexr\src\exr_attr.c"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="ThirdParty\tinyexr\src\exr_b44.c"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
@@ -232,17 +240,22 @@
     <ClCompile Include="Tests\McpReviewAnalysisTests.cpp">
       <ExcludedFromBuild>true</ExcludedFromBuild>
     </ClCompile>
+    <ClCompile Include="Tests\GltfSceneImporterTests.cpp">
+      <ExcludedFromBuild>true</ExcludedFromBuild>
+    </ClCompile>
     <ClCompile Include="$(GeneratedFilesDir)module.g.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="Source\BenchmarkHarness.h" />
     <ClInclude Include="Source\D3D12PathTracingBackend.h" />
     <ClInclude Include="Source\DlssBackend.h" />
+    <ClInclude Include="Source\BasisKtx2Loader.h" />
     <ClInclude Include="Source\DenoiseSettingsJson.h" />
     <ClInclude Include="Source\DXSample.h" />
     <ClInclude Include="Source\DXSampleHelper.h" />
     <ClInclude Include="Source\EditorTypes.h" />
     <ClInclude Include="Source\FpsCamera.h" />
+    <ClInclude Include="Source\GltfSceneImporter.h" />
     <ClInclude Include="Source\McpDispatcher.h" />
     <ClInclude Include="Source\McpReviewAnalysis.h" />
     <ClInclude Include="Source\McpServer.h" />
@@ -285,6 +298,7 @@
     <None Include="Scripts\TestLocalMcpChatClientIntegration.ps1" />
     <None Include="Scripts\TestMcpServerHttp.ps1" />
     <None Include="Scripts\TestMcpReviewAnalysis.ps1" />
+    <None Include="Scripts\TestGltfSceneImporter.ps1" />
     <None Include="Scripts\BootstrapSuite.ps1" />
     <None Include="Scripts\BuildPortableSuite.ps1" />
     <None Include="Scripts\BuildOfflinePack.ps1" />

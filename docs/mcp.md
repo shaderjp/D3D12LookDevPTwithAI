@@ -247,12 +247,12 @@ Read tools:
 
 - `lookdevpt.get_stats`: returns adapter, DXR tier, resolution, aggregate GPU timing, scene counts, history/resource-memory status, active secondary shading rate, denoiser status, and MCP queue state.
 - `lookdevpt.get_state`: returns scene/project paths, quality and ray-budget settings, camera, lighting, path tracing, ReSTIR/RTXDI status, denoise, frame-history revisions, and view state.
-- `lookdevpt.list_materials`: returns material names, usage counts, editable PBR factors, and texture slot state.
+- `lookdevpt.list_materials`: returns stable source material ids, editable core/glTF extension factors, all 14 texture bindings, source/resident dimensions, transcode format, resident bytes, and fallback state.
 - `lookdevpt.list_debug_views`: returns debug view ids, labels, and keys.
 - `lookdevpt.list_render_modes`: returns render mode labels and action values.
 - `lookdevpt.get_diagnostics`: returns scene/project/capture/MCP diagnostics.
 - `lookdevpt.capture_viewport`: captures the current final/debug viewport as PNG and returns an inline `image/png` plus `lookdevpt://captures/latest.png`.
-- `lookdevpt.audit_scene`: returns cached, stable-code diagnostics for scene structure, geometry, materials, textures, lighting, and RTXDI/NRD/DLSS fallback state.
+- `lookdevpt.audit_scene`: returns cached, stable-code diagnostics for scene structure, geometry, glTF extensions used/required/unsupported, materials, texture transcodes/residency/VRAM, lighting, and RTXDI/NRD/DLSS fallback state.
 - `lookdevpt.probe_surfaces`: traces up to 16 exact surface probes in normalized or output-pixel coordinates without writing the normal render targets or temporal history.
 - `lookdevpt.compare_captures`: compares two same-resolution captures using linear-sRGB RMSE/PSNR, luminance SSIM, maximum difference, changed-pixel ratio, fingerprints, and a heatmap.
 - `lookdevpt.start_review`, `lookdevpt.get_review`, and `lookdevpt.cancel_review`: run and control one asynchronous `quick`, `material`, `lighting`, or `temporal` review. Reviews are available in `read_only` mode and do not change camera, debug view, accumulation, temporal history, or project dirty state.
@@ -311,7 +311,8 @@ Tool results primarily use `structuredContent`. A text content summary is also i
 ## Resources
 
 - `lookdevpt://integration`: application/contract versions, supported review,
-  safe-change and benchmark capabilities, and artifact limits.
+  safe-change and benchmark capabilities, `gltfMaterialExtensionsV1`,
+  `textureResidencyV1`, and artifact limits. The LookDev contract remains 1.0.
 - `lookdevpt://state`: current state JSON.
 - `lookdevpt://stats`: current stats JSON.
 - `lookdevpt://diagnostics`: scene, project, capture, and MCP diagnostics.
@@ -560,7 +561,7 @@ Select DLSS Ray Reconstruction when available. Unsupported machines keep the sel
 }
 ```
 
-Set material factors:
+Set material and glTF extension factors:
 
 ```json
 {
@@ -573,13 +574,23 @@ Set material factors:
       "index": 0,
       "baseColor": [0.9, 0.76, 0.54, 1.0],
       "roughness": 0.42,
-      "metallic": 0.0
+      "metallic": 0.0,
+      "gltfExtensions": {
+        "specularFactor": 0.8,
+        "ior": 1.52,
+        "transmissionFactor": 0.65,
+        "thicknessFactor": 0.012,
+        "attenuationColor": [0.82, 0.95, 1.0],
+        "attenuationDistance": 0.4,
+        "clearcoatFactor": 0.2,
+        "clearcoatRoughnessFactor": 0.08
+      }
     }
   }
 }
 ```
 
-Override or clear a material texture slot:
+Override a material texture slot and its non-destructive glTF binding:
 
 ```json
 {
@@ -590,8 +601,14 @@ Override or clear a material texture slot:
     "name": "lookdevpt.set_material_texture",
     "arguments": {
       "index": 0,
-      "slot": "baseColor",
-      "path": "D:\\LookDevTextures\\paint_basecolor.png"
+      "slot": "clearcoatNormal",
+      "path": "D:\\LookDevTextures\\coat_normal.ktx2",
+      "uvSet": 1,
+      "offset": [0.0, 0.0],
+      "scale": [2.0, 2.0],
+      "rotation": 0.25,
+      "sampler": "linearMirror",
+      "resolutionPolicy": "auto"
     }
   }
 }

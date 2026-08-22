@@ -65,7 +65,9 @@ startup file 例:
 - FBX
 - OBJ
 
-Assimp が import と PBR / legacy material 値の best-effort conversion を行います。現在の renderer は animation、skinning、morph target、連続 deformation、moving-instance transform を評価しません。geometry / topology edit は history invalidation を伴う変更として扱います。
+glTF / GLB は tinygltf 2.9.6 に固定した専用 `GltfSceneImporter` で読み込みます。material index は `gltf:material/<index>` として保持し、node transform はload時に頂点へ適用し、`TEXCOORD_0` / `TEXCOORD_1`を対応付けます。画像は相対path、data URI、GLB buffer viewだけを受け付け、HTTP画像とscene directory外へ抜けるpathは拒否します。FBX / OBJ / PBRTは既存のimport経路を維持します。
+
+初期glTF材質は `KHR_texture_transform`、`KHR_materials_specular`、`KHR_materials_ior`、`KHR_materials_transmission`、`KHR_materials_volume`、`KHR_materials_clearcoat`、`KHR_texture_basisu` に対応します。`extensionsRequired`内の未対応拡張はimportを停止し、任意拡張はcore materialへfallbackしてscene監査へ記録します。animation、skinning、morph target、連続deformation、moving-instance transformは未対応で、raster fallbackもありません。geometry / topology editはhistory invalidationを伴う変更として扱います。
 
 material / environment texture path が対応する形式:
 
@@ -75,18 +77,23 @@ material / environment texture path が対応する形式:
 - BMP
 - DDS
 - HDR
+- EXR
+- KTX2（native BC mip、およびBasis Universal ETC1S / UASTC）
 
-KTX、Basis Universal、EXR、汎用 texture transcoding pipeline は未実装です。texture が見つからない、または load に失敗した場合は slot ごとの fallback 値を使います。material texture の file existence は load 時に cache し、毎 frame の確認は行いません。
+KTX1と単体`.basis` fileは対象外です。欠損、破損、巨大dimension、remote画像、load失敗時はslotごとのfallback値を使います。material textureのfile existenceはload時にcacheし、毎frameの確認は行いません。
 
 ## Texture upload、mip、alpha
 
 D3D12 upload path は DDS と decode image で挙動が異なります。
 
-- 通常 DDS は対応 native format、BC compression、authored mip chain を維持
-- PNG / JPEG / TGA / BMP と decode が必要な DDS は RGBA8 へ変換し、最大辺 512 pixel に制限してから mip を生成
-- HDR / environment radiance は finite・non-negative な linear RGBA32F へ変換し、現在の実装では最大辺 512 pixel に制限
-- material base color は sRGB、data texture は linear format で sample
+- 通常DDSとnative-format KTX2は対応BC compressionとauthored mip chainを維持
+- BasisLZ / UASTC KTX2はCPUでBC7、HDR dataはBC6Hへtranscodeし、圧縮targetを使えない場合はRGBAへfallback
+- decoded material imageの旧512px制限を撤廃。既定resident上限は4Kで、slotごとにAuto / Source / 4K / 2K / 1K / 512を指定可能
+- renderable HDR / EXR environmentは最大辺16384まで保持可能。分離したimportance sourceだけ最大1024px
+- base color、emissive、specular colorはsRGB、normalとscalar mapはlinear
 - ray-cone footprint から material、emissive、alpha、environment の明示 mip LOD を計算
+
+Auto residencyは専用VRAMの25%を基準にtexture budgetを512 MiB〜4 GiBへclampし、現在利用できるDXGI local-memory budgetも超えないようにします。source / resident解像度、transcode format、resident bytes、fallback理由はdiagnosticsとMCP監査へ出力します。現時点ではscene / material resource再構築時にresident mip rangeを選びます。camera優先度を使う完全非同期streamingは後続です。
 
 alpha-masked base-color texture は material cutoff に合わせた coverage-preserving mip を生成します。alpha-masked DDS は coverage を変更できる writable RGBA8 へ decode するため、BC block は維持しません。`alphaMasked` の変更は DXR geometry opacity を変えるため acceleration-structure rebuild を queue します。alpha cutoff または base-color alpha path の変更では、opaque geometry と同等とみなさず、関連 material texture data を再生成します。
 
@@ -94,13 +101,15 @@ non-alpha geometry は `D3D12_RAYTRACING_GEOMETRY_FLAG_OPAQUE` になり、通�
 
 ## Material texture slot
 
-renderer は base color、normal、roughness、metallic、occlusion、emissive slot を公開します。cached material feature bitfield により、shader は存在しない texture read を省略し、authored factor / default を直接使います。packed ORM を検出した場合は 1 回だけ sample し、occlusion / roughness / metallic で共有します。override 用の standalone slot も維持します。
+ABIを維持する先頭7 slotはbase color、normal、roughness、metallic、occlusion、emissive、alphaです。続けてspecular color、specular factor、transmission、thickness、clearcoat、clearcoat roughness、clearcoat normalを追加しました。bindingごとにUV set、offset、scale、rotation、sampler preset、resident resolution policyを保持します。scene全体のmaterial feature bitfieldでshader variantを選び、material buffer layoutは共通です。
+
+path tracerはIORからdielectric F0を求め、glTF specular factor / color、transmission、Beer–Lambert volume吸収を評価し、固定IOR 1.5のGGX clearcoat層を下層lobeへ重ねます。Debug ViewにはSpecular F0、Transmission、Thickness / Attenuation、Clearcoat、UV Setを追加しました。Reference Stillを比較基準として維持します。
 
 texture override、variant、preset、alpha-mode 変更は project data です。`.lookdevpt.json` の top-level `scenePath` と `environmentPath` が相対 path の場合は、その project file を含む directory を基準に解決するため、checked-in project は app process の working directory に依存せず移植できます。absolute path の既存の意味は変わりません。相対 material texture override は引き続き texture load path 側で解釈されるため、source scene とは独立して project を移動する場合は absolute path を使ってください。
 
 ## Environment importance sampling
 
-renderable lat-long environment は finite linear mip chain を持ちます。別の importance source から `luminance * sin(theta)` 重みの alias table を作り、float32 alias table が実際に生成する確率を再構築して、MIS に使う PDF と離散 sampling distribution を一致させます。importance source と renderable environment は現在、最大辺 512 pixel の制限を共有します。4K HDRI を load しても、この version の GPU environment texture が 4K になるわけではありません。
+renderable lat-long environmentは指定されたrender解像度のfinite linear mip chainを持ちます。最大辺1024pxへ分離したimportance sourceから`luminance * sin(theta)`重みのalias tableを作り、float32 alias tableが実際に生成する確率を再構築して、MISに使うPDFと離散sampling distributionを一致させます。
 
 黒または無効な environment data では uniform distribution へ fallback します。NaN、Inf、負 radiance は resize、mip 生成、alias-table 構築より前に sanitize し、不正な 1 texel が lighting distribution 全体を汚染しないようにします。
 

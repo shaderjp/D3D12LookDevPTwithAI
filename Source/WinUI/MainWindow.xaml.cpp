@@ -769,6 +769,34 @@ void MainWindow::OnTextureClick(
     }
 }
 
+void MainWindow::OnTextureResolutionSelectionChanged(
+    IInspectable const& sender,
+    SelectionChangedEventArgs const&)
+{
+    if (m_refreshing) return;
+    const int slot = TextureResolutionTargetCombo().SelectedIndex();
+    if (slot < 0) return;
+    if (sender == TextureResolutionTargetCombo())
+    {
+        auto snapshot = m_viewModel->Snapshot();
+        if (snapshot && static_cast<size_t>(slot) < snapshot->textureSlots.size())
+        {
+            m_refreshing = true;
+            TextureResolutionPolicyCombo().SelectedIndex(snapshot->textureSlots[slot].resolutionPolicy);
+            m_refreshing = false;
+        }
+        return;
+    }
+    const int policy = TextureResolutionPolicyCombo().SelectedIndex();
+    if (policy < 0) return;
+    Submit({
+        .type = lookdevpt::winui::EditorCommandType::Action,
+        .property = L"material.texture.resolution",
+        .value = static_cast<std::int64_t>(policy),
+        .index = slot,
+    });
+}
+
 void MainWindow::OnCopyToken(
     IInspectable const&,
     RoutedEventArgs const&)
@@ -1285,10 +1313,12 @@ void MainWindow::RefreshSnapshot()
     updateColor(SkyZenithColorPicker(), L"lighting.skyZenithColor");
     updateColor(SkyGroundColorPicker(), L"lighting.skyGroundColor");
 
-    std::array<TextBlock, 7> textureText = {
+    std::array<TextBlock, 14> textureText = {
         Texture0Text(), Texture1Text(), Texture2Text(),
         Texture3Text(), Texture4Text(), Texture5Text(),
-        Texture6Text() };
+        Texture6Text(), Texture7Text(), Texture8Text(),
+        Texture9Text(), Texture10Text(), Texture11Text(),
+        Texture12Text(), Texture13Text() };
     for (size_t index = 0; index < textureText.size(); ++index)
     {
         if (index < snapshot->textureSlots.size())
@@ -1304,6 +1334,11 @@ void MainWindow::RefreshSnapshot()
                     ? L"<fallback>"
                     : slot.sourcePath));
         }
+    }
+    const int resolutionSlot = TextureResolutionTargetCombo().SelectedIndex();
+    if (resolutionSlot >= 0 && static_cast<size_t>(resolutionSlot) < snapshot->textureSlots.size())
+    {
+        TextureResolutionPolicyCombo().SelectedIndex(snapshot->textureSlots[resolutionSlot].resolutionPolicy);
     }
 
     bool connected = false;

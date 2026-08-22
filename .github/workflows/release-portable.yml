@@ -58,6 +58,8 @@ jobs:
           if ($invalid) { $invalid | Format-List | Out-String | Write-Error; throw 'vcxproj/filter validation failed.' }
           ./Scripts/TestMcpServerHttp.ps1
           ./Scripts/TestMcpReviewAnalysis.ps1
+          ./Scripts/TestGltfSceneImporter.ps1
+          ./Scripts/TestTextureLoader.ps1
           ./Scripts/TestLookDevBundle.ps1
           ./Scripts/TestOfflinePack.ps1
           ./Scripts/TestPortablePrerequisites.ps1 -OutputJson "$env:RUNNER_TEMP/suite-diagnostics.json"

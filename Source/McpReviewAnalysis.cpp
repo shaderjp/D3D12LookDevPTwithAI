@@ -90,6 +90,16 @@ SceneAuditSummary AnalyzeScene(const Bistro::Scene& scene)
     result.instanceCount = static_cast<uint32_t>(scene.instances.size());
     result.materialCount = static_cast<uint32_t>(scene.materials.size());
     result.analyticLightCount = static_cast<uint32_t>(scene.analyticLights.size());
+    result.materialFeatureMask = scene.materialFeatureMask;
+    result.extensionsUsed = scene.extensionsUsed;
+    result.extensionsRequired = scene.extensionsRequired;
+    result.unsupportedExtensions = scene.unsupportedExtensions;
+    for (const std::string& extension : scene.unsupportedExtensions)
+    {
+        AddDiagnostic(result, "gltf.extension.optional_fallback", Severity::Warning, "material", "scene", UINT32_MAX,
+            "Unsupported optional glTF extension: " + extension + ".",
+            "Inspect the fallback rendering and bake the extension if exact appearance is required.");
+    }
 
     if (scene.vertices.empty() || scene.indices.empty())
     {
@@ -232,6 +242,9 @@ AuditReport BuildAuditReport(const SceneAuditSummary& summary, const AuditRuntim
     AuditReport report;
     report.summary = summary;
     report.diagnostics = summary.diagnostics;
+    report.textureBudgetBytes = runtime.textureBudgetBytes;
+    report.textureResidentBytes = runtime.textureResidentBytes;
+    report.dedicatedVideoMemoryBytes = runtime.dedicatedVideoMemoryBytes;
     std::ostringstream fingerprint;
     fingerprint << std::hex << runtime.sceneRevision << '-' << runtime.geometryRevision << '-'
         << runtime.materialRevision << '-' << runtime.lightRevision << '-' << runtime.hdriRevision << '-'
@@ -294,6 +307,25 @@ std::string BuildAuditJson(const AuditReport& report)
         << ",\"instances\":" << report.summary.instanceCount << ",\"materials\":" << report.summary.materialCount
         << ",\"textureReferences\":" << report.summary.textureReferenceCount << ",\"analyticLights\":"
         << report.summary.analyticLightCount << ",\"degenerateTriangles\":" << report.summary.degenerateTriangleCount
+        << ",\"materialFeatureMask\":" << report.summary.materialFeatureMask << "},\"gltf\":{";
+    auto writeStrings = [&](const char* name, const std::vector<std::string>& values, bool comma)
+    {
+        if (comma) json << ',';
+        json << "\"" << name << "\":[";
+        for (size_t i = 0; i < values.size(); ++i)
+        {
+            if (i != 0) json << ',';
+            json << "\"" << cld::EscapeJson(values[i]) << "\"";
+        }
+        json << ']';
+    };
+    writeStrings("extensionsUsed", report.summary.extensionsUsed, false);
+    writeStrings("extensionsRequired", report.summary.extensionsRequired, true);
+    writeStrings("unsupportedExtensions", report.summary.unsupportedExtensions, true);
+    json << "},\"textureResidency\":{\"budgetBytes\":" << report.textureBudgetBytes
+        << ",\"residentBytes\":" << report.textureResidentBytes
+        << ",\"dedicatedVideoMemoryBytes\":" << report.dedicatedVideoMemoryBytes
+        << ",\"withinBudget\":" << (report.textureResidentBytes <= report.textureBudgetBytes ? "true" : "false")
         << "},\"issues\":[";
     for (size_t i = 0; i < report.diagnostics.size(); ++i)
     {

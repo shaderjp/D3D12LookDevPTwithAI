@@ -2,6 +2,7 @@
 
 #include <cmath>
 #include <stdexcept>
+#include <string>
 
 namespace
 {
@@ -27,6 +28,27 @@ int main()
     Require(BuildAuditReport(emptyAudit, revisionA).revisionFingerprint !=
         BuildAuditReport(emptyAudit, revisionB).revisionFingerprint,
         "material revision did not invalidate the audit fingerprint");
+
+    Bistro::Scene gltfScene;
+    gltfScene.extensionsUsed = { "KHR_materials_clearcoat", "KHR_texture_basisu" };
+    gltfScene.extensionsRequired = { "KHR_texture_basisu" };
+    gltfScene.unsupportedExtensions = { "KHR_materials_iridescence" };
+    gltfScene.materialFeatureMask = 0x61u;
+    AuditRuntimeState gltfRuntime;
+    gltfRuntime.textureBudgetBytes = 1024;
+    gltfRuntime.textureResidentBytes = 768;
+    gltfRuntime.dedicatedVideoMemoryBytes = 4096;
+    const SceneAuditSummary gltfSummary = AnalyzeScene(gltfScene);
+    const std::string gltfJson = BuildAuditJson(BuildAuditReport(gltfSummary, gltfRuntime));
+    Require(gltfJson.find("KHR_materials_clearcoat") != std::string::npos &&
+        gltfJson.find("KHR_texture_basisu") != std::string::npos &&
+        gltfJson.find("KHR_materials_iridescence") != std::string::npos,
+        "glTF extension audit fields are missing");
+    Require(gltfJson.find("\"materialFeatureMask\":97") != std::string::npos &&
+        gltfJson.find("\"budgetBytes\":1024") != std::string::npos &&
+        gltfJson.find("\"residentBytes\":768") != std::string::npos &&
+        gltfJson.find("\"withinBudget\":true") != std::string::npos,
+        "texture residency audit fields are missing");
 
     Rgba8Image black{ 2, 1, { 0, 0, 0, 255, 0, 0, 0, 255 } };
     Rgba8Image same = black;

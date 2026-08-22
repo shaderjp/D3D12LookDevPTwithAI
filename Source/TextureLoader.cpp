@@ -1,4 +1,5 @@
 #include "TextureLoader.h"
+#include "BasisKtx2Loader.h"
 #include "TinyExrLoader.h"
 
 #include <algorithm>
@@ -10,8 +11,6 @@
 
 namespace
 {
-    constexpr size_t MaxTextureDimension = 512;
-
     Bistro::TextureData MakeFallbackTexture(bool srgb, const uint8_t fallback[4])
     {
         Bistro::TextureData texture;
@@ -22,6 +21,8 @@ namespace
         texture.fallback = true;
         texture.mips.push_back({ 1, 1, 0, 4, 4 });
         texture.pixels.assign(fallback, fallback + 4);
+        texture.residentBytes = texture.pixels.size();
+        texture.container = "fallback";
         return texture;
     }
 
@@ -44,6 +45,8 @@ namespace
             static_cast<float>(fallback[3]) / 255.0f,
         };
         memcpy(texture.pixels.data(), rgba, sizeof(rgba));
+        texture.residentBytes = texture.pixels.size();
+        texture.container = "fallback-radiance";
         return texture;
     }
 
@@ -57,6 +60,8 @@ namespace
         Bistro::TextureData texture;
         texture.width = static_cast<uint32_t>(images[0].width);
         texture.height = static_cast<uint32_t>(images[0].height);
+        texture.sourceWidth = texture.width;
+        texture.sourceHeight = texture.height;
         texture.mipLevels = static_cast<uint32_t>(imageCount);
         texture.format = format;
         texture.mips.reserve(imageCount);
@@ -83,6 +88,7 @@ namespace
             });
         }
 
+        texture.residentBytes = texture.pixels.size();
         return texture;
     }
 
@@ -96,6 +102,8 @@ namespace
         Bistro::TextureData texture;
         texture.width = static_cast<uint32_t>(images[0].width);
         texture.height = static_cast<uint32_t>(images[0].height);
+        texture.sourceWidth = texture.width;
+        texture.sourceHeight = texture.height;
         texture.mipLevels = static_cast<uint32_t>(imageCount);
         texture.format = format;
         texture.mips.reserve(imageCount);
@@ -115,6 +123,7 @@ namespace
             });
         }
 
+        texture.residentBytes = texture.pixels.size();
         return texture;
     }
 
@@ -256,7 +265,7 @@ namespace
 
         const uint32_t maxDimension = std::min(
             requestedMaxDimension,
-            Bistro::EnvironmentImportanceMaxDimension);
+            Bistro::RenderableTextureMaxDimension);
         DirectX::TexMetadata metadata{};
         DirectX::ScratchImage image;
         HRESULT hr = E_FAIL;
@@ -386,10 +395,10 @@ namespace
         }
     }
 
-    Bistro::TextureData LoadHdrTexture(const std::wstring& path)
+    Bistro::TextureData LoadHdrTexture(const std::wstring& path, uint32_t maxDimension)
     {
         const uint8_t fallback[] = { 0, 0, 0, 255 };
-        return LoadLinearRadianceTexture(path, fallback, Bistro::EnvironmentImportanceMaxDimension, true);
+        return LoadLinearRadianceTexture(path, fallback, maxDimension, true);
     }
 
     DXGI_FORMAT ToSrgbFormat(DXGI_FORMAT format)
@@ -459,7 +468,7 @@ namespace
 
 namespace Bistro
 {
-    TextureData LoadTextureRgba8(const std::wstring& path, bool srgb, const uint8_t fallback[4], float alphaCoverageCutoff)
+    TextureData LoadTextureRgba8(const std::wstring& path, bool srgb, const uint8_t fallback[4], float alphaCoverageCutoff, uint32_t maxDimension)
     {
         if (path.empty() || !std::filesystem::exists(path))
         {
@@ -473,7 +482,7 @@ namespace Bistro
         if (_wcsicmp(fsPath.extension().c_str(), L".hdr") == 0 ||
             _wcsicmp(fsPath.extension().c_str(), L".exr") == 0)
         {
-            return LoadHdrTexture(path);
+            return LoadHdrTexture(path, maxDimension);
         }
         if (_wcsicmp(fsPath.extension().c_str(), L".dds") == 0)
         {
@@ -493,6 +502,8 @@ namespace Bistro
             return MakeFallbackTexture(srgb, fallback);
         }
 
+        const uint32_t sourceWidth = static_cast<uint32_t>(metadata.width);
+        const uint32_t sourceHeight = static_cast<uint32_t>(metadata.height);
         DirectX::ScratchImage decompressed;
         const DirectX::Image* source = image.GetImage(0, 0, 0);
         if (DirectX::IsCompressed(metadata.format))
@@ -515,9 +526,10 @@ namespace Bistro
 
         source = converted.GetImage(0, 0, 0);
         DirectX::ScratchImage resized;
-        if (source->width > MaxTextureDimension || source->height > MaxTextureDimension)
+        const size_t boundedMaxDimension = std::clamp<size_t>(maxDimension, 1u, RenderableTextureMaxDimension);
+        if (source->width > boundedMaxDimension || source->height > boundedMaxDimension)
         {
-            const float scale = static_cast<float>(MaxTextureDimension) / static_cast<float>((std::max)(source->width, source->height));
+            const float scale = static_cast<float>(boundedMaxDimension) / static_cast<float>((std::max)(source->width, source->height));
             const size_t width = (std::max<size_t>)(1, static_cast<size_t>(source->width * scale));
             const size_t height = (std::max<size_t>)(1, static_cast<size_t>(source->height * scale));
             hr = DirectX::Resize(*source, width, height, DirectX::TEX_FILTER_DEFAULT, resized);
@@ -540,11 +552,19 @@ namespace Bistro
             if (SUCCEEDED(hr) && mipChain.GetImageCount() > 0)
             {
                 TextureData texture = MakeTextureFromImages(mipChain.GetImages(), mipChain.GetImageCount(), outputFormat);
+                texture.sourceWidth = sourceWidth;
+                texture.sourceHeight = sourceHeight;
+                texture.container = "decoded";
+                texture.transcodeFormat = srgb ? "RGBA8-sRGB" : "RGBA8";
                 PreserveAlphaCoverage(texture, alphaCoverageCutoff);
                 return texture;
             }
 
             TextureData texture = MakeTextureFromImages(source, 1, outputFormat);
+            texture.sourceWidth = sourceWidth;
+            texture.sourceHeight = sourceHeight;
+            texture.container = "decoded";
+            texture.transcodeFormat = srgb ? "RGBA8-sRGB" : "RGBA8";
             PreserveAlphaCoverage(texture, alphaCoverageCutoff);
             return texture;
         }
@@ -554,7 +574,7 @@ namespace Bistro
         }
     }
 
-    TextureData LoadTextureD3D12(const std::wstring& path, bool srgb, const uint8_t fallback[4], float alphaCoverageCutoff)
+    TextureData LoadTextureD3D12(const std::wstring& path, bool srgb, const uint8_t fallback[4], float alphaCoverageCutoff, uint32_t maxDimension)
     {
         if (path.empty() || !std::filesystem::exists(path))
         {
@@ -565,17 +585,25 @@ namespace Bistro
         if (_wcsicmp(fsPath.extension().c_str(), L".hdr") == 0 ||
             _wcsicmp(fsPath.extension().c_str(), L".exr") == 0)
         {
-            return LoadHdrTexture(path);
+            return LoadHdrTexture(path, maxDimension);
+        }
+        if (_wcsicmp(fsPath.extension().c_str(), L".ktx2") == 0)
+        {
+            TextureData texture;
+            std::string diagnostics;
+            return LoadKtx2Texture(path, srgb, maxDimension, texture, diagnostics)
+                ? texture
+                : MakeFallbackTexture(srgb, fallback);
         }
         if (_wcsicmp(fsPath.extension().c_str(), L".dds") != 0)
         {
-            return LoadTextureRgba8(path, srgb, fallback, alphaCoverageCutoff);
+            return LoadTextureRgba8(path, srgb, fallback, alphaCoverageCutoff, maxDimension);
         }
         if (alphaCoverageCutoff >= 0.0f)
         {
             // Coverage preservation requires writable uncompressed alpha. DDS
             // cutouts are decoded to RGBA8 instead of retaining BC blocks.
-            return LoadTextureRgba8(path, srgb, fallback, alphaCoverageCutoff);
+            return LoadTextureRgba8(path, srgb, fallback, alphaCoverageCutoff, maxDimension);
         }
 
         DirectX::TexMetadata metadata{};
@@ -589,7 +617,10 @@ namespace Bistro
         const DXGI_FORMAT outputFormat = srgb ? ToSrgbFormat(metadata.format) : ToLinearFormat(metadata.format);
         try
         {
-            return MakeTextureFromImageMemory(image.GetImages(), image.GetImageCount(), outputFormat);
+            TextureData texture = MakeTextureFromImageMemory(image.GetImages(), image.GetImageCount(), outputFormat);
+            texture.container = "dds-native";
+            texture.transcodeFormat = "direct-upload";
+            return texture;
         }
         catch (const std::runtime_error&)
         {
@@ -608,7 +639,7 @@ namespace Bistro
         if (_wcsicmp(fsPath.extension().c_str(), L".hdr") == 0 ||
             _wcsicmp(fsPath.extension().c_str(), L".exr") == 0)
         {
-            return LoadHdrTexture(path);
+            return LoadHdrTexture(path, RenderableTextureMaxDimension);
         }
         if (_wcsicmp(fsPath.extension().c_str(), L".dds") != 0)
         {
@@ -645,7 +676,8 @@ namespace Bistro
         const uint8_t fallback[4],
         uint32_t maxDimension)
     {
-        return LoadLinearRadianceTexture(path, fallback, maxDimension, false);
+        return LoadLinearRadianceTexture(path, fallback,
+            (std::min)(maxDimension, EnvironmentImportanceMaxDimension), false);
     }
 
     TextureData LoadEnvironmentRadianceTexture(

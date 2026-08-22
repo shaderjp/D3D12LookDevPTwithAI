@@ -239,12 +239,12 @@ Read tools:
 
 - `lookdevpt.get_stats`: adapter、DXR tier、resolution、集約 GPU timing、scene counts、history / resource-memory 状態、active secondary shading rate、denoiser state、MCP queue state を返します。
 - `lookdevpt.get_state`: scene / project path、quality / ray-budget 設定、camera、lighting、path tracing、ReSTIR / RTXDI 状態、denoise、frame-history revision、view state を返します。
-- `lookdevpt.list_materials`: material 名、使用数、編集可能な PBR factor、texture slot 状態を返します。
+- `lookdevpt.list_materials`: 安定したsource material ID、編集可能なcore / glTF extension値、14 texture binding、source / resident解像度、transcode形式、resident bytes、fallback状態を返します。
 - `lookdevpt.list_debug_views`: debug view の id、label、key を返します。
 - `lookdevpt.list_render_modes`: render mode の label と action value を返します。
 - `lookdevpt.get_diagnostics`: scene / project / capture / MCP diagnostics を返します。
 - `lookdevpt.capture_viewport`: 現在の final/debug viewport を PNG として取得し、inline `image/png` と `lookdevpt://captures/latest.png` を返します。
-- `lookdevpt.audit_scene`: scene 構造、geometry、material、texture、lighting、RTXDI / NRD / DLSS fallback を、安定した問題 code を持つ cache 済み診断として返します。
+- `lookdevpt.audit_scene`: scene構造、geometry、使用中／必須／未対応glTF extension、material、texture transcode / residency / VRAM、lighting、RTXDI / NRD / DLSS fallbackを、安定した問題codeを持つcache済み診断として返します。
 - `lookdevpt.probe_surfaces`: normalized 座標または output pixel 座標を最大 16 点指定し、通常の render target や temporal history に書き込まず正確な surface probe を実行します。
 - `lookdevpt.compare_captures`: 同一解像度の 2 capture を linear-sRGB RMSE / PSNR、luminance SSIM、最大差分、変更 pixel 率、fingerprint、heatmap で比較します。
 - `lookdevpt.start_review`、`lookdevpt.get_review`、`lookdevpt.cancel_review`: 非同期の `quick`、`material`、`lighting`、`temporal` review を 1 件ずつ実行・制御します。review は `read_only` mode でも利用でき、camera、debug view、accumulation、temporal history、project dirty state を変更しません。
@@ -298,7 +298,7 @@ tool result は主に `structuredContent` を使います。互換用に text su
 
 ## Resources
 
-- `lookdevpt://integration`: application/contract version、review、安全な変更、benchmark機能、artifact上限。
+- `lookdevpt://integration`: application / contract version、review、安全な変更、benchmark、`gltfMaterialExtensionsV1`、`textureResidencyV1`、artifact上限。LookDev contractは1.0を維持します。
 - `lookdevpt://state`: 現在の state JSON。
 - `lookdevpt://stats`: 現在の stats JSON。
 - `lookdevpt://diagnostics`: scene、project、capture、MCP diagnostics。
@@ -547,7 +547,7 @@ DLSS Ray Reconstruction を選択する例。未対応環境では selected back
 }
 ```
 
-material factor の設定:
+materialとglTF extension値の設定:
 
 ```json
 {
@@ -560,13 +560,23 @@ material factor の設定:
       "index": 0,
       "baseColor": [0.9, 0.76, 0.54, 1.0],
       "roughness": 0.42,
-      "metallic": 0.0
+      "metallic": 0.0,
+      "gltfExtensions": {
+        "specularFactor": 0.8,
+        "ior": 1.52,
+        "transmissionFactor": 0.65,
+        "thicknessFactor": 0.012,
+        "attenuationColor": [0.82, 0.95, 1.0],
+        "attenuationDistance": 0.4,
+        "clearcoatFactor": 0.2,
+        "clearcoatRoughnessFactor": 0.08
+      }
     }
   }
 }
 ```
 
-material texture slot の override / clear:
+material texture slotと非破壊glTF bindingのoverride:
 
 ```json
 {
@@ -577,8 +587,14 @@ material texture slot の override / clear:
     "name": "lookdevpt.set_material_texture",
     "arguments": {
       "index": 0,
-      "slot": "baseColor",
-      "path": "D:\\LookDevTextures\\paint_basecolor.png"
+      "slot": "clearcoatNormal",
+      "path": "D:\\LookDevTextures\\coat_normal.ktx2",
+      "uvSet": 1,
+      "offset": [0.0, 0.0],
+      "scale": [2.0, 2.0],
+      "rotation": 0.25,
+      "sampler": "linearMirror",
+      "resolutionPolicy": "auto"
     }
   }
 }

@@ -42,6 +42,20 @@
       "mmprojSha256": "7498a37cb619e55f2fcf87eb931f56e99389ed6d432e4c5c66110694c0d65578"
     }
   },
+  "dependencies": {
+    "tinygltf": {
+      "version": "2.9.6",
+      "commit": "26422192e2908a562b641175dde18489824e609e",
+      "repository": "syoyo/tinygltf",
+      "license": "MIT"
+    },
+    "basisUniversal": {
+      "version": "2.50",
+      "commit": "9bebe16726b3a61c8c213eeee3b7cffb462ef34e",
+      "repository": "BinomialLLC/basis_universal",
+      "license": "Apache-2.0"
+    }
+  },
   "standardBackends": {
     "dlss": false,
     "nrd": false,

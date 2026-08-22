@@ -34,6 +34,8 @@ try {
         Where-Object { $_.Name -notin @('exr_freestanding.c', 'exr_spectral.c', 'exr_gpu_cuda.c', 'exr_vk_vulkan.c') } |
         ForEach-Object { '"{0}"' -f $_.FullName }
     $coreSources += ('"{0}"' -f (Join-Path $tinyRoot 'deps\zstd\tinyexr_zstd.c'))
+    $basisRoot = Join-Path $repo 'ThirdParty\basis_universal'
+    $coreSources += ('"{0}"' -f (Join-Path $basisRoot 'zstd\zstd.c'))
     $compileC = @(
         ('cd /d "{0}" && cl.exe /nologo /c /TC /W3 /MD /utf-8 /D_Atomic= /D_CRT_SECURE_NO_WARNINGS' -f $testRoot),
         ('/I"{0}\include" /I"{0}\src" /I"{0}\deps\zstd"' -f $tinyRoot),
@@ -42,12 +44,14 @@ try {
     ) -join ' '
     $exe = Join-Path $testRoot 'TextureLoaderTests.exe'
     $compileCpp = @(
-        ('cd /d "{0}" && cl.exe /nologo /c /std:c++20 /EHsc /W4 /WX /MD /utf-8 /DNOMINMAX /D_CRT_SECURE_NO_WARNINGS' -f $testRoot),
+        ('cd /d "{0}" && cl.exe /nologo /c /std:c++20 /EHsc /W4 /WX /wd4828 /wd5054 /MD /utf-8 /DNOMINMAX /D_CRT_SECURE_NO_WARNINGS /DBASISD_SUPPORT_KTX2_ZSTD=1' -f $testRoot),
         '/Fd:"TextureLoaderTests.pdb"',
-        ('/I"{0}\Source" /I"{1}" /I"{2}" /I"{3}\include"' -f $repo, $directXTexRoot, (Join-Path (Split-Path $directXTexRoot -Parent) 'Common'), $tinyRoot),
+        ('/I"{0}\Source" /I"{1}" /I"{2}" /I"{3}\include" /I"{4}\transcoder"' -f $repo, $directXTexRoot, (Join-Path (Split-Path $directXTexRoot -Parent) 'Common'), $tinyRoot, $basisRoot),
         ('"{0}\Tests\TextureLoaderTests.cpp"' -f $repo),
         ('"{0}\Source\TextureLoader.cpp"' -f $repo),
         ('"{0}\Source\TinyExrLoader.cpp"' -f $repo),
+        ('"{0}\Source\BasisKtx2Loader.cpp"' -f $repo),
+        ('"{0}\ThirdParty\basis_universal\transcoder\basisu_transcoder.cpp"' -f $repo),
         ('/Fo"{0}\\"' -f $testRoot)
     ) -join ' '
     $link = ('cd /d "{0}" && link.exe /nologo *.obj /LIBPATH:"{1}" DirectXTex.lib windowscodecs.lib ole32.lib /OUT:"{2}"' -f $testRoot, $directXTexLib.DirectoryName, $exe)

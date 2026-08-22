@@ -41,7 +41,11 @@ $d3dAppLicenses = @(
     'licenses/D3D12LookDevPTWinUI/DIRECTXTEX-LICENSE.txt',
     'licenses/D3D12LookDevPTWinUI/TINYEXR-LICENSE.txt',
     'licenses/D3D12LookDevPTWinUI/TINYEXR-NOTICE.txt',
-    'licenses/D3D12LookDevPTWinUI/TINYEXR-ZSTD-LICENSE.txt'
+    'licenses/D3D12LookDevPTWinUI/TINYEXR-ZSTD-LICENSE.txt',
+    'licenses/D3D12LookDevPTWinUI/TINYGLTF-LICENSE.txt',
+    'licenses/D3D12LookDevPTWinUI/BASIS-UNIVERSAL-LICENSE.txt',
+    'licenses/D3D12LookDevPTWinUI/BASIS-UNIVERSAL-NOTICE.txt',
+    'licenses/D3D12LookDevPTWinUI/BASIS-UNIVERSAL-ZSTD-LICENSE.txt'
 )
 $windowsAppSdkLicenses = @(
     'licenses/D3D12LookDevPTWinUI/WINDOWS-APP-SDK-LICENSE.txt',

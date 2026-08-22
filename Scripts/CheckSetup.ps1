@@ -178,6 +178,8 @@ $submoduleFix = "Run: git submodule update --init --recursive --depth 1"
 Test-File -RelativePath "ThirdParty/assimp/include/assimp/Importer.hpp" -Check "Submodule assimp" -Fix $submoduleFix
 Test-File -RelativePath "ThirdParty/DirectXTex/DirectXTex/DirectXTex.h" -Check "Submodule DirectXTex" -Fix $submoduleFix
 Test-File -RelativePath "ThirdParty/tinyexr/include/exr.h" -Check "Submodule TinyEXR v3" -Fix $submoduleFix
+Test-File -RelativePath "ThirdParty/tinygltf/tiny_gltf.h" -Check "Submodule tinygltf 2.9.6" -Fix $submoduleFix
+Test-File -RelativePath "ThirdParty/basis_universal/transcoder/basisu_transcoder.h" -Check "Submodule Basis Universal 2.50" -Fix $submoduleFix
 Test-File -RelativePath "ThirdParty/Streamline/include/sl.h" -Check "Optional DLSS Streamline submodule" -Fix $submoduleFix -WarnOnly:(!$CheckDLSS)
 Test-File -RelativePath "ThirdParty/DLSS/include/nvsdk_ngx.h" -Check "Optional DLSS SDK submodule" -Fix $submoduleFix -WarnOnly:(!$CheckDLSS)
 Test-File -RelativePath "ThirdParty/DLSS/lib/Windows_x86_64/rel/nvngx_dlss.dll" -Check "Optional DLSS SR runtime" -Fix "Initialize ThirdParty/DLSS or build with /p:EnableDLSS=false." -WarnOnly:(!$CheckDLSS)
@@ -255,6 +257,22 @@ if ($windowsAppRuntime.Count -gt 0) {
     Add-Result -Status "OK" -Check "Windows App Runtime x64" -Message "Windows App Runtime 2.4 is installed for the current user."
 } else {
     Add-Result -Status "FAIL" -Check "Windows App Runtime x64" -Message "Windows App Runtime 2.4 was not found for the current user." -Fix "Run Scripts/InstallWindowsAppRuntime.ps1 or install the official Windows App Runtime 2.4 x64 redistributable, then rerun this checker."
+}
+
+$lockedDependencies = @(
+    @{ Name = 'tinygltf'; Path = 'ThirdParty\tinygltf'; Commit = '26422192e2908a562b641175dde18489824e609e' },
+    @{ Name = 'Basis Universal'; Path = 'ThirdParty\basis_universal'; Commit = '9bebe16726b3a61c8c213eeee3b7cffb462ef34e' }
+)
+foreach ($dependency in $lockedDependencies) {
+    $dependencyRoot = Join-Path $Root $dependency.Path
+    if ($git -and (Test-Path -LiteralPath $dependencyRoot -PathType Container)) {
+        $actual = [string](& $git.Source -C $dependencyRoot rev-parse HEAD 2>$null | Select-Object -First 1)
+        if ($actual.Trim() -ieq $dependency.Commit) {
+            Add-Result -Status 'OK' -Check "$($dependency.Name) pinned revision" -Message "$($dependency.Name) commit $($dependency.Commit) is checked out."
+        } else {
+            Add-Result -Status 'FAIL' -Check "$($dependency.Name) pinned revision" -Message "$($dependency.Name) is not at the required commit." -Fix "Run: git submodule update --init $($dependency.Path.Replace('\','/'))"
+        }
+    }
 }
 
 if ($CheckAssets) {

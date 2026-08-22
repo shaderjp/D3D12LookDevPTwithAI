@@ -52,6 +52,48 @@ function Restore-TestEnvironmentVariable {
     }
 }
 
+function Assert-WindowsPowerShellDefaultStreams {
+    param([Parameter(Mandatory = $true)][string]$Root)
+
+    if (-not $IsWindows) { return }
+    $windowsPowerShell = Join-Path $env:SystemRoot `
+        'System32\WindowsPowerShell\v1.0\powershell.exe'
+    Assert-True (Test-Path -LiteralPath $windowsPowerShell -PathType Leaf) `
+        'Windows PowerShell 5.1 is required for the portable path regression.'
+    $environmentName = 'D3D12LOOKDEVPT_PORTABLE_STREAM_PROBE_ROOT'
+    $originalValue = [Environment]::GetEnvironmentVariable(
+        $environmentName, [EnvironmentVariableTarget]::Process)
+    $probe = @'
+$ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'
+$root = [Environment]::GetEnvironmentVariable(
+    'D3D12LOOKDEVPT_PORTABLE_STREAM_PROBE_ROOT',
+    [EnvironmentVariableTarget]::Process)
+$count = 0
+foreach ($file in Get-ChildItem -LiteralPath $root -File -Recurse -Force -ErrorAction Stop) {
+    $streams = @(Get-Item -LiteralPath $file.FullName -Stream * -ErrorAction Stop)
+    if ($streams.Count -ne 1 -or $streams[0].Stream -cne ':$DATA') {
+        throw "Unexpected alternate stream inventory: $($file.FullName)"
+    }
+    $count++
+}
+if ($count -eq 0) { throw 'The stream probe found no payload files.' }
+'@
+    $encodedProbe = [Convert]::ToBase64String(
+        [Text.Encoding]::Unicode.GetBytes($probe))
+    try {
+        [Environment]::SetEnvironmentVariable(
+            $environmentName, $Root, [EnvironmentVariableTarget]::Process)
+        & $windowsPowerShell -NoLogo -NoProfile -NonInteractive `
+            -EncodedCommand $encodedProbe 2>$null
+        Assert-True ($LASTEXITCODE -eq 0) `
+            'Windows PowerShell could not enumerate exactly one default stream for every payload file.'
+    }
+    finally {
+        Restore-TestEnvironmentVariable $environmentName $originalValue
+    }
+}
+
 function Write-FixtureText {
     param([string]$PathValue, [string]$Value)
     [IO.Directory]::CreateDirectory((Split-Path -Parent $PathValue)) | Out-Null
@@ -468,6 +510,170 @@ try {
             -AllowDirtySource -NoArchive
     } 'AI acceptance is explicit' 'requires explicit'
 
+    $deepSourceRoot = Join-Path $temporaryRoot (
+        'source-root-that-is-deliberately-too-deep-for-legacy-build-tools-' +
+        ('s' * 32))
+    New-FixtureRepository $deepSourceRoot
+    $deepSourceBuilder = Join-Path $deepSourceRoot `
+        'Scripts/BuildIntegratedPortable.ps1'
+    Assert-True ($deepSourceRoot.Length -gt 120) `
+        'Deep source fixture did not exceed the documented source-root budget.'
+    Assert-Throws {
+        & $deepSourceBuilder -OutputDirectory (Join-Path $temporaryRoot 'deep-source-output') `
+            -SkipBuild -NativeBuildDirectory $native `
+            -ChatHostPublishDirectory $chatHost -WithoutAi `
+            -AllowDirtySource -NoArchive
+    } 'source-root path budget' 'Source repository root path is too long'
+
+    $tooLongOutput = Join-Path $temporaryRoot ('o' * 220)
+    Assert-True ($tooLongOutput.Length -gt 240) `
+        'Long publication fixture did not exceed the documented output budget.'
+    Assert-Throws {
+        & $builder -OutputDirectory $tooLongOutput `
+            -SkipBuild -NativeBuildDirectory $native `
+            -ChatHostPublishDirectory $chatHost -WithoutAi `
+            -AllowDirtySource -NoArchive
+    } 'publication path budget' 'Publication target path is too long'
+
+    $longOutputPrefix = 'D3D12LookDevPTwithAI-integrated-win-x64-'
+    $longOutputTargetCharacters = 148
+    $longOutputPadding = $longOutputTargetCharacters - $temporaryRoot.Length -
+        1 - $longOutputPrefix.Length
+    Assert-True ($longOutputPadding -gt 0) `
+        'Temporary root is too long for the positive long-output regression.'
+    $longOutputName = $longOutputPrefix + ('x' * $longOutputPadding)
+    $longOutput = Join-Path $temporaryRoot $longOutputName
+    $legacyStaging = Join-Path $temporaryRoot (
+        '.integrated-portable-staging-' + $longOutputName + '-' + ('a' * 32))
+    $legacyDirectXTexAssets = Join-Path $legacyStaging `
+        'build/third-party/directxtex/obj/project.assets.json'
+    Assert-True ($legacyDirectXTexAssets.Length -gt 260) `
+        'Long-output regression would not have exceeded the former MSBuild path.'
+    Assert-True ($longOutput.Length -le 240) `
+        'Long-output regression exceeds the supported publication path budget.'
+    $stagingPause = Join-Path $temporaryRoot 'short-staging-pause'
+    [IO.Directory]::CreateDirectory($stagingPause) | Out-Null
+    $stagingJob = Start-Job -ScriptBlock {
+        param($BuilderPath, $OutputPath, $NativePath, $ChatPath, $PausePath)
+        $env:D3D12LOOKDEVPT_PORTABLE_TEST_PAUSE_AFTER_STAGING_CREATED = $PausePath
+        & $BuilderPath -OutputDirectory $OutputPath -SkipBuild `
+            -NativeBuildDirectory $NativePath -ChatHostPublishDirectory $ChatPath `
+            -WithoutAi -AllowDirtySource -NoArchive
+    } -ArgumentList $builder, $longOutput, $native, $chatHost, $stagingPause
+    try {
+        $stagingDeadline = [DateTime]::UtcNow.AddSeconds(15)
+        do {
+            $stagingReached = Test-Path -LiteralPath (
+                Join-Path $stagingPause 'reached') -PathType Leaf
+            if (-not $stagingReached) { Start-Sleep -Milliseconds 10 }
+        } while (-not $stagingReached -and [DateTime]::UtcNow -lt $stagingDeadline -and
+            $stagingJob.State -eq 'Running')
+        Assert-True $stagingReached 'Long-output build did not reach staging pause.'
+        $stagingDirectories = @(
+            Get-ChildItem -LiteralPath $temporaryRoot -Directory -Force |
+                Where-Object Name -Match '^\.ldp-[0-9a-f]{32}$')
+        Assert-True ($stagingDirectories.Count -eq 1) `
+            'Long-output build did not create exactly one short sibling staging root.'
+        $shortStaging = $stagingDirectories[0].FullName
+        $layoutPath = Join-Path $stagingPause 'layout.json'
+        Assert-True (Test-Path -LiteralPath $layoutPath -PathType Leaf) `
+            'Long-output build did not publish its test-only path layout.'
+        $layout = Get-Content -LiteralPath $layoutPath -Raw | ConvertFrom-Json
+        Assert-True ([string]$layout.transactionRoot -ceq $shortStaging) `
+            'Test-only path layout did not identify the sibling payload staging root.'
+        $shortBuildWorkspace = [string]$layout.buildWorkspaceRoot
+        Assert-True ([IO.Path]::GetFileName($shortBuildWorkspace) -cmatch
+            '^\.ldpb-[0-9a-f]{32}$') `
+            'Build workspace does not use the short randomized name contract.'
+        $shortDirectXTexAssets = Join-Path $shortBuildWorkspace `
+            'b/x/o/project.assets.json'
+        Assert-True ($shortStaging.Length -le 160) `
+            'Short staging root exceeded the build-root path budget.'
+        Assert-True ($shortBuildWorkspace.Length -le 100) `
+            'Short build workspace exceeded its root path budget.'
+        Assert-True ($shortDirectXTexAssets.Length -le 240) `
+            'Short DirectXTex intermediate exceeded the critical tool path budget.'
+        Assert-True ($shortDirectXTexAssets.Length -lt
+            $legacyDirectXTexAssets.Length - 100) `
+            'Short staging layout did not materially reduce the legacy path.'
+        Write-FixtureText (Join-Path $stagingPause 'continue') 'continue'
+        Wait-Job $stagingJob -Timeout 30 | Out-Null
+        Assert-True ($stagingJob.State -eq 'Completed') `
+            "Long-output build failed: $($stagingJob.ChildJobs[0].JobStateInfo.Reason)"
+        Assert-True (Test-Path -LiteralPath $longOutput -PathType Container) `
+            'Long-output build did not publish its portable payload.'
+        $publishedLongPaths = @(
+            Get-ChildItem -LiteralPath $longOutput -File -Recurse -Force |
+                ForEach-Object FullName)
+        Assert-True ($publishedLongPaths.Count -gt 0) `
+            'Long-output build published no payload files.'
+        Assert-True (@($publishedLongPaths | Where-Object Length -gt 240).Count -eq 0) `
+            'Long-output build published a descendant beyond the supported path budget.'
+        Assert-WindowsPowerShellDefaultStreams $longOutput
+        Assert-True (@(
+            Get-ChildItem -LiteralPath $temporaryRoot -Directory -Force |
+                Where-Object Name -Match '^\.ldp-[0-9a-f]{32}$').Count -eq 0) `
+            'Short sibling staging root was not removed after publication.'
+        Assert-True (-not (Test-Path -LiteralPath $shortBuildWorkspace)) `
+            'Test-only SkipBuild unexpectedly created a build workspace.'
+    }
+    finally {
+        if ($stagingJob.State -eq 'Running') {
+            Write-FixtureText (Join-Path $stagingPause 'continue') 'continue'
+            Wait-Job $stagingJob -Timeout 5 | Out-Null
+        }
+        Receive-Job $stagingJob -ErrorAction SilentlyContinue | Out-Null
+        Remove-Job $stagingJob -Force -ErrorAction SilentlyContinue
+    }
+
+    $pathBudgetAi = Join-Path $temporaryRoot 'published-path-budget-ai'
+    New-AiFixture $pathBudgetAi
+    $pathBudgetOutput = Join-Path $temporaryRoot 'published-path-budget-output'
+    $dependencyDirectory = Join-Path $pathBudgetAi 'Runtimes/cpu/demo-runtime'
+    $oldDependency = Join-Path $dependencyDirectory 'backend.dll'
+    $relativePrefix = 'AI/Runtimes/cpu/demo-runtime/'
+    $longDependencyNameCharacters = 241 - $pathBudgetOutput.Length - 1 -
+        $relativePrefix.Length
+    Assert-True ($longDependencyNameCharacters -gt 4 -and
+        $longDependencyNameCharacters -le 200) `
+        'Could not create a bounded over-budget payload fixture path.'
+    $longDependencyName = ('d' * ($longDependencyNameCharacters - 4)) + '.dll'
+    $longDependency = Join-Path $dependencyDirectory $longDependencyName
+    [IO.File]::Move($oldDependency, $longDependency)
+    $pathBudgetInferencePath = Join-Path $pathBudgetAi 'inference.json'
+    $pathBudgetInference = Get-Content -LiteralPath $pathBudgetInferencePath -Raw |
+        ConvertFrom-Json
+    $pathBudgetInference.runtimeDependencies[0].relativePath =
+        "cpu/demo-runtime/$longDependencyName"
+    $pathBudgetInference.runtimeDependencies[0].sha256 =
+        Get-LowerSha256 $longDependency
+    $pathBudgetInference.runtimeDependencies[0].expectedSize =
+        [long](Get-Item -LiteralPath $longDependency).Length
+    Write-FixtureText $pathBudgetInferencePath `
+        ($pathBudgetInference | ConvertTo-Json -Depth 6 -Compress)
+    $projectedLongDependency = Join-Path $pathBudgetOutput `
+        "$relativePrefix$longDependencyName"
+    Assert-True ($projectedLongDependency.Length -eq 241) `
+        'Over-budget payload fixture did not project to exactly 241 characters.'
+    Assert-Throws {
+        & $builder -OutputDirectory $pathBudgetOutput `
+            -SkipBuild -NativeBuildDirectory $native `
+            -ChatHostPublishDirectory $chatHost `
+            -AiArtifactDirectory $pathBudgetAi `
+            -AiArtifactManifest $pathBudgetInferencePath `
+            -AiRedistributionManifest (Join-Path $pathBudgetAi 'redistribution.json') `
+            -AcceptArtifactLicenses -AcceptUnsignedArtifactTrust `
+            -AllowDirtySource -NoArchive
+    } 'published descendant path budget' 'Published payload file'
+    Assert-True (-not (Test-Path -LiteralPath $pathBudgetOutput)) `
+        'Over-budget payload path published an output directory.'
+    Assert-True (-not (Test-Path -LiteralPath "$pathBudgetOutput.manifest.sha256")) `
+        'Over-budget payload path published a manifest sidecar.'
+    Assert-True (@(
+        Get-ChildItem -LiteralPath $temporaryRoot -Directory -Force |
+            Where-Object Name -Match '^\.ldp-[0-9a-f]{32}$').Count -eq 0) `
+        'Over-budget payload path left a transaction staging directory.'
+
     $initialFixtureHead = (& git -C $fixtureRepository rev-parse HEAD).Trim()
     $headPause = Join-Path $temporaryRoot 'source-head-pause'
     [IO.Directory]::CreateDirectory($headPause) | Out-Null
@@ -738,6 +944,36 @@ try {
         'Manual build-machine feed/cache trust boundary was not recorded.'
 
     $actualPayloadFiles = @(Get-PayloadRelativeFiles $output)
+    $longestPayloadRelativePath = ''
+    foreach ($candidatePath in $actualPayloadFiles) {
+        if ($candidatePath.Length -gt $longestPayloadRelativePath.Length -or
+            ($candidatePath.Length -eq $longestPayloadRelativePath.Length -and
+                [string]::CompareOrdinal(
+                    $candidatePath, $longestPayloadRelativePath) -lt 0)) {
+            $longestPayloadRelativePath = $candidatePath
+        }
+    }
+    Assert-True ([int]$manifest.installationPathPolicy.maxFullPath -eq 240) `
+        'Manifest full-path limit is incorrect.'
+    Assert-True ([int]$manifest.installationPathPolicy.maxRelativePath -eq
+        $longestPayloadRelativePath.Length) `
+        'Manifest maximum relative-path length is incorrect.'
+    Assert-True ([string]$manifest.installationPathPolicy.longestRelativePath -ceq
+        $longestPayloadRelativePath) `
+        'Manifest longest relative path is incorrect.'
+    Assert-True ([int]$manifest.installationPathPolicy.maxInstallRootChars -eq
+        240 - 1 - $longestPayloadRelativePath.Length) `
+        'Manifest installation-root limit is incorrect.'
+    $redistributionText = Get-Content -LiteralPath (
+        Join-Path $output 'REDISTRIBUTION-NOTES.txt') -Raw
+    foreach ($pathPolicyClaim in @(
+            'maxFullPath=240',
+            "maxRelativePath=$($longestPayloadRelativePath.Length)",
+            "maxInstallRootChars=$($manifest.installationPathPolicy.maxInstallRootChars)")) {
+        Assert-True ($redistributionText.Contains(
+            $pathPolicyClaim, [StringComparison]::Ordinal)) `
+            "Redistribution notes omit path policy claim: $pathPolicyClaim"
+    }
     $manifestPayloadFiles = @($manifest.files | ForEach-Object { [string]$_.path } | Sort-Object)
     $expectedManifestFiles = @($actualPayloadFiles |
         Where-Object { $_ -cne 'integrated-portable-manifest.json' })
@@ -750,6 +986,42 @@ try {
         Assert-True ((Get-LowerSha256 $path) -ceq [string]$record.sha256) `
             "Outer manifest hash mismatch: $($record.path)"
     }
+
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $pathPolicyArchive = Join-Path $temporaryRoot 'path-policy-fixture.zip'
+    [IO.Compression.ZipFile]::CreateFromDirectory(
+        $output, $pathPolicyArchive, [IO.Compression.CompressionLevel]::Optimal, $false)
+    $installRootCharacters = [int]$manifest.installationPathPolicy.maxInstallRootChars
+    $installRootNameCharacters = $installRootCharacters - $temporaryRoot.Length - 1
+    Assert-True ($installRootNameCharacters -gt 0) `
+        'Temporary root is too long for the maximum installation-root regression.'
+    $pathPolicyExtractRoot = Join-Path $temporaryRoot ('e' * $installRootNameCharacters)
+    Assert-True ($pathPolicyExtractRoot.Length -eq $installRootCharacters) `
+        'Installation-root regression did not reach the declared maximum length.'
+    [IO.Compression.ZipFile]::ExtractToDirectory(
+        $pathPolicyArchive, $pathPolicyExtractRoot)
+    $extractedManifest = Get-Content -LiteralPath (
+        Join-Path $pathPolicyExtractRoot 'integrated-portable-manifest.json') -Raw |
+        ConvertFrom-Json
+    $extractedFiles = @(Get-PayloadRelativeFiles $pathPolicyExtractRoot)
+    Assert-ExactSet $extractedFiles $actualPayloadFiles `
+        'Maximum-root extracted payload inventory'
+    foreach ($record in $extractedManifest.files) {
+        $path = Join-Path $pathPolicyExtractRoot ([string]$record.path).Replace('/', '\')
+        Assert-True ((Get-Item -LiteralPath $path).Length -eq [long]$record.size) `
+            "Maximum-root extracted size mismatch: $($record.path)"
+        Assert-True ((Get-LowerSha256 $path) -ceq [string]$record.sha256) `
+            "Maximum-root extracted hash mismatch: $($record.path)"
+    }
+    $extractedFullPaths = @(Get-ChildItem -LiteralPath $pathPolicyExtractRoot `
+        -File -Recurse -Force | ForEach-Object FullName)
+    $maximumExtractedPath = @($extractedFullPaths | Sort-Object Length -Descending |
+        Select-Object -First 1)[0]
+    Assert-True ($maximumExtractedPath.Length -eq 240) `
+        'Maximum-root extraction did not exercise the 240-character boundary.'
+    Assert-True (@($extractedFullPaths | Where-Object Length -gt 240).Count -eq 0) `
+        'Maximum-root extraction exceeded the declared full-path limit.'
+    Assert-WindowsPowerShellDefaultStreams $pathPolicyExtractRoot
 
     $licenseMap = Get-Content -LiteralPath (
         Join-Path $output 'integrated-license-map.json') -Raw | ConvertFrom-Json

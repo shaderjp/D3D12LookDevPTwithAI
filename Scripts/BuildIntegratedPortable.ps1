@@ -42,6 +42,11 @@ $script:MaximumModelBytes = 64GB
 $script:MaximumPayloadBytes = 128GB
 $script:MaximumPayloadFiles = 20000
 $script:MaximumRelativePathCharacters = 1024
+$script:MaximumWindowsRepositoryRootCharacters = 120
+$script:MaximumWindowsTransactionRootCharacters = 160
+$script:MaximumWindowsBuildWorkspaceRootCharacters = 100
+$script:MaximumWindowsPublicationPathCharacters = 240
+$script:MaximumWindowsCriticalToolPathCharacters = 240
 $script:PayloadRoot = $null
 $script:Origins = [Collections.Generic.Dictionary[string,string]]::new(
     [StringComparer]::OrdinalIgnoreCase)
@@ -77,6 +82,107 @@ function Get-NormalizedFullPath {
         throw 'A required path was empty.'
     }
     return [IO.Path]::GetFullPath($PathValue)
+}
+
+function Assert-WindowsPathBudget {
+    param(
+        [Parameter(Mandatory = $true)][string]$PathValue,
+        [Parameter(Mandatory = $true)][int]$MaximumCharacters,
+        [Parameter(Mandatory = $true)][string]$Description
+    )
+
+    if (-not $IsWindows) { return }
+    $normalized = Get-NormalizedFullPath $PathValue
+    if ($normalized.Length -gt $MaximumCharacters) {
+        throw "$Description path is too long for the portable build toolchain ($($normalized.Length) > $MaximumCharacters characters). Move the source/output parent to a shorter absolute path."
+    }
+}
+
+function Assert-IntegratedPortablePathBudget {
+    param(
+        [Parameter(Mandatory = $true)][string]$Repository,
+        [Parameter(Mandatory = $true)][string]$TransactionRoot,
+        [Parameter(Mandatory = $true)][string]$BuildWorkspaceRoot,
+        [Parameter(Mandatory = $true)][string[]]$PublicationPaths
+    )
+
+    if (-not $IsWindows) { return }
+    Assert-WindowsPathBudget $Repository `
+        $script:MaximumWindowsRepositoryRootCharacters 'Source repository root'
+    Assert-WindowsPathBudget $TransactionRoot `
+        $script:MaximumWindowsTransactionRootCharacters 'Transaction staging root'
+    Assert-WindowsPathBudget $BuildWorkspaceRoot `
+        $script:MaximumWindowsBuildWorkspaceRootCharacters 'Build workspace root'
+    foreach ($pathValue in $PublicationPaths) {
+        Assert-WindowsPathBudget $pathValue `
+            $script:MaximumWindowsPublicationPathCharacters 'Publication target'
+    }
+
+    # These are the deepest configured paths handed directly to legacy
+    # MSBuild/CMake/NuGet path-manipulation code. The dedicated short build
+    # workspace also leaves bounded headroom for tool-generated descendants.
+    foreach ($pathValue in @(
+            (Join-Path $Repository 'D3D12LookDevPTwithAI.vcxproj'),
+            (Join-Path $Repository `
+                'ThirdParty\DirectXTex\DirectXTex\DirectXTex_Desktop_2026.vcxproj'),
+            (Join-Path $Repository `
+                'Managed\D3D12LookDevPTwithAI.ChatHost\D3D12LookDevPTwithAI.ChatHost.csproj'),
+            (Join-Path $BuildWorkspaceRoot 'b\x\o\project.assets.json'),
+            (Join-Path $BuildWorkspaceRoot 'b\u\project.assets.json'),
+            (Join-Path $BuildWorkspaceRoot `
+                'b\d\a\obj\D3D12LookDevPTwithAI.ChatHost\project.assets.json'))) {
+        Assert-WindowsPathBudget $pathValue `
+            $script:MaximumWindowsCriticalToolPathCharacters `
+            'Critical build intermediate'
+    }
+}
+
+function Assert-PublishedPayloadPathBudget {
+    param(
+        [Parameter(Mandatory = $true)][string]$OutputDirectory,
+        [Parameter(Mandatory = $true)][object[]]$FileRecords
+    )
+
+    if (-not $IsWindows) { return }
+    $relativePaths = @($FileRecords | ForEach-Object { [string]$_.path }) +
+        @('integrated-portable-manifest.json')
+    foreach ($relativePath in $relativePaths) {
+        $projectedPath = Join-Path $OutputDirectory $relativePath.Replace('/', '\')
+        Assert-WindowsPathBudget $projectedPath `
+            $script:MaximumWindowsPublicationPathCharacters `
+            "Published payload file '$relativePath'"
+    }
+}
+
+function Get-PublishedPayloadPathPolicy {
+    param([Parameter(Mandatory = $true)][string[]]$RelativePaths)
+
+    if ($RelativePaths.Count -eq 0) {
+        throw 'Cannot derive the publication path policy from an empty payload.'
+    }
+    $longest = ''
+    foreach ($relativePath in $RelativePaths) {
+        if ([string]::IsNullOrWhiteSpace($relativePath)) {
+            throw 'Cannot derive the publication path policy from an empty relative path.'
+        }
+        if ($relativePath.Length -gt $longest.Length -or
+            ($relativePath.Length -eq $longest.Length -and
+                [string]::CompareOrdinal($relativePath, $longest) -lt 0)) {
+            $longest = $relativePath
+        }
+    }
+    $maximumInstallRootCharacters =
+        $script:MaximumWindowsPublicationPathCharacters - 1 - $longest.Length
+    if ($maximumInstallRootCharacters -lt 1) {
+        throw 'The payload has no usable Windows installation-root path budget.'
+    }
+    return [ordered]@{
+        maxFullPath = $script:MaximumWindowsPublicationPathCharacters
+        maxRelativePath = $longest.Length
+        maxInstallRootChars = $maximumInstallRootCharacters
+        longestRelativePath = $longest
+        contract = 'Extract or move the payload only to an absolute installation root whose character count is no greater than maxInstallRootChars; every resulting file path must be no greater than maxFullPath.'
+    }
 }
 
 function Test-PathsOverlap {
@@ -404,7 +510,10 @@ function Read-StrictJsonFile {
 }
 
 function Invoke-TestOnlyPause {
-    param([Parameter(Mandatory = $true)][string]$Name)
+    param(
+        [Parameter(Mandatory = $true)][string]$Name,
+        [AllowNull()][hashtable]$Metadata = $null
+    )
 
     if ($Name -cnotmatch '^[A-Z][A-Z0-9_]{0,63}$') {
         throw "Unsafe test pause name: $Name"
@@ -422,6 +531,12 @@ function Invoke-TestOnlyPause {
     }
     $reached = Join-Path $pauseRoot 'reached'
     $continue = Join-Path $pauseRoot 'continue'
+    if ($null -ne $Metadata) {
+        [IO.File]::WriteAllText(
+            (Join-Path $pauseRoot 'layout.json'),
+            ($Metadata | ConvertTo-Json -Depth 3 -Compress),
+            [Text.UTF8Encoding]::new($false))
+    }
     [IO.File]::WriteAllText($reached, $Name, [Text.UTF8Encoding]::new($false))
     $deadline = [DateTime]::UtcNow.AddSeconds(20)
     while (-not (Test-Path -LiteralPath $continue -PathType Leaf)) {
@@ -1465,13 +1580,14 @@ function Test-FileContainsUtf16 {
 function Assert-NoPrivateBuildPaths {
     param(
         [Parameter(Mandatory = $true)][string]$Repository,
-        [Parameter(Mandatory = $true)][string]$TransactionRoot
+        [Parameter(Mandatory = $true)][string]$TransactionRoot,
+        [Parameter(Mandatory = $true)][string]$BuildWorkspaceRoot
     )
 
     $tokens = [Collections.Generic.HashSet[string]]::new(
         [StringComparer]::OrdinalIgnoreCase)
     foreach ($pathValue in @(
-            $Repository, $TransactionRoot,
+            $Repository, $TransactionRoot, $BuildWorkspaceRoot,
             [Environment]::GetFolderPath('UserProfile'), [IO.Path]::GetTempPath())) {
         if ([string]::IsNullOrWhiteSpace($pathValue)) { continue }
         [void]$tokens.Add([IO.Path]::TrimEndingDirectorySeparator(
@@ -2146,8 +2262,11 @@ function Copy-BundledLicenses {
         $script:MaximumDepsJsonBytes 'ChatHost deps.json for license inventory'
     $seenPackageIdentities = [Collections.Generic.HashSet[string]]::new(
         [StringComparer]::OrdinalIgnoreCase)
-    foreach ($library in @($dependencies.libraries.PSObject.Properties)) {
+    $packageOrdinal = 0
+    foreach ($library in @($dependencies.libraries.PSObject.Properties |
+            Sort-Object Name)) {
         if ([string]$library.Value.type -cne 'package') { continue }
+        $packageOrdinal++
         $separator = $library.Name.LastIndexOf('/')
         if ($separator -le 0 -or $separator -eq $library.Name.Length - 1) {
             throw "Invalid ChatHost package identity in deps.json: $($library.Name)"
@@ -2188,11 +2307,26 @@ function Copy-BundledLicenses {
             }
             $documents = @($nuspec)
         }
-        foreach ($document in @($documents)) {
-            $safeId = $identifier -replace '[^A-Za-z0-9._-]', '_'
+        $documentOrdinal = 0
+        foreach ($document in @($documents | Sort-Object Name)) {
+            $documentOrdinal++
+            $extension = [IO.Path]::GetExtension($document.Name)
+            if ([string]::IsNullOrEmpty($extension) -or
+                $extension -cnotmatch '^\.[A-Za-z0-9]{1,12}$') {
+                $extension = '.txt'
+            }
+            # Package identifiers and legal document names can legitimately
+            # contain words such as "UserSecrets".  Keep those exact values in
+            # origin metadata, but use a short neutral destination name so the
+            # final-payload credential-name defense remains fail-closed.
+            $packageDirectory = 'pkg-' + $packageOrdinal.ToString(
+                'D4', [Globalization.CultureInfo]::InvariantCulture)
+            $documentName = 'doc-' + $documentOrdinal.ToString(
+                'D2', [Globalization.CultureInfo]::InvariantCulture) +
+                $extension.ToLowerInvariant()
             Copy-LicenseDocument $document.FullName `
-                "licenses/ChatHost/NuGet/$safeId-$version-$($document.Name)" `
-                "nuget:$($library.Name)"
+                "licenses/ChatHost/NuGet/$packageDirectory/$documentName" `
+                "nuget:$($library.Name);document:$($document.Name)"
         }
     }
 
@@ -2814,38 +2948,82 @@ function Invoke-IntegratedPortableBuild {
         throw 'Prebuilt directories may only be supplied with SkipBuild.'
     }
 
-    $transactionName = '.integrated-portable-staging-' +
-        [IO.Path]::GetFileName($output) + '-' + [Guid]::NewGuid().ToString('N')
+    # Keep the same-volume sibling transaction name independent of the final
+    # exhibition name.  Long output names previously pushed DirectXTex's
+    # MSBuildProjectExtensionsPath beyond legacy MSBuild path handling.
+    $layoutId = [Guid]::NewGuid().ToString('N')
+    $transactionName = '.ldp-' + $layoutId
     $transactionRoot = Join-Path $outputParent $transactionName
-    $transactionPrefix = $outputParent.TrimEnd('\') + '\.integrated-portable-staging-'
+    $transactionPrefix = $outputParent.TrimEnd('\') + '\.ldp-'
     if (-not $transactionRoot.StartsWith(
             $transactionPrefix, [StringComparison]::OrdinalIgnoreCase)) {
         throw 'Unsafe integrated portable staging path.'
     }
-    $payloadRoot = Join-Path $transactionRoot 'payload'
+    $buildWorkspaceParent = Get-NormalizedFullPath ([IO.Path]::GetTempPath())
+    Assert-NoReparseAncestors $buildWorkspaceParent
+    $buildWorkspaceRoot = Join-Path $buildWorkspaceParent ('.ldpb-' + $layoutId)
+    $buildWorkspacePrefix = $buildWorkspaceParent.TrimEnd('\') + '\.ldpb-'
+    if (-not $buildWorkspaceRoot.StartsWith(
+            $buildWorkspacePrefix, [StringComparison]::OrdinalIgnoreCase)) {
+        throw 'Unsafe integrated portable build workspace path.'
+    }
+    Assert-IntegratedPortablePathBudget $repository $transactionRoot `
+        $buildWorkspaceRoot `
+        (@($output, $manifestHashPath) +
+            @($NoArchive ? @() : @($archivePath, $archiveHashPath)))
+    $payloadRoot = Join-Path $transactionRoot 'p'
     $nativeBuild = if ($SkipBuild) {
         Get-NormalizedFullPath $NativeBuildDirectory
     }
-    else { Join-Path $transactionRoot 'build\native' }
+    else { Join-Path $buildWorkspaceRoot 'b\n' }
     $chatPublish = if ($SkipBuild) {
         Get-NormalizedFullPath $ChatHostPublishDirectory
     }
-    else { Join-Path $transactionRoot 'build\chat-host' }
-    $archiveStaging = Join-Path $transactionRoot 'archive.zip'
+    else { Join-Path $buildWorkspaceRoot 'b\c' }
+    $archiveStaging = Join-Path $transactionRoot 'a.zip'
     $published = $false
     $compilerEnvironmentChanged = $false
     $previousCompilerEnvironment = @{}
     $nativeAssetsPath = $null
+    $buildWorkspaceOwned = $false
+    $buildWorkspaceMarker = Join-Path $buildWorkspaceRoot '.owner'
 
-    [IO.Directory]::CreateDirectory($payloadRoot) | Out-Null
     $script:PayloadRoot = Get-NormalizedFullPath $payloadRoot
     try {
+        [IO.Directory]::CreateDirectory($payloadRoot) | Out-Null
+        if (-not $SkipBuild) {
+            if (Test-Path -LiteralPath $buildWorkspaceRoot) {
+                throw "Build workspace already exists: $buildWorkspaceRoot"
+            }
+            [IO.Directory]::CreateDirectory($buildWorkspaceRoot) | Out-Null
+            Assert-NoReparseAncestors $buildWorkspaceRoot
+            $markerStream = [IO.FileStream]::new(
+                $buildWorkspaceMarker, [IO.FileMode]::CreateNew,
+                [IO.FileAccess]::Write, [IO.FileShare]::None)
+            try {
+                $markerBytes = [Text.Encoding]::ASCII.GetBytes($layoutId)
+                $markerStream.Write($markerBytes, 0, $markerBytes.Length)
+                $markerStream.Flush($true)
+            }
+            finally { $markerStream.Dispose() }
+            $buildWorkspaceOwned = $true
+        }
+        Invoke-TestOnlyPause 'AFTER_STAGING_CREATED' @{
+            transactionRoot = $transactionRoot
+            buildWorkspaceRoot = $buildWorkspaceRoot
+        }
         Assert-PathsDoNotOverlap $nativeBuild $chatPublish `
             'Native and ChatHost input'
         Assert-PathsDoNotOverlap $output $nativeBuild `
             'Portable output and Native input'
         Assert-PathsDoNotOverlap $output $chatPublish `
             'Portable output and ChatHost input'
+        Assert-PathsDoNotOverlap $repository $buildWorkspaceRoot `
+            'Source repository and build workspace'
+        Assert-PathsDoNotOverlap $output $buildWorkspaceRoot `
+            'Portable output and build workspace'
+        Assert-PathsDoNotOverlap $transactionRoot $buildWorkspaceRoot `
+            'Payload staging and build workspace'
         if (-not $WithoutAi) {
             $normalizedAiRoot = Get-NormalizedFullPath $AiArtifactDirectory
             Assert-PathsDoNotOverlap $normalizedAiRoot $nativeBuild `
@@ -2854,10 +3032,12 @@ function Invoke-IntegratedPortableBuild {
                 'AI and ChatHost input'
             Assert-PathsDoNotOverlap $normalizedAiRoot $output `
                 'AI input and portable output'
+            Assert-PathsDoNotOverlap $normalizedAiRoot $buildWorkspaceRoot `
+                'AI input and build workspace'
         }
         if (-not $SkipBuild) {
-            $nativeIntermediate = Join-Path $transactionRoot 'build\native-obj'
-            $nugetIntermediate = Join-Path $transactionRoot 'build\native-nuget'
+            $nativeIntermediate = Join-Path $buildWorkspaceRoot 'b\i'
+            $nugetIntermediate = Join-Path $buildWorkspaceRoot 'b\u'
             [IO.Directory]::CreateDirectory($nativeBuild) | Out-Null
             [IO.Directory]::CreateDirectory($chatPublish) | Out-Null
             $vsRoot = Get-VisualStudioInstallationRoot
@@ -2872,7 +3052,8 @@ function Invoke-IntegratedPortableBuild {
             }
             $pathMapOptions = "/experimental:deterministic " +
                 "/pathmap:`"$repository`"=source " +
-                "/pathmap:`"$transactionRoot`"=build"
+                "/pathmap:`"$transactionRoot`"=staging " +
+                "/pathmap:`"$buildWorkspaceRoot`"=build"
             [Environment]::SetEnvironmentVariable(
                 'CL', $pathMapOptions, [EnvironmentVariableTarget]::Process)
             foreach ($environmentName in @('_CL_', 'LINK', '_LINK_')) {
@@ -2883,12 +3064,12 @@ function Invoke-IntegratedPortableBuild {
             # Rebuild the two statically linked dependency trees into this
             # transaction.  Clean git status does not authenticate ignored libs
             # left under ThirdParty from a previous/local build.
-            $thirdPartyRoot = Join-Path $transactionRoot 'build\third-party'
-            $assimpBuildRoot = Join-Path $thirdPartyRoot 'assimp'
+            $thirdPartyRoot = Join-Path $buildWorkspaceRoot 'b'
+            $assimpBuildRoot = Join-Path $thirdPartyRoot 'a'
             $assimpLibDir = Join-Path $assimpBuildRoot 'lib\Release'
             $assimpZlibDir = Join-Path $assimpBuildRoot 'contrib\zlib\Release'
-            $directXTexLibDir = Join-Path $thirdPartyRoot 'directxtex\lib'
-            $directXTexIntermediate = Join-Path $thirdPartyRoot 'directxtex\obj'
+            $directXTexLibDir = Join-Path $thirdPartyRoot 'x\l'
+            $directXTexIntermediate = Join-Path $thirdPartyRoot 'x\o'
             & powershell.exe -NoProfile -ExecutionPolicy Bypass `
                 -File (Join-Path $repository 'BuildThirdParty.ps1') `
                 -AssimpRoot (Join-Path $repository 'ThirdParty\assimp') `
@@ -2930,8 +3111,8 @@ function Invoke-IntegratedPortableBuild {
             Restore-ProcessEnvironment $previousCompilerEnvironment
             $compilerEnvironmentChanged = $false
 
-            $chatArtifacts = Join-Path $transactionRoot 'build\dotnet-artifacts'
-            $chatBuildOutput = Join-Path $transactionRoot 'build\chat-host-build'
+            $chatArtifacts = Join-Path $buildWorkspaceRoot 'b\d\a'
+            $chatBuildOutput = Join-Path $buildWorkspaceRoot 'b\d\o'
             & dotnet publish (
                 Join-Path $repository `
                     'Managed\D3D12LookDevPTwithAI.ChatHost\D3D12LookDevPTwithAI.ChatHost.csproj') `
@@ -2951,7 +3132,7 @@ function Invoke-IntegratedPortableBuild {
         $visualStudioRoot = Get-VisualStudioInstallationRoot
         $visualCppRuntime = Copy-VisualCppRuntimePayload $visualStudioRoot
         Copy-ChatHostPayload $chatPublish
-        Assert-NoPrivateBuildPaths $repository $transactionRoot
+        Assert-NoPrivateBuildPaths $repository $transactionRoot $buildWorkspaceRoot
 
         $aiDefinition = $null
         if (-not $WithoutAi) {
@@ -2977,6 +3158,20 @@ function Invoke-IntegratedPortableBuild {
             $chatPublish $nativeAssetsPath)
         Copy-BundledLicenses $repository $chatPublish $visualCppRuntime `
             $aiDefinition $resolvedNuGetPackages
+
+        $publicationPolicyRelativePaths = @(
+            Get-ChildItem -LiteralPath $script:PayloadRoot -File -Recurse -Force |
+                ForEach-Object {
+                    Get-SafeRelativePath $script:PayloadRoot $_.FullName
+                }) + @(
+            'THIRD-PARTY-NOTICES.txt',
+            'REDISTRIBUTION-NOTES.txt',
+            'UNSIGNED-ARTIFACTS.ja.txt',
+            'integrated-license-map.json',
+            'integrated-portable-sbom.spdx.json',
+            'integrated-portable-manifest.json')
+        $publishedPathPolicy = Get-PublishedPayloadPathPolicy `
+            $publicationPolicyRelativePaths
 
         $noticeLines = @(
             'D3D12LookDevPTwithAI integrated portable - Third-Party Notices',
@@ -3036,6 +3231,15 @@ D3D12LookDevPTwithAI integrated portable redistribution notes
   exhibition. An officially signed artifact catalog/distribution is not yet
   implemented.
 '@
+        $redistributionNotes += @"
+
+- Windows path policy: maxFullPath=$($publishedPathPolicy.maxFullPath),
+  maxRelativePath=$($publishedPathPolicy.maxRelativePath), and
+  maxInstallRootChars=$($publishedPathPolicy.maxInstallRootChars). Extract or
+  move the payload only to an absolute root at or below that install-root limit;
+  the longest packaged relative path is
+  $($publishedPathPolicy.longestRelativePath).
+"@
         Write-RegisteredPayloadText 'REDISTRIBUTION-NOTES.txt' `
             $redistributionNotes 'generated-redistribution-notes'
         $unsignedNotice = @'
@@ -3062,6 +3266,17 @@ digestを受け取り、展示前に照合してください。公式署名済�
             throw 'The source HEAD changed while the portable payload was being built.'
         }
         $fileRecords = @(Get-FileRecords)
+        $finalPublishedPathPolicy = Get-PublishedPayloadPathPolicy `
+            (@($fileRecords | ForEach-Object { [string]$_.path }) +
+                @('integrated-portable-manifest.json'))
+        foreach ($policyField in @(
+                'maxFullPath', 'maxRelativePath', 'maxInstallRootChars',
+                'longestRelativePath')) {
+            if ([string]$finalPublishedPathPolicy[$policyField] -cne
+                [string]$publishedPathPolicy[$policyField]) {
+                throw "The final payload changed the recorded publication path policy: $policyField"
+            }
+        }
         $aiMetadata = if ($null -eq $aiDefinition) {
             [ordered]@{
                 included = $false
@@ -3164,6 +3379,7 @@ digestを受け取り、展示前に照合してください。公式署名済�
                 'LocalMCPChatClient', 'MCP credentials', 'approval rules',
                 'conversation history', 'user settings', 'symbols',
                 'createdump and crash dumps')
+            installationPathPolicy = $publishedPathPolicy
             ai = $aiMetadata
             manifestSelfExcludedFromFiles = $true
             filesContract = 'files contains every payload file except integrated-portable-manifest.json; external archive and digest sidecars are not payload files.'
@@ -3175,13 +3391,14 @@ digestを受け取り、展示前に照合してください。公式署名済�
         $script:Origins.Add('integrated-portable-manifest.json', 'generated-outer-manifest')
 
         Assert-FinalPayload
+        Assert-PublishedPayloadPathBudget $output $fileRecords
 
         # Prepare and verify every publication artifact while it is still under
         # the transaction root.  The payload directory is moved into place only
         # after archive construction succeeds, so an archive failure never leaves
         # an apparently usable exhibition directory behind.
         $manifestDigest = Get-LowerSha256 $manifestPath
-        $manifestHashStaging = Join-Path $transactionRoot 'manifest.sha256'
+        $manifestHashStaging = Join-Path $transactionRoot 'm.sha256'
         $manifestVerificationPath =
             "$([IO.Path]::GetFileName($output))/integrated-portable-manifest.json"
         Set-Content -LiteralPath $manifestHashStaging `
@@ -3193,7 +3410,7 @@ digestを受け取り、展示前に照合してください。公式署名済�
                 $archiveStaging
             $archiveDigest = Get-LowerSha256 $archiveStaging
             $archiveIdentity = Get-PublishedFileIdentity $archiveStaging
-            $archiveHashStaging = Join-Path $transactionRoot 'archive.sha256'
+            $archiveHashStaging = Join-Path $transactionRoot 'a.sha256'
             Set-Content -LiteralPath $archiveHashStaging `
                 -Value "$archiveDigest  $([IO.Path]::GetFileName($archivePath))" `
                 -Encoding ascii
@@ -3253,15 +3470,41 @@ digestを受け取り、展示前に照合してください。公式署名済�
             Restore-ProcessEnvironment $previousCompilerEnvironment
             $compilerEnvironmentChanged = $false
         }
-        if (Test-Path -LiteralPath $transactionRoot) {
-            $resolvedTransaction = Get-NormalizedFullPath $transactionRoot
-            if (-not $resolvedTransaction.StartsWith(
-                    $transactionPrefix, [StringComparison]::OrdinalIgnoreCase) -or
-                [IO.Path]::GetFileName($resolvedTransaction) -notlike
-                    '.integrated-portable-staging-*') {
-                throw "Refusing to clean unexpected staging path: $resolvedTransaction"
+        try {
+            if ($buildWorkspaceOwned -and
+                (Test-Path -LiteralPath $buildWorkspaceRoot)) {
+                $resolvedBuildWorkspace = Get-NormalizedFullPath $buildWorkspaceRoot
+                if (-not $resolvedBuildWorkspace.StartsWith(
+                        $buildWorkspacePrefix,
+                        [StringComparison]::OrdinalIgnoreCase) -or
+                    [IO.Path]::GetFileName($resolvedBuildWorkspace) -cnotmatch
+                        '^\.ldpb-[0-9a-f]{32}$') {
+                    throw "Refusing to clean unexpected build workspace: $resolvedBuildWorkspace"
+                }
+                Assert-TreeHasNoReparsePoints $resolvedBuildWorkspace
+                $markerSnapshot = Read-BoundedRegularFileSnapshot `
+                    $buildWorkspaceMarker 64 'Build workspace ownership marker'
+                if ([Text.Encoding]::ASCII.GetString($markerSnapshot.Bytes) -cne
+                    $layoutId) {
+                    throw "Refusing to clean a build workspace with a replaced ownership marker: $resolvedBuildWorkspace"
+                }
+                [IO.Directory]::Delete($resolvedBuildWorkspace, $true)
+                $buildWorkspaceOwned = $false
             }
-            [IO.Directory]::Delete($resolvedTransaction, $true)
+        }
+        finally {
+            if (Test-Path -LiteralPath $transactionRoot) {
+                $resolvedTransaction = Get-NormalizedFullPath $transactionRoot
+                if (-not $resolvedTransaction.StartsWith(
+                        $transactionPrefix, [StringComparison]::OrdinalIgnoreCase) -or
+                    [IO.Path]::GetFileName($resolvedTransaction) -notlike
+                        '.ldp-????????????????????????????????' -or
+                    [IO.Path]::GetFileName($resolvedTransaction) -cnotmatch
+                        '^\.ldp-[0-9a-f]{32}$') {
+                    throw "Refusing to clean unexpected staging path: $resolvedTransaction"
+                }
+                [IO.Directory]::Delete($resolvedTransaction, $true)
+            }
         }
         if (-not $published -and (Test-Path -LiteralPath $output)) {
             throw "The build failed after an unexpected output publication: $output"

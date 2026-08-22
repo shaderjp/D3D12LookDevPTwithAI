@@ -2,7 +2,7 @@
   "schemaVersion": 2,
   "suiteVersion": "0.2.0-beta.1",
   "repositories": {
-    "D3D12LookDevPTWinUI": {
+    "D3D12LookDevPTwithAI": {
       "source": "self"
     },
     "LocalMCPChatClient": {

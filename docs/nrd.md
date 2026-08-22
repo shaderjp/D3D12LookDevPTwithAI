@@ -2,7 +2,7 @@
 
 Japanese documentation: [NVIDIA NRD backend](nrd.ja.md)
 
-D3D12LookDevPTWinUI integrates NVIDIA Real-Time Denoisers as an optional D3D12 compute backend. The repository is pinned to NRD `v4.17.3` (`792eff196afdd350fd9c3f862119017ccb438a0e`). `interactive_game` selects REBLUR, `sharp_preview` selects RELAX, and `reference_still` disables NRD and temporal post-processing. If NRD is unavailable, interactive profiles retain the requested selection but render through the internal temporal/A-Trous fallback.
+D3D12LookDevPTwithAI integrates NVIDIA Real-Time Denoisers as an optional D3D12 compute backend. The repository is pinned to NRD `v4.17.3` (`792eff196afdd350fd9c3f862119017ccb438a0e`). `interactive_game` selects REBLUR, `sharp_preview` selects RELAX, and `reference_still` disables NRD and temporal post-processing. If NRD is unavailable, interactive profiles retain the requested selection but render through the internal temporal/A-Trous fallback.
 
 ## Setup
 
@@ -30,7 +30,7 @@ Use the strict setup check on a machine intended to run NRD:
 NRD is compile-enabled by default. Disable it for a dependency-free backend build:
 
 ```powershell
-msbuild .\D3D12LookDevPTWinUI.sln /m /p:Configuration=Release /p:Platform=x64 /p:EnableNRD=false
+msbuild .\D3D12LookDevPTwithAI.sln /m /p:Configuration=Release /p:Platform=x64 /p:EnableNRD=false
 ```
 
 `EnableNRD=false` excludes the SDK headers and libraries, keeps every shader configuration buildable, reports `compiled=false`, and routes NRD selections to the internal backend. RTXDI and DLSS are independent switches.

@@ -4,7 +4,7 @@
 #include "EditorViewModel.h"
 #include "RendererController.h"
 
-namespace winrt::D3D12LookDevPTWinUI::implementation
+namespace winrt::D3D12LookDevPTwithAI::implementation
 {
 enum class EditorThemeMode
 {
@@ -210,7 +210,7 @@ private:
 };
 }
 
-namespace winrt::D3D12LookDevPTWinUI::factory_implementation
+namespace winrt::D3D12LookDevPTwithAI::factory_implementation
 {
 struct MainWindow : MainWindowT<MainWindow, implementation::MainWindow>
 {

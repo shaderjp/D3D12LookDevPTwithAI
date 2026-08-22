@@ -28,7 +28,7 @@
 
 namespace
 {
-    constexpr const wchar_t* McpTokenCredentialTarget = L"D3D12LookDevPTWinUI/MCPBearerToken";
+    constexpr const wchar_t* McpTokenCredentialTarget = L"D3D12LookDevPTwithAI/MCPBearerToken";
 
     bool WriteMcpTokenCredential(const std::string& token)
     {
@@ -38,7 +38,7 @@ namespace
         credential.CredentialBlobSize = static_cast<DWORD>(token.size());
         credential.CredentialBlob = reinterpret_cast<LPBYTE>(const_cast<char*>(token.data()));
         credential.Persist = CRED_PERSIST_LOCAL_MACHINE;
-        credential.UserName = const_cast<LPWSTR>(L"D3D12LookDevPTWinUI");
+        credential.UserName = const_cast<LPWSTR>(L"D3D12LookDevPTwithAI");
         return CredWriteW(&credential, 0) != FALSE;
     }
 
@@ -535,11 +535,11 @@ namespace
             const DWORD tempLength = GetTempPathW(static_cast<DWORD>(tempPath.size()), tempPath.data());
             if (tempLength > 0 && tempLength < tempPath.size())
             {
-                return (std::filesystem::path(tempPath.data()) / L"D3D12LookDevPTWinUI" / L"materials").wstring();
+                return (std::filesystem::path(tempPath.data()) / L"D3D12LookDevPTwithAI" / L"materials").wstring();
             }
             return L"materials";
         }
-        return (std::filesystem::path(appData.data()) / L"D3D12LookDevPTWinUI" / L"materials").wstring();
+        return (std::filesystem::path(appData.data()) / L"D3D12LookDevPTwithAI" / L"materials").wstring();
     }
 
     std::string SafeFileName(std::string text)
@@ -1099,11 +1099,11 @@ namespace
             const DWORD tempLength = GetTempPathW(static_cast<DWORD>(tempPath.size()), tempPath.data());
             if (tempLength > 0 && tempLength < tempPath.size())
             {
-                return (std::filesystem::path(tempPath.data()) / L"D3D12LookDevPTWinUI").wstring();
+                return (std::filesystem::path(tempPath.data()) / L"D3D12LookDevPTwithAI").wstring();
             }
             return L".";
         }
-        return (std::filesystem::path(appData.data()) / L"D3D12LookDevPTWinUI").wstring();
+        return (std::filesystem::path(appData.data()) / L"D3D12LookDevPTwithAI").wstring();
     }
 
     std::wstring McpSettingsPath()
@@ -1180,7 +1180,7 @@ namespace
             return;
         }
 
-        std::ofstream file(std::filesystem::path(tempPath.data()) / L"D3D12LookDevPTWinUI.log", std::ios::app | std::ios::binary);
+        std::ofstream file(std::filesystem::path(tempPath.data()) / L"D3D12LookDevPTwithAI.log", std::ios::app | std::ios::binary);
         if (file)
         {
             file << message << "\n";
@@ -4855,7 +4855,7 @@ mcp::ResourceResult D3D12PathTracingBackend::ReadMcpResource(const std::string& 
     {
         result.ok = true;
         result.mimeType = "application/json";
-        result.text = "{\"application\":{\"name\":\"D3D12LookDevPTWinUI\",\"version\":\"" +
+        result.text = "{\"application\":{\"name\":\"D3D12LookDevPTwithAI\",\"version\":\"" +
             std::string(mcp::ApplicationVersion) + "\"},\"contractVersion\":\"" + mcp::ContractVersion +
             R"json(","features":{"imageArtifacts":true,"structuredContent":true,"resourceTemplates":true,"prompts":true,"resourceSubscriptions":true,"sceneAudit":true,"viewportCapture":true,"asyncReview":true,"comparisonHeatmap":true,"surfaceProbe":true,"pairing":true,"checkpoints":true,"benchmarks":true,"gltfMaterialExtensionsV1":true,"textureResidencyV1":true},"artifactLimits":{"maxImageBytes":16777216,"maxImagesPerToolCall":8,"maxTurnBytes":67108864,"maxDecodedPixels":64000000}})json";
         return result;

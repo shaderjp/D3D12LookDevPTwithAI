@@ -1,6 +1,6 @@
 # MCP サーバー
 
-D3D12LookDevPTWinUI には、実行中の renderer を VS Code、Codex、独自 JSON-RPC client などから参照・操作するための local MCP server が入っています。WinUI editor と同じ validation-oriented renderer-command layer を経由します。
+D3D12LookDevPTwithAI には、実行中の renderer を VS Code、Codex、独自 JSON-RPC client などから参照・操作するための local MCP server が入っています。WinUI editor と同じ validation-oriented renderer-command layer を経由します。
 
 English documentation: [MCP Server](mcp.md)
 
@@ -30,7 +30,7 @@ client 側では先に validation を通し、mutation tool を適用し、そ�
 認証mode、credential参照、その他のMCP設定は以下に保存されます。
 
 ```text
-%APPDATA%\D3D12LookDevPTWinUI\settings.json
+%APPDATA%\D3D12LookDevPTwithAI\settings.json
 ```
 
 primary bearer token本体はWindows Credential Managerへ保存し、paired client記録には
@@ -67,7 +67,7 @@ Request timeout と access mode は application-local な server 設定であり
 server は default disabled です。command line から明示的に起動することもできます。
 
 ```powershell
-.\Bin\x64\Debug\D3D12LookDevPTWinUI.exe --mcp-server --mcp-port 8777 --mcp-auth bearer_token --mcp-token <token> --mcp-access confirm_mutations
+.\Bin\x64\Debug\D3D12LookDevPTwithAI.exe --mcp-server --mcp-port 8777 --mcp-auth bearer_token --mcp-token <token> --mcp-access confirm_mutations
 ```
 
 Access mode:
@@ -84,7 +84,7 @@ Authentication mode:
 command line から認証なしで起動する例:
 
 ```powershell
-.\Bin\x64\Debug\D3D12LookDevPTWinUI.exe --mcp-server --mcp-port 8777 --mcp-auth none --mcp-access confirm_mutations
+.\Bin\x64\Debug\D3D12LookDevPTwithAI.exe --mcp-server --mcp-port 8777 --mcp-auth none --mcp-access confirm_mutations
 ```
 
 mutation queue は renderer-thread の safe point で処理され、同時に保持できる request は 16 件までです。HTTP server thread から D3D12 / WinUI state を直接触りません。
@@ -123,7 +123,7 @@ VS Code の MCP server 設定は、workspace の `.vscode/mcp.json` または us
     {
       "type": "promptString",
       "id": "lookdevpt-token",
-      "description": "D3D12LookDevPTWinUI MCP bearer token",
+      "description": "D3D12LookDevPTwithAI MCP bearer token",
       "password": true
     }
   ],
@@ -156,11 +156,11 @@ VS Code の MCP server 設定は、workspace の `.vscode/mcp.json` または us
 }
 ```
 
-編集後は VS Code の `MCP: List Servers` から server entry を start / restart してください。D3D12LookDevPTWinUI を rebuild して tool list が変わった場合は `MCP: Reset Cached Tools` を実行してください。
+編集後は VS Code の `MCP: List Servers` から server entry を start / restart してください。D3D12LookDevPTwithAI を rebuild して tool list が変わった場合は `MCP: Reset Cached Tools` を実行してください。
 
 注意:
 
-- VS Code 側の server entry を start する前に、D3D12LookDevPTWinUI 本体と MCP server を起動しておきます。
+- VS Code 側の server entry を start する前に、D3D12LookDevPTwithAI 本体と MCP server を起動しておきます。
 - `bearer_token` 利用時に WinUI の MCP panel で token を regenerate した場合は、VS Code 側の MCP server entry を restart し、新しい token を入力します。
 - このserverはHTTP POST JSON-RPCとPOST-based subscription SSEに対応します。
   standalone GET SSE transportだけを要求するclientでは利用できません。
@@ -435,7 +435,7 @@ Bistro の読み込み:
   "params": {
     "name": "lookdevpt.set_scene",
     "arguments": {
-      "scenePath": "C:\\Projects\\D3D12LookDevPTWinUI\\Bistro_v5_2\\BistroExterior.fbx"
+      "scenePath": "C:\\Projects\\D3D12LookDevPTwithAI\\Bistro_v5_2\\BistroExterior.fbx"
     }
   }
 }
@@ -737,7 +737,7 @@ dialog なしで project 保存:
   "params": {
     "name": "lookdevpt.save_project_as",
     "arguments": {
-      "path": "C:\\Projects\\D3D12LookDevPTWinUI\\projects\\bistro.lookdevpt.json"
+      "path": "C:\\Projects\\D3D12LookDevPTwithAI\\projects\\bistro.lookdevpt.json"
     }
   }
 }

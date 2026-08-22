@@ -1,9 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <Window
-    x:Class="D3D12LookDevPTWinUI.MainWindow"
+    x:Class="D3D12LookDevPTwithAI.MainWindow"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-    Title="D3D12LookDevPTWinUI"
+    Title="D3D12LookDevPTwithAI"
     Closed="OnClosed">
 
     <Grid x:Name="EditorRoot"

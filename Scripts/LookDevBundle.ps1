@@ -143,7 +143,7 @@ if ($Command -eq 'Create') {
             schemaVersion = 1
             mode = $BundleMode
             entryProject = "project/$entryName"
-            application = @{ name='D3D12LookDevPTWinUI'; minimumContract='1.0' }
+            application = @{ name='D3D12LookDevPTwithAI'; minimumContract='1.0' }
             projectSchemaVersion = 3
             createdAtUtc = [DateTimeOffset]::UtcNow.ToString('O')
             files = $records

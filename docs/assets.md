@@ -2,7 +2,7 @@
 
 Japanese documentation: [Asset setup and runtime behavior](assets.ja.md)
 
-D3D12LookDevPTWinUI does not distribute large scene assets, HDRIs, or high-resolution texture sets in this repository. Keep test content beside the solution and out of git. Documentation screenshots may show local Bistro assets, but the original scene data is not part of the repository.
+D3D12LookDevPTwithAI does not distribute large scene assets, HDRIs, or high-resolution texture sets in this repository. Keep test content beside the solution and out of git. Documentation screenshots may show local Bistro assets, but the original scene data is not part of the repository.
 
 ## Recommended Bistro Layout
 
@@ -11,7 +11,7 @@ For the required exterior/interior validation scenes, download Amazon Lumberyard
 Extract it next to the solution with this layout:
 
 ```text
-D3D12LookDevPTWinUI/
+D3D12LookDevPTwithAI/
   Bistro_v5_2/
     BistroExterior.fbx
     BistroInterior.fbx
@@ -35,12 +35,12 @@ The strict check requires `BistroExterior.fbx` and `Textures/`. The interior FBX
 Launch a scene and environment directly:
 
 ```powershell
-.\Bin\x64\Release\D3D12LookDevPTWinUI.exe `
+.\Bin\x64\Release\D3D12LookDevPTwithAI.exe `
   --scene .\Bistro_v5_2\BistroExterior.fbx `
   --environment .\Bistro_v5_2\san_giuseppe_bridge_4k.hdr
 ```
 
-Use `Project > Open Scene...` and `Project > Open Environment...` for interactive loading. `Project > Save Startup Settings` writes `%APPDATA%\D3D12LookDevPTWinUI\startup.json`; command-line `--scene` and `--environment` values override startup settings for that launch.
+Use `Project > Open Scene...` and `Project > Open Environment...` for interactive loading. `Project > Save Startup Settings` writes `%APPDATA%\D3D12LookDevPTwithAI\startup.json`; command-line `--scene` and `--environment` values override startup settings for that launch.
 
 Example startup file:
 
@@ -48,7 +48,7 @@ Example startup file:
 {
   "version": 1,
   "enabled": true,
-  "baseDirectory": "C:/Projects/D3D12LookDevPTWinUI",
+  "baseDirectory": "C:/Projects/D3D12LookDevPTwithAI",
   "scenePath": "Bistro_v5_2/BistroExterior.fbx",
   "environmentPath": "Bistro_v5_2/san_giuseppe_bridge_4k.hdr",
   "environmentEnabled": true
@@ -125,7 +125,7 @@ benchmarks/bistro_interior_stability.camera.json
 The paired interactive/reference project files are under `projects/`. A deterministic performance run can be started with:
 
 ```powershell
-.\Bin\x64\Release\D3D12LookDevPTWinUI.exe `
+.\Bin\x64\Release\D3D12LookDevPTwithAI.exe `
   --project .\projects\benchmark_interactive.lookdevpt.json `
   --benchmark --benchmark-kind performance `
   --camera-path .\benchmarks\bistro_exterior_stability.camera.json `

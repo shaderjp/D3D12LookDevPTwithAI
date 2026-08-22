@@ -44,7 +44,7 @@ if (-not $Force -and $installed.Count -gt 0) {
     return
 }
 
-$downloadDirectory = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'D3D12LookDevSuite\RuntimeInstaller'
+$downloadDirectory = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'D3D12LookDevPTwithAI\RuntimeInstaller'
 New-Item -ItemType Directory -Path $downloadDirectory -Force | Out-Null
 $downloadPath = Join-Path $downloadDirectory ("{0}-{1}" -f ([guid]::NewGuid().ToString('N')), [string]$installer.fileName)
 try {

@@ -19,7 +19,7 @@ $chatData = [IO.Path]::GetFullPath((Join-Path ([Environment]::GetFolderPath('Loc
 $allowedChatRoots = @('Models','Runtimes') | ForEach-Object {
     [IO.Path]::GetFullPath((Join-Path $chatData $_)).TrimEnd('\')
 }
-$d3dData = [IO.Path]::GetFullPath((Join-Path ([Environment]::GetFolderPath('ApplicationData')) 'D3D12LookDevPTWinUI')).TrimEnd('\') + '\'
+$d3dData = [IO.Path]::GetFullPath((Join-Path ([Environment]::GetFolderPath('ApplicationData')) 'D3D12LookDevPTwithAI')).TrimEnd('\') + '\'
 $artifactNames = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
 foreach ($artifact in $Artifacts) {
     $source = [System.IO.Path]::GetFullPath($artifact)

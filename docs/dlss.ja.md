@@ -2,7 +2,7 @@
 
 English documentation: [Optional DLSS Ray Reconstruction](dlss.md)
 
-D3D12LookDevPTWinUI には optional の Streamline / DLSS Ray Reconstruction backend があります。Streamline の dynamic load、adapter/driver 検証、render/output 解像度の分離、guide resource の生成と frame tag、renderer の D3D12 command list 内での `slEvaluateFeature` まで実装しています。
+D3D12LookDevPTwithAI には optional の Streamline / DLSS Ray Reconstruction backend があります。Streamline の dynamic load、adapter/driver 検証、render/output 解像度の分離、guide resource の生成と frame tag、renderer の D3D12 command list 内での `slEvaluateFeature` まで実装しています。
 
 DLSS-RR は RTX 4070 / 1080p60 の ReSTIR GI+DI gate とは独立です。binary 不足、非対応 adapter/driver、application identity 不足、runtime evaluation failure の場合は、Streamline を process-load dependency にせず native reconstruction を使用します。
 
@@ -49,13 +49,13 @@ strict setup check は runtime DLL 不足を failure にします。
 DLSS header support は default で有効です。
 
 ```powershell
-msbuild .\D3D12LookDevPTWinUI.sln /m /p:Configuration=Release /p:Platform=x64
+msbuild .\D3D12LookDevPTwithAI.sln /m /p:Configuration=Release /p:Platform=x64
 ```
 
 dependency-free path を検証する場合は無効化します。
 
 ```powershell
-msbuild .\D3D12LookDevPTWinUI.sln /m /p:Configuration=Release /p:Platform=x64 /p:EnableDLSS=false
+msbuild .\D3D12LookDevPTwithAI.sln /m /p:Configuration=Release /p:Platform=x64 /p:EnableDLSS=false
 ```
 
 `EnableDLSS=false` では Streamline/DLSS include path と optional runtime copy を使わず、status は `compiled=false` を返し、`dlss_rr` は native internal reconstruction へ fallback します。

@@ -186,7 +186,7 @@ $CMakeExe = Get-CMakeExecutable
 $cmakeGeneratorArgs = Get-CMakeGeneratorArgs
 $CMakeGeneratorName = $cmakeGeneratorArgs[1]
 
-Invoke-WithMutex -Name "Local\D3D12LookDevPTWinUI-DirectXTex-$Configuration" -Body {
+Invoke-WithMutex -Name "Local\D3D12LookDevPTwithAI-DirectXTex-$Configuration" -Body {
     $directXTexLib = Join-Path $DirectXTexLibDir 'DirectXTex.lib'
     if (!(Test-Path $directXTexLib)) {
         & $MSBuildPath $DirectXTexProject /p:Platform=x64 /p:Configuration=$Configuration /v:minimal
@@ -196,7 +196,7 @@ Invoke-WithMutex -Name "Local\D3D12LookDevPTWinUI-DirectXTex-$Configuration" -Bo
     }
 }
 
-Invoke-WithMutex -Name "Local\D3D12LookDevPTWinUI-Assimp-$Configuration" -Body {
+Invoke-WithMutex -Name "Local\D3D12LookDevPTwithAI-Assimp-$Configuration" -Body {
     $cachePath = Join-Path $AssimpBuildRoot 'CMakeCache.txt'
     $solutionPath = Join-Path $AssimpBuildRoot 'Assimp.sln'
     $assimpNormalized = Join-Path $AssimpLibDir $AssimpLibName
@@ -236,7 +236,7 @@ Invoke-WithMutex -Name "Local\D3D12LookDevPTWinUI-Assimp-$Configuration" -Body {
 
 $buildNrd = $EnableNRD -eq "1" -or $EnableNRD -ieq "true"
 if ($buildNrd) {
-    Invoke-WithMutex -Name "Local\D3D12LookDevPTWinUI-NRD-$Configuration" -Body {
+    Invoke-WithMutex -Name "Local\D3D12LookDevPTwithAI-NRD-$Configuration" -Body {
         if (!$NrdRoot -or !(Test-Path -LiteralPath (Join-Path $NrdRoot 'Include\NRD.h') -PathType Leaf)) {
             throw "NRD is enabled, but ThirdParty\NRD\Include\NRD.h was not found. Run git submodule update --init --recursive or build with /p:EnableNRD=false."
         }
@@ -275,7 +275,7 @@ if ($buildNrd) {
 
 $buildRtxdi = $EnableRTXDI -eq "1" -or $EnableRTXDI -ieq "true"
 if ($buildRtxdi) {
-    Invoke-WithMutex -Name "Local\D3D12LookDevPTWinUI-RTXDI-$Configuration" -Body {
+    Invoke-WithMutex -Name "Local\D3D12LookDevPTwithAI-RTXDI-$Configuration" -Body {
         $rtxdiCmakeRoot = Join-Path $PSScriptRoot 'CMake\RtxdiRuntime'
         $rtxdiHeader = Join-Path $RtxdiRuntimeRoot 'Include\Rtxdi\RtxdiParameters.h'
         $rtxdiSource = Join-Path $RtxdiRuntimeRoot 'Source\ReSTIRDI.cpp'
@@ -286,7 +286,7 @@ if ($buildRtxdi) {
             throw "RTXDI build was enabled without the pinned v3.0.0 runtime sources under ThirdParty\RTXDI\Libraries\Rtxdi."
         }
         if (!(Test-Path -LiteralPath $rtxdiWrapperCmake -PathType Leaf)) {
-            throw "The D3D12LookDevPTWinUI RTXDI CMake wrapper is missing: '$rtxdiWrapperCmake'."
+            throw "The D3D12LookDevPTwithAI RTXDI CMake wrapper is missing: '$rtxdiWrapperCmake'."
         }
         if (!$RtxdiBuildRoot -or !$RtxdiLibDir) {
             throw "RTXDI build paths were not provided."

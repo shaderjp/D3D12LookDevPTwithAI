@@ -1,8 +1,8 @@
-# D3D12LookDevPTWinUI
+# D3D12LookDevPTwithAI
 
 [English](README.md)
 
-D3D12LookDevPTWinUI は Direct3D 12 / DXR LookDev パストレーサーの
+D3D12LookDevPTwithAI は Direct3D 12 / DXR LookDev パストレーサーの
 WinUI 3 版です。D3D12LookDevPT の renderer、shader pipeline、project schema、
 CLI、benchmark 出力、MCP、optional backend を維持し、ImGui と Win32
 application shell を C++/WinRT / WinUI 3 に置き換えています。
@@ -62,12 +62,12 @@ Windows App Runtime redistributable をインストールしてください。
 ThirdParty を固定 revision で取得するため、recursive clone します。
 
 ```powershell
-git clone --recursive <repository-url> D3D12LookDevPTWinUI
-cd D3D12LookDevPTWinUI
+git clone --recursive <repository-url> D3D12LookDevPTwithAI
+cd D3D12LookDevPTwithAI
 git submodule update --init --recursive
 ```
 
-`D3D12LookDevPTWinUI.sln` を開き、`Debug|x64` または `Release|x64` を選択し、
+`D3D12LookDevPTwithAI.sln` を開き、`Debug|x64` または `Release|x64` を選択し、
 NuGet restore 後に build します。Local Windows Debugger 構成済みなので、F5
 で unpackaged WinUI executable を起動できます。
 
@@ -75,14 +75,14 @@ command line からの build 例です。
 
 ```powershell
 $msbuild = "C:\Program Files\Microsoft Visual Studio\18\Insiders\MSBuild\Current\Bin\amd64\MSBuild.exe"
-& $msbuild .\D3D12LookDevPTWinUI.sln /m /restore /p:Configuration=Debug /p:Platform=x64
+& $msbuild .\D3D12LookDevPTwithAI.sln /m /restore /p:Configuration=Debug /p:Platform=x64
 ```
 
 repository既定backendは`DLSS=false`、`NRD=true`、`RTXDI=false`です。各backendは
 個別に上書きできます。
 
 ```powershell
-& $msbuild .\D3D12LookDevPTWinUI.sln /m /p:Configuration=Release /p:Platform=x64 `
+& $msbuild .\D3D12LookDevPTwithAI.sln /m /p:Configuration=Release /p:Platform=x64 `
   /p:EnableDLSS=false /p:EnableNRD=false /p:EnableRTXDI=false
 ```
 
@@ -112,7 +112,7 @@ StudioとWinGet Configurationの前提を定義します。bootstrapは冪等で
 
 ```powershell
 .\Scripts\BuildPortableSuite.ps1 -LocalMcpRepository ..\LocalMCPChatClient `
-  -OutputDirectory .\artifacts\D3D12LookDevSuite-0.2.0-beta.1-win-x64
+  -OutputDirectory .\artifacts\D3D12LookDevPTwithAI-0.2.0-beta.1-win-x64
 ```
 
 ZIPにはframework-dependentなD3D12 application、self-containedなLocalMCPChatClient、
@@ -132,7 +132,7 @@ SPDX SBOM、version固定manifest、全fileとarchiveのSHA-256が入ります�
 preview cube で editor を起動します。
 
 ```powershell
-.\Bin\x64\Debug\D3D12LookDevPTWinUI.exe
+.\Bin\x64\Debug\D3D12LookDevPTwithAI.exe
 ```
 
 Project menu から PBRT / glTF / GLB / FBX / OBJ scene、environment、schema v2
@@ -140,11 +140,11 @@ project を開けます。移植元と
 同じ CLI path option も使用できます。
 
 ```powershell
-.\Bin\x64\Debug\D3D12LookDevPTWinUI.exe `
+.\Bin\x64\Debug\D3D12LookDevPTwithAI.exe `
   --scene .\Bistro_v5_2\BistroExterior.fbx `
   --environment .\Bistro_v5_2\san_giuseppe_bridge_4k.hdr
 
-.\Bin\x64\Debug\D3D12LookDevPTWinUI.exe `
+.\Bin\x64\Debug\D3D12LookDevPTwithAI.exe `
   --project .\projects\benchmark_interactive.lookdevpt.json
 ```
 
@@ -179,7 +179,7 @@ Show All、Reset Default Layout、F10 Render Only、および System / Light / D
 theme を操作できます。幅、選択 tab、表示状態、選択した theme は次へ保存されます。
 
 ```text
-%APPDATA%\D3D12LookDevPTWinUI\ui.json
+%APPDATA%\D3D12LookDevPTwithAI\ui.json
 ```
 
 display resolution は window size と独立しています。720p / 1080p / 4K の変更時は
@@ -226,11 +226,11 @@ project の load に失敗しても、現在の scene を維持します。
 WinUI 版の user data は元アプリと競合しない専用 path に保存します。
 
 ```text
-%APPDATA%\D3D12LookDevPTWinUI\settings.json
-%APPDATA%\D3D12LookDevPTWinUI\startup.json
-%APPDATA%\D3D12LookDevPTWinUI\materials\
-%APPDATA%\D3D12LookDevPTWinUI\ui.json
-%TEMP%\D3D12LookDevPTWinUI.log
+%APPDATA%\D3D12LookDevPTwithAI\settings.json
+%APPDATA%\D3D12LookDevPTwithAI\startup.json
+%APPDATA%\D3D12LookDevPTwithAI\materials\
+%APPDATA%\D3D12LookDevPTwithAI\ui.json
+%TEMP%\D3D12LookDevPTwithAI.log
 ```
 
 project path は absolute または `baseDirectory` 基準の relative path を
@@ -258,7 +258,7 @@ MCPと同じOrigin検証を適用します。
 CLI から開始する例です。
 
 ```powershell
-.\Bin\x64\Debug\D3D12LookDevPTWinUI.exe `
+.\Bin\x64\Debug\D3D12LookDevPTwithAI.exe `
   --mcp-server --mcp-port 8777 --mcp-token <token> `
   --mcp-access confirm_mutations
 ```
@@ -271,7 +271,7 @@ tool、resource、prompt、client 設定は [MCP integration](docs/mcp.ja.md) �
 benchmark CLI と JSON field 名は変更していません。
 
 ```powershell
-.\Bin\x64\Release\D3D12LookDevPTWinUI.exe `
+.\Bin\x64\Release\D3D12LookDevPTwithAI.exe `
   --project .\projects\benchmark_interactive.lookdevpt.json `
   --benchmark --benchmark-kind performance `
   --camera-path .\benchmarks\bistro_exterior_stability.camera.json `

@@ -2,7 +2,7 @@
 
 Japanese documentation: [DLSS Ray Reconstruction](dlss.ja.md)
 
-D3D12LookDevPTWinUI contains an optional Streamline/DLSS Ray Reconstruction backend. It dynamically loads Streamline, validates the adapter and driver, separates render and output resolutions, prepares the required guide resources, tags them for the current frame, and calls `slEvaluateFeature` on the renderer's D3D12 command list.
+D3D12LookDevPTwithAI contains an optional Streamline/DLSS Ray Reconstruction backend. It dynamically loads Streamline, validates the adapter and driver, separates render and output resolutions, prepares the required guide resources, tags them for the current frame, and calls `slEvaluateFeature` on the renderer's D3D12 command list.
 
 DLSS-RR remains independent of the RTX 4070 / 1080p60 ReSTIR GI+DI gate. Missing binaries, an unsupported adapter/driver, an absent application identity, or a runtime evaluation failure select native reconstruction without making Streamline a process-load dependency.
 
@@ -49,13 +49,13 @@ The setup checker validates files; strict DLSS validation treats missing runtime
 DLSS header support is enabled by default:
 
 ```powershell
-msbuild .\D3D12LookDevPTWinUI.sln /m /p:Configuration=Release /p:Platform=x64
+msbuild .\D3D12LookDevPTwithAI.sln /m /p:Configuration=Release /p:Platform=x64
 ```
 
 Disable it when validating the dependency-free path:
 
 ```powershell
-msbuild .\D3D12LookDevPTWinUI.sln /m /p:Configuration=Release /p:Platform=x64 /p:EnableDLSS=false
+msbuild .\D3D12LookDevPTwithAI.sln /m /p:Configuration=Release /p:Platform=x64 /p:EnableDLSS=false
 ```
 
 With `EnableDLSS=false`, no Streamline/DLSS include path or optional runtime copy is used, status reports `compiled=false`, and `dlss_rr` falls back to native internal reconstruction.

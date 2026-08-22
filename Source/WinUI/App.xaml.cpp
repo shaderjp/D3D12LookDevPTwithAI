@@ -2,7 +2,7 @@
 #include "App.xaml.h"
 #include "MainWindow.xaml.h"
 
-namespace winrt::D3D12LookDevPTWinUI::implementation
+namespace winrt::D3D12LookDevPTwithAI::implementation
 {
 App::App()
 {

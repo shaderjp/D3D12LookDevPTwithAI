@@ -2,7 +2,7 @@
 
 English documentation: [Asset Setup And Runtime Behavior](assets.md)
 
-D3D12LookDevPTWinUI は大きな scene asset、HDRI、高解像度 texture set を repository で配布しません。test content は solution の横へ置き、git の対象外にしてください。documentation screenshot に local の Bistro asset が写る場合がありますが、元の scene data は repository に含みません。
+D3D12LookDevPTwithAI は大きな scene asset、HDRI、高解像度 texture set を repository で配布しません。test content は solution の横へ置き、git の対象外にしてください。documentation screenshot に local の Bistro asset が写る場合がありますが、元の scene data は repository に含みません。
 
 ## Bistro の推奨配置
 
@@ -11,7 +11,7 @@ D3D12LookDevPTWinUI は大きな scene asset、HDRI、高解像度 texture set �
 solution の横へ次の layout で展開します。
 
 ```text
-D3D12LookDevPTWinUI/
+D3D12LookDevPTwithAI/
   Bistro_v5_2/
     BistroExterior.fbx
     BistroInterior.fbx
@@ -35,12 +35,12 @@ strict check が必須にするのは `BistroExterior.fbx` と `Textures/` で�
 scene と environment を直接指定して起動できます。
 
 ```powershell
-.\Bin\x64\Release\D3D12LookDevPTWinUI.exe `
+.\Bin\x64\Release\D3D12LookDevPTwithAI.exe `
   --scene .\Bistro_v5_2\BistroExterior.fbx `
   --environment .\Bistro_v5_2\san_giuseppe_bridge_4k.hdr
 ```
 
-interactive load には `Project > Open Scene...` と `Project > Open Environment...` を使います。`Project > Save Startup Settings` は `%APPDATA%\D3D12LookDevPTWinUI\startup.json` を書きます。command-line の `--scene` / `--environment` はその起動に限って startup setting を上書きします。
+interactive load には `Project > Open Scene...` と `Project > Open Environment...` を使います。`Project > Save Startup Settings` は `%APPDATA%\D3D12LookDevPTwithAI\startup.json` を書きます。command-line の `--scene` / `--environment` はその起動に限って startup setting を上書きします。
 
 startup file 例:
 
@@ -48,7 +48,7 @@ startup file 例:
 {
   "version": 1,
   "enabled": true,
-  "baseDirectory": "C:/Projects/D3D12LookDevPTWinUI",
+  "baseDirectory": "C:/Projects/D3D12LookDevPTwithAI",
   "scenePath": "Bistro_v5_2/BistroExterior.fbx",
   "environmentPath": "Bistro_v5_2/san_giuseppe_bridge_4k.hdr",
   "environmentEnabled": true
@@ -125,7 +125,7 @@ benchmarks/bistro_interior_stability.camera.json
 対応する interactive / reference project file は `projects/` にあります。deterministic performance run の例:
 
 ```powershell
-.\Bin\x64\Release\D3D12LookDevPTWinUI.exe `
+.\Bin\x64\Release\D3D12LookDevPTwithAI.exe `
   --project .\projects\benchmark_interactive.lookdevpt.json `
   --benchmark --benchmark-kind performance `
   --camera-path .\benchmarks\bistro_exterior_stability.camera.json `

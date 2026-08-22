@@ -2,7 +2,7 @@
 
 ## 目的
 
-`D3D12LookDevPTWinUI` のMCPサーバーを、`Content-Length` 固定のクライアントだけでなく、標準的なHTTP/1.1クライアントおよび `ModelContextProtocol` C# SDK 2.0.0から直接接続できる実装へ修正する。
+`D3D12LookDevPTwithAI` のMCPサーバーを、`Content-Length` 固定のクライアントだけでなく、標準的なHTTP/1.1クライアントおよび `ModelContextProtocol` C# SDK 2.0.0から直接接続できる実装へ修正する。
 
 修正後は、クライアント側でHTTP本文を事前バッファする回避策を有効にしなくても、次の処理が成功すること。
 
@@ -192,7 +192,7 @@ Bearer tokenはJSONへ直接書かず、既存どおりWindows資格情報マネ
 
 ## Visual Studioプロジェクト要件
 
-新しい `.cpp`、`.h`、build scriptをメイン `.vcxproj` のproject-visible itemとして追加する場合は、`D3D12LookDevPTWinUI.vcxproj` と `D3D12LookDevPTWinUI.vcxproj.filters` を同時に更新する。
+新しい `.cpp`、`.h`、build scriptをメイン `.vcxproj` のproject-visible itemとして追加する場合は、`D3D12LookDevPTwithAI.vcxproj` と `D3D12LookDevPTwithAI.vcxproj.filters` を同時に更新する。
 
 - HTTP/MCP実装: `Source Files\\Services` または `Header Files\\Services`
 - build/test script: `Build Scripts`

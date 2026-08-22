@@ -1,8 +1,8 @@
-# D3D12LookDevPTWinUI レンダリングパイプライン学習ガイド
+# D3D12LookDevPTwithAI レンダリングパイプライン学習ガイド
 
 English documentation: [Rendering Pipeline Learning Guide](rendering-pipeline.md)
 
-この文書は、リアルタイムレンダリングやパストレーシングを学ぶ人が、D3D12LookDevPTWinUI の「1 frame がどのように画像になるか」を実装と対応付けて読めるようにしたガイドです。アルゴリズムの一般論だけでなく、現在の repository に実装されている処理、optional backend、fallback、まだ実装されていない機能を区別して説明します。
+この文書は、リアルタイムレンダリングやパストレーシングを学ぶ人が、D3D12LookDevPTwithAI の「1 frame がどのように画像になるか」を実装と対応付けて読めるようにしたガイドです。アルゴリズムの一般論だけでなく、現在の repository に実装されている処理、optional backend、fallback、まだ実装されていない機能を区別して説明します。
 
 最初に全体像を読み、次に興味のある段階を Debug View で観察し、最後にリンクした shader を読む順番がおすすめです。
 
@@ -11,7 +11,7 @@ English documentation: [Rendering Pipeline Learning Guide](rendering-pipeline.md
 
 ## 1. 2種類の出力目標
 
-D3D12LookDevPTWinUI は、目的の違う2つの描画経路を分けています。
+D3D12LookDevPTwithAI は、目的の違う2つの描画経路を分けています。
 
 | 経路 | 目的 | 主な考え方 |
 |---|---|---|

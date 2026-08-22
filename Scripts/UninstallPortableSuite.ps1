@@ -1,13 +1,13 @@
 [CmdletBinding(SupportsShouldProcess, ConfirmImpact='High')]
 param(
-    [string]$InstallDirectory = (Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'Programs\D3D12LookDevSuite'),
+    [string]$InstallDirectory = (Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'Programs\D3D12LookDevPTwithAI'),
     [switch]$RemoveLocalApplicationData
 )
 
 $ErrorActionPreference = 'Stop'
 $install = [IO.Path]::GetFullPath($InstallDirectory)
 $programRoot = [IO.Path]::GetFullPath((Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'Programs')).TrimEnd('\') + '\'
-if (-not $install.StartsWith($programRoot, [StringComparison]::OrdinalIgnoreCase) -or [IO.Path]::GetFileName($install) -ne 'D3D12LookDevSuite') {
+if (-not $install.StartsWith($programRoot, [StringComparison]::OrdinalIgnoreCase) -or [IO.Path]::GetFileName($install) -ne 'D3D12LookDevPTwithAI') {
     throw "Refusing to remove a directory outside the expected per-user suite target: $install"
 }
 if ((Test-Path -LiteralPath $install) -and $PSCmdlet.ShouldProcess($install, 'Remove portable application files')) {
@@ -17,7 +17,7 @@ if ((Test-Path -LiteralPath $install) -and $PSCmdlet.ShouldProcess($install, 'Re
 if ($RemoveLocalApplicationData) {
     $dataTargets = @(
         (Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'LocalMCPChatClient'),
-        (Join-Path ([Environment]::GetFolderPath('ApplicationData')) 'D3D12LookDevPTWinUI')
+        (Join-Path ([Environment]::GetFolderPath('ApplicationData')) 'D3D12LookDevPTwithAI')
     )
     foreach ($target in $dataTargets) {
         $resolved = [IO.Path]::GetFullPath($target)

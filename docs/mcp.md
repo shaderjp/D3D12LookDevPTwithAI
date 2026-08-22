@@ -1,6 +1,6 @@
 # MCP Server
 
-D3D12LookDevPTWinUI includes a local MCP server for inspecting and controlling the running renderer from tools such as VS Code, Codex, or custom JSON-RPC clients. The server and WinUI editor share the same validation-oriented renderer-command layer.
+D3D12LookDevPTwithAI includes a local MCP server for inspecting and controlling the running renderer from tools such as VS Code, Codex, or custom JSON-RPC clients. The server and WinUI editor share the same validation-oriented renderer-command layer.
 
 Japanese documentation: [MCP サーバー](mcp.ja.md)
 
@@ -32,7 +32,7 @@ The authentication mode, credential reference, and other MCP settings are
 stored in:
 
 ```text
-%APPDATA%\D3D12LookDevPTWinUI\settings.json
+%APPDATA%\D3D12LookDevPTwithAI\settings.json
 ```
 
 The primary bearer token itself is stored in Windows Credential Manager;
@@ -71,7 +71,7 @@ and the `Authorization` header.
 The server is disabled by default. It can also be started from the command line:
 
 ```powershell
-.\Bin\x64\Debug\D3D12LookDevPTWinUI.exe --mcp-server --mcp-port 8777 --mcp-auth bearer_token --mcp-token <token> --mcp-access confirm_mutations
+.\Bin\x64\Debug\D3D12LookDevPTwithAI.exe --mcp-server --mcp-port 8777 --mcp-auth bearer_token --mcp-token <token> --mcp-access confirm_mutations
 ```
 
 Access modes:
@@ -88,7 +88,7 @@ Authentication modes:
 To start without authentication from the command line:
 
 ```powershell
-.\Bin\x64\Debug\D3D12LookDevPTWinUI.exe --mcp-server --mcp-port 8777 --mcp-auth none --mcp-access confirm_mutations
+.\Bin\x64\Debug\D3D12LookDevPTwithAI.exe --mcp-server --mcp-port 8777 --mcp-auth none --mcp-access confirm_mutations
 ```
 
 The mutation queue is processed at a renderer-thread safe point and has a limit of 16 queued requests. Mutations never touch D3D12 or WinUI state directly from the HTTP server thread.
@@ -129,7 +129,7 @@ Example `.vscode/mcp.json`:
     {
       "type": "promptString",
       "id": "lookdevpt-token",
-      "description": "D3D12LookDevPTWinUI MCP bearer token",
+      "description": "D3D12LookDevPTwithAI MCP bearer token",
       "password": true
     }
   ],
@@ -163,11 +163,11 @@ header:
 }
 ```
 
-Use `MCP: List Servers` to start or restart the server entry after editing the file. Use `MCP: Reset Cached Tools` if the tool list changes after rebuilding D3D12LookDevPTWinUI.
+Use `MCP: List Servers` to start or restart the server entry after editing the file. Use `MCP: Reset Cached Tools` if the tool list changes after rebuilding D3D12LookDevPTwithAI.
 
 Notes:
 
-- Start D3D12LookDevPTWinUI and its MCP server before starting the VS Code MCP entry.
+- Start D3D12LookDevPTwithAI and its MCP server before starting the VS Code MCP entry.
 - With `bearer_token`, if the token is regenerated in the WinUI MCP panel, restart the VS Code MCP server entry and enter the new token.
 - This server supports HTTP POST JSON-RPC and POST-based subscription SSE.
   Clients that require a standalone GET SSE transport will not work.
@@ -449,7 +449,7 @@ Load Bistro:
   "params": {
     "name": "lookdevpt.set_scene",
     "arguments": {
-      "scenePath": "C:\\Projects\\D3D12LookDevPTWinUI\\Bistro_v5_2\\BistroExterior.fbx"
+      "scenePath": "C:\\Projects\\D3D12LookDevPTwithAI\\Bistro_v5_2\\BistroExterior.fbx"
     }
   }
 }
@@ -751,7 +751,7 @@ Save a project without a dialog:
   "params": {
     "name": "lookdevpt.save_project_as",
     "arguments": {
-      "path": "C:\\Projects\\D3D12LookDevPTWinUI\\projects\\bistro.lookdevpt.json"
+      "path": "C:\\Projects\\D3D12LookDevPTwithAI\\projects\\bistro.lookdevpt.json"
     }
   }
 }

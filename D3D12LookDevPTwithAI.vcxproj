@@ -14,11 +14,11 @@
     <VCProjectVersion>18.0</VCProjectVersion>
     <Keyword>Win32Proj</Keyword>
     <ProjectGuid>{7A1DDF3B-1E0A-4DD8-A013-CF56A1048B91}</ProjectGuid>
-    <RootNamespace>D3D12LookDevPTWinUI</RootNamespace>
+    <RootNamespace>D3D12LookDevPTwithAI</RootNamespace>
     <WindowsTargetPlatformVersion>10.0.26100.0</WindowsTargetPlatformVersion>
     <WindowsTargetPlatformMinVersion>10.0.19041.0</WindowsTargetPlatformMinVersion>
-    <ProjectName>D3D12LookDevPTWinUI</ProjectName>
-    <TargetName>D3D12LookDevPTWinUI</TargetName>
+    <ProjectName>D3D12LookDevPTwithAI</ProjectName>
+    <TargetName>D3D12LookDevPTwithAI</TargetName>
     <DefaultLanguage>en-US</DefaultLanguage>
     <MinimumVisualStudioVersion>18.0</MinimumVisualStudioVersion>
     <ApplicationType>Windows Store</ApplicationType>
@@ -36,7 +36,7 @@
     <RestoreProjectStyle>PackageReference</RestoreProjectStyle>
     <TargetFrameworkIdentifier>native</TargetFrameworkIdentifier>
     <TargetFrameworkVersion>v0.0</TargetFrameworkVersion>
-    <BaseIntermediateOutputPath>Obj\NuGet\D3D12LookDevPTWinUI\</BaseIntermediateOutputPath>
+    <BaseIntermediateOutputPath>Obj\NuGet\D3D12LookDevPTwithAI\</BaseIntermediateOutputPath>
     <Microsoft_Direct3D_D3D12_SkipLibraryCopy>false</Microsoft_Direct3D_D3D12_SkipLibraryCopy>
     <Microsoft_Direct3D_D3D12_SkipDebugLayerCopy Condition="'$(Configuration)'!='Release'">false</Microsoft_Direct3D_D3D12_SkipDebugLayerCopy>
     <Microsoft_Direct3D_D3D12_SkipDebugLayerCopy Condition="'$(Configuration)'=='Release'">true</Microsoft_Direct3D_D3D12_SkipDebugLayerCopy>
@@ -66,7 +66,7 @@
   <PropertyGroup>
     <OutDir>$(ProjectDir)Bin\$(Platform)\$(Configuration)\</OutDir>
     <IntDir>$(ProjectDir)Obj\$(Platform)\$(Configuration)\</IntDir>
-    <TargetName>D3D12LookDevPTWinUI</TargetName>
+    <TargetName>D3D12LookDevPTwithAI</TargetName>
     <GeneratedFilesDir>$(IntDir)Generated Files\</GeneratedFilesDir>
     <AssimpRoot>$(ProjectDir)ThirdParty\assimp</AssimpRoot>
     <AssimpBuildRoot>$(AssimpRoot)\Build\$(LookDevPtPlatformToolset)\$(Platform)\$(Configuration)</AssimpBuildRoot>
@@ -345,7 +345,7 @@
     </Midl>
   </ItemGroup>
   <ItemGroup>
-    <Manifest Include="Package\D3D12LookDevPTWinUI.manifest" />
+    <Manifest Include="Package\D3D12LookDevPTwithAI.manifest" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.WindowsAppSDK">

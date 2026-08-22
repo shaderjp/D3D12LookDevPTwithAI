@@ -2,7 +2,7 @@
 
 English documentation: [Optional NVIDIA RTXDI ReSTIR DI / GI / PT](rtxdi.md)
 
-D3D12LookDevPTWinUI には NVIDIA 公式 RTXDI SDK の optional integration があります。ReSTIR DI、ReSTIR GI、checkerboard ReSTIR PT を実装し、Sun / Environment / emissive triangle / analytic area light は共通 identity・sample・evaluate・PDF 契約を使います。
+D3D12LookDevPTwithAI には NVIDIA 公式 RTXDI SDK の optional integration があります。ReSTIR DI、ReSTIR GI、checkerboard ReSTIR PT を実装し、Sun / Environment / emissive triangle / analytic area light は共通 identity・sample・evaluate・PDF 契約を使います。
 
 固定 revision:
 
@@ -31,13 +31,13 @@ git -C ThirdParty/RTXDI/Libraries/Rtxdi rev-parse HEAD
 RTXDI は compile 時に default で無効です。
 
 ```powershell
-msbuild .\D3D12LookDevPTWinUI.sln /m /p:Configuration=Release /p:Platform=x64 /p:EnableRTXDI=false
+msbuild .\D3D12LookDevPTwithAI.sln /m /p:Configuration=Release /p:Platform=x64 /p:EnableRTXDI=false
 ```
 
 ReSTIR DI/GI/PT backend を有効にする場合:
 
 ```powershell
-msbuild .\D3D12LookDevPTWinUI.sln /m /p:Configuration=Release /p:Platform=x64 /p:EnableRTXDI=true
+msbuild .\D3D12LookDevPTwithAI.sln /m /p:Configuration=Release /p:Platform=x64 /p:EnableRTXDI=true
 ```
 
 有効かつ SDK が存在する場合、`BuildThirdParty.ps1` は `ThirdParty/RTXDI/Libraries/Rtxdi` だけを `Rtxdi.lib` として build します。上流のCMake fileは`add_subdirectory`用fragmentなので、固定submoduleを変更せず`CMake/RtxdiRuntime/CMakeLists.txt`からstandalone `project()` contextを与えます。app は `RTXDI_RuntimeParameters` と公式 24-byte DI、32-byte GI、64-byte PT packed reservoir ABI を検証し、RTXDI の block-linear reservoir layout を使用します。

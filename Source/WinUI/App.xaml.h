@@ -2,7 +2,7 @@
 
 #include "App.xaml.g.h"
 
-namespace winrt::D3D12LookDevPTWinUI::implementation
+namespace winrt::D3D12LookDevPTwithAI::implementation
 {
 struct App : AppT<App>
 {

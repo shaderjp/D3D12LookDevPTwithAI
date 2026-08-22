@@ -15,7 +15,7 @@ try {
     [IO.Directory]::CreateDirectory($suite) | Out-Null
     [IO.Directory]::CreateDirectory((Join-Path $runtime 'lib')) | Out-Null
     Set-Content -LiteralPath (Join-Path $suite 'suite-manifest.json') -Value '{"schemaVersion":1}' -Encoding utf8NoBOM
-    Set-Content -LiteralPath (Join-Path $suite 'Launch-LookDevSuite.ps1') -Value '# fixture' -Encoding utf8NoBOM
+    Set-Content -LiteralPath (Join-Path $suite 'Launch-D3D12LookDevPTwithAI.ps1') -Value '# fixture' -Encoding utf8NoBOM
     $model = Join-Path $testRoot 'fixture.gguf'
     Set-Content -LiteralPath $model -Value 'fixture-model' -Encoding ascii
     Set-Content -LiteralPath (Join-Path $runtime 'llama-server.exe') -Value 'fixture-runtime' -Encoding ascii

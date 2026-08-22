@@ -182,7 +182,7 @@ void RendererController::RenderMain(std::stop_token stopToken) noexcept
         D3D12PathTracingBackend renderer(
             1920,
             1080,
-            L"D3D12LookDevPTWinUI",
+            L"D3D12LookDevPTwithAI",
             PathTracingMode::ReSTIRCombined);
 
         std::vector<std::wstring> arguments = CommandLineArguments();

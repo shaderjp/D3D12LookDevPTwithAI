@@ -1,8 +1,8 @@
-# D3D12LookDevPTWinUI Rendering Pipeline Learning Guide
+# D3D12LookDevPTwithAI Rendering Pipeline Learning Guide
 
 Japanese documentation: [レンダリングパイプライン学習ガイド](rendering-pipeline.ja.md)
 
-This guide is intended for students of real-time rendering and path tracing who want to connect each stage of D3D12LookDevPTWinUI's implementation to the process that turns one frame into an image. It covers not only the algorithms in general, but also distinguishes what is implemented in the current repository, what is provided by optional backends or fallbacks, and what remains unimplemented.
+This guide is intended for students of real-time rendering and path tracing who want to connect each stage of D3D12LookDevPTwithAI's implementation to the process that turns one frame into an image. It covers not only the algorithms in general, but also distinguishes what is implemented in the current repository, what is provided by optional backends or fallbacks, and what remains unimplemented.
 
 A good reading order is to start with the full-frame overview, inspect the stages that interest you through Debug Views, and then read the linked shaders.
 
@@ -11,7 +11,7 @@ A good reading order is to start with the full-frame overview, inspect the stage
 
 ## 1. Two Output Goals
 
-D3D12LookDevPTWinUI separates two rendering paths with different goals.
+D3D12LookDevPTwithAI separates two rendering paths with different goals.
 
 | Path | Goal | Main approach |
 |---|---|---|

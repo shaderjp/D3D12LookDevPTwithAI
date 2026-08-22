@@ -1,8 +1,8 @@
-# D3D12LookDevPTWinUI
+# D3D12LookDevPTwithAI
 
 [日本語](README.ja.md)
 
-D3D12LookDevPTWinUI is the WinUI 3 edition of the Direct3D 12 / DXR
+D3D12LookDevPTwithAI is the WinUI 3 edition of the Direct3D 12 / DXR
 look-development path tracer. It preserves the renderer, shader pipeline,
 project schema, command line, benchmark output, MCP tools, and optional
 backends from D3D12LookDevPT while replacing ImGui and the Win32 application
@@ -63,12 +63,12 @@ redistributable before running the unpackaged executable.
 Clone recursively so that all pinned third-party repositories are present:
 
 ```powershell
-git clone --recursive <repository-url> D3D12LookDevPTWinUI
-cd D3D12LookDevPTWinUI
+git clone --recursive <repository-url> D3D12LookDevPTwithAI
+cd D3D12LookDevPTwithAI
 git submodule update --init --recursive
 ```
 
-Open `D3D12LookDevPTWinUI.sln`, select `Debug|x64` or `Release|x64`, restore
+Open `D3D12LookDevPTwithAI.sln`, select `Debug|x64` or `Release|x64`, restore
 NuGet packages, and build. The project is configured for Local Windows
 Debugger, so F5 launches the unpackaged WinUI executable.
 
@@ -76,14 +76,14 @@ The command-line equivalent is:
 
 ```powershell
 $msbuild = "C:\Program Files\Microsoft Visual Studio\18\Insiders\MSBuild\Current\Bin\amd64\MSBuild.exe"
-& $msbuild .\D3D12LookDevPTWinUI.sln /m /restore /p:Configuration=Debug /p:Platform=x64
+& $msbuild .\D3D12LookDevPTwithAI.sln /m /restore /p:Configuration=Debug /p:Platform=x64
 ```
 
 The repository default backend configuration is `DLSS=false`, `NRD=true`, and
 `RTXDI=false`. Each backend can be overridden independently:
 
 ```powershell
-& $msbuild .\D3D12LookDevPTWinUI.sln /m /p:Configuration=Release /p:Platform=x64 `
+& $msbuild .\D3D12LookDevPTwithAI.sln /m /p:Configuration=Release /p:Platform=x64 `
   /p:EnableDLSS=false /p:EnableNRD=false /p:EnableRTXDI=false
 ```
 
@@ -116,7 +116,7 @@ Build the public beta suite with `DLSS=false / NRD=false / RTXDI=false`:
 
 ```powershell
 .\Scripts\BuildPortableSuite.ps1 -LocalMcpRepository ..\LocalMCPChatClient `
-  -OutputDirectory .\artifacts\D3D12LookDevSuite-0.2.0-beta.1-win-x64
+  -OutputDirectory .\artifacts\D3D12LookDevPTwithAI-0.2.0-beta.1-win-x64
 ```
 
 The ZIP contains the framework-dependent D3D12 application, the self-contained
@@ -140,7 +140,7 @@ history.
 Launch the editor with the preview cube:
 
 ```powershell
-.\Bin\x64\Debug\D3D12LookDevPTWinUI.exe
+.\Bin\x64\Debug\D3D12LookDevPTwithAI.exe
 ```
 
 Open a PBRT / glTF / GLB / FBX / OBJ scene, environment, or schema-v2 project
@@ -148,11 +148,11 @@ from the Project menu, or pass
 the same paths used by the original application:
 
 ```powershell
-.\Bin\x64\Debug\D3D12LookDevPTWinUI.exe `
+.\Bin\x64\Debug\D3D12LookDevPTwithAI.exe `
   --scene .\Bistro_v5_2\BistroExterior.fbx `
   --environment .\Bistro_v5_2\san_giuseppe_bridge_4k.hdr
 
-.\Bin\x64\Debug\D3D12LookDevPTWinUI.exe `
+.\Bin\x64\Debug\D3D12LookDevPTwithAI.exe `
   --project .\projects\benchmark_interactive.lookdevpt.json
 ```
 
@@ -190,7 +190,7 @@ System/Light/Dark application theme. Layout widths, selected tabs, visibility,
 and the selected theme are stored in:
 
 ```text
-%APPDATA%\D3D12LookDevPTWinUI\ui.json
+%APPDATA%\D3D12LookDevPTwithAI\ui.json
 ```
 
 Display resolution is independent of the window size. The 720p, 1080p, and 4K
@@ -240,11 +240,11 @@ current scene active.
 WinUI-specific user data is isolated from the original application:
 
 ```text
-%APPDATA%\D3D12LookDevPTWinUI\settings.json
-%APPDATA%\D3D12LookDevPTWinUI\startup.json
-%APPDATA%\D3D12LookDevPTWinUI\materials\
-%APPDATA%\D3D12LookDevPTWinUI\ui.json
-%TEMP%\D3D12LookDevPTWinUI.log
+%APPDATA%\D3D12LookDevPTwithAI\settings.json
+%APPDATA%\D3D12LookDevPTwithAI\startup.json
+%APPDATA%\D3D12LookDevPTwithAI\materials\
+%APPDATA%\D3D12LookDevPTwithAI\ui.json
+%TEMP%\D3D12LookDevPTwithAI.log
 ```
 
 Project paths may be absolute or relative to `baseDirectory`. Bundle-internal
@@ -275,7 +275,7 @@ same Origin policy as MCP.
 For command-line startup:
 
 ```powershell
-.\Bin\x64\Debug\D3D12LookDevPTWinUI.exe `
+.\Bin\x64\Debug\D3D12LookDevPTwithAI.exe `
   --mcp-server --mcp-port 8777 --mcp-token <token> `
   --mcp-access confirm_mutations
 ```
@@ -288,7 +288,7 @@ configuration.
 Benchmark CLI syntax and JSON field names are unchanged:
 
 ```powershell
-.\Bin\x64\Release\D3D12LookDevPTWinUI.exe `
+.\Bin\x64\Release\D3D12LookDevPTwithAI.exe `
   --project .\projects\benchmark_interactive.lookdevpt.json `
   --benchmark --benchmark-kind performance `
   --camera-path .\benchmarks\bistro_exterior_stability.camera.json `

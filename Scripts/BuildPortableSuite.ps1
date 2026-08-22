@@ -8,7 +8,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $repo = [System.IO.Path]::GetFullPath((Split-Path -Parent $PSScriptRoot))
 $lock = Get-Content -LiteralPath (Join-Path $repo 'suite.lock.json') -Raw | ConvertFrom-Json
-if ($lock.schemaVersion -ne 2 -or $lock.repositories.D3D12LookDevPTWinUI.source -ne 'self') {
+if ($lock.schemaVersion -ne 2 -or $lock.repositories.D3D12LookDevPTwithAI.source -ne 'self') {
     throw 'suite.lock.json schema v2 is required.'
 }
 if ([string]::IsNullOrWhiteSpace($LocalMcpRepository)) {
@@ -24,13 +24,13 @@ if ($d3dCommit -notmatch '^[0-9a-f]{40}$' -or $localCommit -notmatch '^[0-9a-f]{
 if ($localCommit -ne [string]$lock.repositories.LocalMCPChatClient.commit) {
     throw "LocalMCPChatClient is at $localCommit; suite.lock.json expects $($lock.repositories.LocalMCPChatClient.commit)."
 }
-foreach ($source in @(@{ Name = 'D3D12LookDevPTWinUI'; Path = $repo }, @{ Name = 'LocalMCPChatClient'; Path = $LocalMcpRepository })) {
+foreach ($source in @(@{ Name = 'D3D12LookDevPTwithAI'; Path = $repo }, @{ Name = 'LocalMCPChatClient'; Path = $LocalMcpRepository })) {
     $trackedChanges = @(& git -C $source.Path status --porcelain --untracked-files=no)
     if ($trackedChanges.Count -ne 0) {
         throw "$($source.Name) has uncommitted tracked changes. Refusing to create a manifest with an inaccurate source commit."
     }
 }
-$d3dOutput = Join-Path $output 'D3D12LookDevPTWinUI'
+$d3dOutput = Join-Path $output 'D3D12LookDevPTwithAI'
 $chatOutput = Join-Path $output 'LocalMCPChatClient'
 New-Item -ItemType Directory -Path $d3dOutput, $chatOutput | Out-Null
 $d3dBuildOutput = Join-Path $repo 'Bin\x64\Release'
@@ -44,7 +44,7 @@ if (-not $SkipBuild) {
     $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
     $vsRoot = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
     $msbuild = Join-Path $vsRoot 'MSBuild\Current\Bin\MSBuild.exe'
-    & $msbuild (Join-Path $repo 'D3D12LookDevPTWinUI.vcxproj') /restore /t:Build /p:Configuration=Release /p:Platform=x64 /p:WindowsAppSDKSelfContained=false /p:UseHybridCRT=true /p:EnableDLSS=false /p:EnableNRD=false /p:EnableRTXDI=false "/p:OutDir=$d3dBuildOutput\" "/p:IntDir=$d3dIntermediate\" /m
+    & $msbuild (Join-Path $repo 'D3D12LookDevPTwithAI.vcxproj') /restore /t:Build /p:Configuration=Release /p:Platform=x64 /p:WindowsAppSDKSelfContained=false /p:UseHybridCRT=true /p:EnableDLSS=false /p:EnableNRD=false /p:EnableRTXDI=false "/p:OutDir=$d3dBuildOutput\" "/p:IntDir=$d3dIntermediate\" /m
     if ($LASTEXITCODE -ne 0) { throw 'Portable D3D12 build failed.' }
     & dotnet publish (Join-Path $LocalMcpRepository 'src\LocalMCPChatClient.App\LocalMCPChatClient.App.csproj') -c Release -r win-x64 --self-contained true -o $chatOutput
     if ($LASTEXITCODE -ne 0) { throw 'Portable LocalMCPChatClient publish failed.' }
@@ -72,7 +72,7 @@ foreach ($name in @('LICENSE', 'THIRD-PARTY-NOTICES.txt', 'suite.lock.json')) {
     if (Test-Path -LiteralPath $source) { Copy-Item -LiteralPath $source -Destination $output }
 }
 if (Test-Path -LiteralPath (Join-Path $repo 'licenses')) { Copy-Item -LiteralPath (Join-Path $repo 'licenses') -Destination $output -Recurse }
-$d3dLicenseOutput = Join-Path $output 'licenses\D3D12LookDevPTWinUI'
+$d3dLicenseOutput = Join-Path $output 'licenses\D3D12LookDevPTwithAI'
 New-Item -ItemType Directory -Path $d3dLicenseOutput -Force | Out-Null
 $nugetRoot = Join-Path $env:USERPROFILE '.nuget\packages'
 $licenseSources = [ordered]@{
@@ -115,13 +115,13 @@ foreach ($entry in $licenseSources.GetEnumerator()) {
     Copy-Item -LiteralPath $entry.Value -Destination (Join-Path $d3dLicenseOutput $entry.Key)
 }
 @'
-D3D12 LookDev Suite - Third-Party Notices
+D3D12LookDevPTwithAI - Third-Party Notices
 
-This distribution includes D3D12LookDevPTWinUI and LocalMCPChatClient plus
+This distribution includes D3D12LookDevPTwithAI and LocalMCPChatClient plus
 redistributable runtime components and statically linked libraries. The
 corresponding license and notice texts are included below this suite root:
 
-- licenses/D3D12LookDevPTWinUI: Assimp, zlib, DirectXTex, TinyEXR, tinygltf,
+- licenses/D3D12LookDevPTwithAI: Assimp, zlib, DirectXTex, TinyEXR, tinygltf,
   Basis Universal, zstd,
   Windows App SDK, C++/WinRT, WebView2, D3D12 Agility SDK, and DirectX
   Shader Compiler.
@@ -138,10 +138,10 @@ foreach ($script in @('InstallPortableSuite.ps1','InstallWindowsAppRuntime.ps1',
 }
 
 @"
-D3D12 LookDev Suite redistribution basis
+D3D12LookDevPTwithAI redistribution basis
 
 - Windows App SDK 2.4.0 is the stable Microsoft NuGet release used to build
-  D3D12LookDevPTWinUI. Its corrected WinUI 2.3.6 license explicitly identifies
+  D3D12LookDevPTwithAI. Its corrected WinUI 2.3.6 license explicitly identifies
   files binplaced by WindowsAppSDK as distributable code.
 - The Microsoft Windows App Runtime installer is not redistributed in this ZIP.
   The launcher downloads it from the official aka.ms endpoint, checks the
@@ -160,10 +160,10 @@ https://github.com/dotnet/core/blob/main/license-information.md
 "@ | Set-Content -LiteralPath (Join-Path $output 'REDISTRIBUTION-NOTES.txt') -Encoding utf8NoBOM
 
 @"
-D3D12 LookDev Suite $($lock.suiteVersion) - 署名なし公開ベータ
+D3D12LookDevPTwithAI $($lock.suiteVersion) - 署名なし公開ベータ
 
 このベータの実行ファイルにはコード署名がありません。Windows SmartScreenが警告を表示する場合があります。
-GitHubのshaderjp/D3D12LookDevPTWinUI Releaseから取得し、同梱のSHA-256と照合してください。
+GitHubのshaderjp/D3D12LookDevPTwithAI Releaseから取得し、同梱のSHA-256と照合してください。
 モデルとvision projectorは同梱せず、LocalMCPChatClientが初回セットアップでSHA-256検証付きで取得します。
 Windows App Runtime 2.4.0は同梱せず、初回起動時にMicrosoft公式配布元から取得してhash／署名を検証後、現在ユーザーへ導入します。
 公開標準構成ではDLSS、NVIDIA NRD、RTXDIを無効化し、内蔵denoiserを使用します。
@@ -177,9 +177,9 @@ $launcher = @'
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 & (Join-Path $root 'InstallWindowsAppRuntime.ps1') -LockPath (Join-Path $root 'suite.lock.json')
-$firstRunMarker = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'D3D12LookDevSuite\first-run-v2'
+$firstRunMarker = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'D3D12LookDevPTwithAI\first-run-v2'
 if (-not (Test-Path -LiteralPath $firstRunMarker)) {
-    $diagnosticPath = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'D3D12LookDevSuite\diagnostics-latest.json'
+    $diagnosticPath = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'D3D12LookDevPTwithAI\diagnostics-latest.json'
     $diagnostics = & (Join-Path $root 'TestPortablePrerequisites.ps1') -OutputJson $diagnosticPath -PassThru
     if (-not $diagnostics.Passed) {
         $diagnostics | Format-List
@@ -188,9 +188,9 @@ if (-not (Test-Path -LiteralPath $firstRunMarker)) {
     $diagnostics | Format-List
     New-Item -ItemType Directory -Path (Split-Path -Parent $firstRunMarker) -Force | Out-Null
     Set-Content -LiteralPath $firstRunMarker -Value ([DateTimeOffset]::UtcNow.ToString('O')) -Encoding ascii
-    Write-Host 'First-run diagnostics passed. D3D12LookDevPTWinUI will perform the authoritative DXR check.'
+    Write-Host 'First-run diagnostics passed. D3D12LookDevPTwithAI will perform the authoritative DXR check.'
 }
-$d3d = Start-Process -FilePath (Join-Path $root 'D3D12LookDevPTWinUI\D3D12LookDevPTWinUI.exe') -ArgumentList @('--mcp-server','--mcp-pair') -PassThru
+$d3d = Start-Process -FilePath (Join-Path $root 'D3D12LookDevPTwithAI\D3D12LookDevPTwithAI.exe') -ArgumentList @('--mcp-server','--mcp-pair') -PassThru
 Start-Sleep -Milliseconds 1200
 $chatEnvironment = [Environment]::GetEnvironmentVariable('LOCAL_MCP_CHAT_SUITE_FIRST_RUN', 'Process')
 $chatAddressEnvironment = [Environment]::GetEnvironmentVariable('LOCAL_MCP_CHAT_LOOKDEV_ADDRESS', 'Process')
@@ -205,7 +205,7 @@ finally {
 }
 Write-Host "D3D12 LookDev started as PID $($d3d.Id). Enter the 8-digit code shown in its MCP panel into the LocalMCPChatClient setup window."
 '@
-Set-Content -LiteralPath (Join-Path $output 'Launch-LookDevSuite.ps1') -Value $launcher -Encoding utf8NoBOM
+Set-Content -LiteralPath (Join-Path $output 'Launch-D3D12LookDevPTwithAI.ps1') -Value $launcher -Encoding utf8NoBOM
 
 & (Join-Path $repo 'Scripts\TestSuiteLicenseCompliance.ps1') -SuiteDirectory $output -Generate
 
@@ -219,7 +219,7 @@ $manifest = [ordered]@{
     mcpContractVersion = '1.0'
     mcpProtocolVersion = '2026-07-28'
     components = @(
-        @{ name = 'D3D12LookDevPTWinUI'; version = $lock.suiteVersion; commit = $d3dCommit },
+        @{ name = 'D3D12LookDevPTwithAI'; version = $lock.suiteVersion; commit = $d3dCommit },
         @{ name = 'LocalMCPChatClient'; version = $lock.suiteVersion; commit = $localCommit }
     )
     backends = @{ dlss = $false; nrd = $false; rtxdi = $false }

@@ -2,7 +2,7 @@
 param(
     [Parameter(Mandatory)][uri]$PackageUri,
     [string]$Sha256,
-    [string]$InstallDirectory = (Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'Programs\D3D12LookDevSuite'),
+    [string]$InstallDirectory = (Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'Programs\D3D12LookDevPTwithAI'),
     [switch]$Force
 )
 
@@ -126,4 +126,4 @@ finally {
     if ([IO.Directory]::Exists($temporaryRoot)) { [IO.Directory]::Delete($temporaryRoot, $true) }
 }
 Write-Host "Installed without administrator privileges: $install"
-Write-Host "Run Launch-LookDevSuite.ps1 and complete the one-time pairing wizard in both applications."
+Write-Host "Run Launch-D3D12LookDevPTwithAI.ps1 and complete the one-time pairing wizard in both applications."

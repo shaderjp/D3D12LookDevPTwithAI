@@ -36,7 +36,7 @@ $result = [pscustomobject]@{
     FreeBytes = if ($drive) { [long]$drive.FreeSpace } else { $null }
     Failures = @($failures)
     Warnings = @($warnings)
-    DxrCheck = 'D3D12LookDevPTWinUI performs the authoritative D3D12/DXR tier check at startup.'
+    DxrCheck = 'D3D12LookDevPTwithAI performs the authoritative D3D12/DXR tier check at startup.'
 }
 if (-not [string]::IsNullOrWhiteSpace($OutputJson)) {
     $diagnosticPath = [IO.Path]::GetFullPath($OutputJson)

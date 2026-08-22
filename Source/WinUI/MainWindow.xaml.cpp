@@ -49,7 +49,7 @@ std::filesystem::path LayoutPath()
     }
     std::filesystem::path result(appData);
     CoTaskMemFree(appData);
-    return result / L"D3D12LookDevPTWinUI" / L"ui.json";
+    return result / L"D3D12LookDevPTwithAI" / L"ui.json";
 }
 
 double Clamp(double value, double minimum, double maximum)
@@ -63,7 +63,7 @@ bool Checked(ToggleMenuFlyoutItem const& item)
 }
 }
 
-namespace winrt::D3D12LookDevPTWinUI::implementation
+namespace winrt::D3D12LookDevPTwithAI::implementation
 {
 MainWindow::MainWindow()
 {
@@ -1945,7 +1945,7 @@ IAsyncAction MainWindow::ExportMcpSettings()
                  << "      \"type\": \"promptString\",\n"
                  << "      \"id\": \"lookdevpt-token\",\n"
                  << "      \"description\": "
-                    "\"D3D12LookDevPTWinUI MCP bearer token\",\n"
+                    "\"D3D12LookDevPTwithAI MCP bearer token\",\n"
                  << "      \"password\": true\n"
                  << "    }\n"
                  << "  ],\n";

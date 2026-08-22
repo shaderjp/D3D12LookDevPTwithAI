@@ -18,7 +18,7 @@ stop-and-go recovery is not mixed into the stationary-noise measurement.
 Example:
 
 ```powershell
-Bin\x64\Release\D3D12LookDevPTWinUI.exe `
+Bin\x64\Release\D3D12LookDevPTwithAI.exe `
   --project projects\benchmark_interactive.lookdevpt.json `
   --benchmark `
   --benchmark-kind performance `
@@ -65,7 +65,7 @@ measured frame (warmup is never captured). Add `--capture-aovs` to include the
 SurfaceGuides and lighting signals in each scheduled frame:
 
 ```powershell
-Bin\x64\Release\D3D12LookDevPTWinUI.exe `
+Bin\x64\Release\D3D12LookDevPTwithAI.exe `
   --project projects\benchmark_interactive.lookdevpt.json `
   --benchmark `
   --benchmark-kind quality `

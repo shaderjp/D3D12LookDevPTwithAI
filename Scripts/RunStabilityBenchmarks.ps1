@@ -23,7 +23,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 $root = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
-$executable = Join-Path $root "Bin\x64\$Configuration\D3D12LookDevPTWinUI.exe"
+$executable = Join-Path $root "Bin\x64\$Configuration\D3D12LookDevPTwithAI.exe"
 if (-not (Test-Path -LiteralPath $executable -PathType Leaf)) {
     throw "Executable not found: $executable"
 }

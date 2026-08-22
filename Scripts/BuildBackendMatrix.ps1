@@ -45,7 +45,7 @@ try {
     foreach ($entry in $configurations) {
         Write-Host ("Building {0}: NRD={1}, RTXDI={2}, DLSS={3}" -f $entry.Name, $entry.NRD, $entry.RTXDI, $entry.DLSS)
         $buildArguments = @(
-            ".\D3D12LookDevPTWinUI.sln",
+            ".\D3D12LookDevPTwithAI.sln",
             "/m",
             "/t:Rebuild",
             "/p:Configuration=$Configuration",
@@ -64,7 +64,7 @@ try {
         if (-not $SkipLaunch) {
             $runDirectory = Join-Path $OutputRoot $entry.Name
             [System.IO.Directory]::CreateDirectory($runDirectory) | Out-Null
-            $executable = Join-Path $root "Bin\x64\$Configuration\D3D12LookDevPTWinUI.exe"
+            $executable = Join-Path $root "Bin\x64\$Configuration\D3D12LookDevPTwithAI.exe"
             $runArguments = @(
                 "--project", (Join-Path $root "projects\benchmark_interactive.lookdevpt.json"),
                 "--benchmark",

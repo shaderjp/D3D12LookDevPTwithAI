@@ -126,8 +126,8 @@ try {
 }
 
 if (Test-Path -LiteralPath $Root -PathType Container) {
-    Test-File -RelativePath "D3D12LookDevPTWinUI.sln" -Check "Solution" -Fix "Run this script from the repository root or pass -Root."
-    Test-File -RelativePath "D3D12LookDevPTWinUI.vcxproj" -Check "Project" -Fix "The Visual Studio project is missing."
+    Test-File -RelativePath "D3D12LookDevPTwithAI.sln" -Check "Solution" -Fix "Run this script from the repository root or pass -Root."
+    Test-File -RelativePath "D3D12LookDevPTwithAI.vcxproj" -Check "Project" -Fix "The Visual Studio project is missing."
     Test-File -RelativePath ".gitmodules" -Check "Submodule config" -Fix "The repository should include .gitmodules."
 }
 
@@ -237,7 +237,7 @@ if (-not $nugetRoot) {
 
 $dxcPath = Join-Path $nugetRoot "microsoft.direct3d.dxc\1.9.2602.17\build\native\bin\x64\dxc.exe"
 $agilityCore = Join-Path $nugetRoot "microsoft.direct3d.d3d12\1.619.3\build\native\bin\x64\D3D12Core.dll"
-$restoreFix = "Run: msbuild D3D12LookDevPTWinUI.sln /t:Restore /p:Configuration=$Configuration /p:Platform=$Platform"
+$restoreFix = "Run: msbuild D3D12LookDevPTwithAI.sln /t:Restore /p:Configuration=$Configuration /p:Platform=$Platform"
 
 if (Test-Path -LiteralPath $dxcPath -PathType Leaf) {
     Add-Result -Status "OK" -Check "DXC package" -Message "dxc.exe found."
@@ -314,7 +314,7 @@ if ($Json) {
         Results = $results
     } | ConvertTo-Json -Depth 5
 } else {
-    Write-Host "D3D12LookDevPTWinUI setup check"
+    Write-Host "D3D12LookDevPTwithAI setup check"
     Write-Host "Root: $Root"
     Write-Host ""
     foreach ($result in $results) {

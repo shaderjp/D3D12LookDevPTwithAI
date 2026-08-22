@@ -1,6 +1,6 @@
 # 公開ベータ受け入れチェックリスト
 
-対象は`D3D12LookDevSuite-0.2.0-beta.1-win-x64.zip`です。自動テストに合格しても、
+対象は`D3D12LookDevPTwithAI-0.2.0-beta.1-win-x64.zip`です。自動テストに合格しても、
 この実機確認が完了するまではGitHub Pre-release用tagをpushしません。
 
 ## 必須環境
@@ -13,7 +13,7 @@
 ## 15分導入シナリオ
 
 1. ZIPと`.sha256`を照合してユーザーフォルダーへ展開する。
-2. `Launch-LookDevSuite.ps1`を実行し、Microsoft公式Windows App Runtime 2.4.0の取得、
+2. `Launch-D3D12LookDevPTwithAI.ps1`を実行し、Microsoft公式Windows App Runtime 2.4.0の取得、
    SHA-256／署名検証、現在userへの導入、診断JSON作成が完了することを確認する。
 3. D3D12側に表示された8桁コードをLocalMCPChatClient初回画面へ入力する。
 4. 推奨runtime、Gemma 4、mmprojを取得し、hash検証が完了することを確認する。

@@ -36,49 +36,49 @@ function New-Record(
 
 $d3dAppLicenses = @(
     'LICENSE',
-    'licenses/D3D12LookDevPTWinUI/ASSIMP-LICENSE.txt',
-    'licenses/D3D12LookDevPTWinUI/ASSIMP-ZLIB-LICENSE.txt',
-    'licenses/D3D12LookDevPTWinUI/DIRECTXTEX-LICENSE.txt',
-    'licenses/D3D12LookDevPTWinUI/TINYEXR-LICENSE.txt',
-    'licenses/D3D12LookDevPTWinUI/TINYEXR-NOTICE.txt',
-    'licenses/D3D12LookDevPTWinUI/TINYEXR-ZSTD-LICENSE.txt',
-    'licenses/D3D12LookDevPTWinUI/TINYGLTF-LICENSE.txt',
-    'licenses/D3D12LookDevPTWinUI/BASIS-UNIVERSAL-LICENSE.txt',
-    'licenses/D3D12LookDevPTWinUI/BASIS-UNIVERSAL-NOTICE.txt',
-    'licenses/D3D12LookDevPTWinUI/BASIS-UNIVERSAL-ZSTD-LICENSE.txt'
+    'licenses/D3D12LookDevPTwithAI/ASSIMP-LICENSE.txt',
+    'licenses/D3D12LookDevPTwithAI/ASSIMP-ZLIB-LICENSE.txt',
+    'licenses/D3D12LookDevPTwithAI/DIRECTXTEX-LICENSE.txt',
+    'licenses/D3D12LookDevPTwithAI/TINYEXR-LICENSE.txt',
+    'licenses/D3D12LookDevPTwithAI/TINYEXR-NOTICE.txt',
+    'licenses/D3D12LookDevPTwithAI/TINYEXR-ZSTD-LICENSE.txt',
+    'licenses/D3D12LookDevPTwithAI/TINYGLTF-LICENSE.txt',
+    'licenses/D3D12LookDevPTwithAI/BASIS-UNIVERSAL-LICENSE.txt',
+    'licenses/D3D12LookDevPTwithAI/BASIS-UNIVERSAL-NOTICE.txt',
+    'licenses/D3D12LookDevPTwithAI/BASIS-UNIVERSAL-ZSTD-LICENSE.txt'
 )
 $windowsAppSdkLicenses = @(
-    'licenses/D3D12LookDevPTWinUI/WINDOWS-APP-SDK-LICENSE.txt',
-    'licenses/D3D12LookDevPTWinUI/WINDOWS-APP-SDK-NOTICE.txt',
-    'licenses/D3D12LookDevPTWinUI/WINDOWS-APP-SDK-BASE-LICENSE.txt',
-    'licenses/D3D12LookDevPTWinUI/WINDOWS-APP-SDK-BASE-NOTICE.txt',
-    'licenses/D3D12LookDevPTWinUI/WINDOWS-APP-SDK-FOUNDATION-LICENSE.txt',
-    'licenses/D3D12LookDevPTWinUI/WINDOWS-APP-SDK-INTERACTIVE-LICENSE.txt',
-    'licenses/D3D12LookDevPTWinUI/WINDOWS-APP-SDK-WINUI-LICENSE.txt',
-    'licenses/D3D12LookDevPTWinUI/WINDOWS-APP-SDK-WINUI-NOTICE.txt',
-    'licenses/D3D12LookDevPTWinUI/WINDOWS-APP-SDK-AI-LICENSE.txt',
-    'licenses/D3D12LookDevPTWinUI/WINDOWS-APP-SDK-ML-LICENSE.txt',
-    'licenses/D3D12LookDevPTWinUI/WINDOWS-APP-SDK-ML-NOTICE.txt',
-    'licenses/D3D12LookDevPTWinUI/WINDOWS-APP-SDK-DWRITE-LICENSE.txt',
-    'licenses/D3D12LookDevPTWinUI/WINDOWS-APP-SDK-WIDGETS-LICENSE.txt',
-    'licenses/D3D12LookDevPTWinUI/WINDOWS-APP-SDK-SEARCH-LICENSE.txt',
-    'licenses/D3D12LookDevPTWinUI/WINDOWS-APP-SDK-RUNTIME-LICENSE.txt',
-    'licenses/D3D12LookDevPTWinUI/WINDOWS-APP-SDK-RUNTIME-NOTICE.txt'
+    'licenses/D3D12LookDevPTwithAI/WINDOWS-APP-SDK-LICENSE.txt',
+    'licenses/D3D12LookDevPTwithAI/WINDOWS-APP-SDK-NOTICE.txt',
+    'licenses/D3D12LookDevPTwithAI/WINDOWS-APP-SDK-BASE-LICENSE.txt',
+    'licenses/D3D12LookDevPTwithAI/WINDOWS-APP-SDK-BASE-NOTICE.txt',
+    'licenses/D3D12LookDevPTwithAI/WINDOWS-APP-SDK-FOUNDATION-LICENSE.txt',
+    'licenses/D3D12LookDevPTwithAI/WINDOWS-APP-SDK-INTERACTIVE-LICENSE.txt',
+    'licenses/D3D12LookDevPTwithAI/WINDOWS-APP-SDK-WINUI-LICENSE.txt',
+    'licenses/D3D12LookDevPTwithAI/WINDOWS-APP-SDK-WINUI-NOTICE.txt',
+    'licenses/D3D12LookDevPTwithAI/WINDOWS-APP-SDK-AI-LICENSE.txt',
+    'licenses/D3D12LookDevPTwithAI/WINDOWS-APP-SDK-ML-LICENSE.txt',
+    'licenses/D3D12LookDevPTwithAI/WINDOWS-APP-SDK-ML-NOTICE.txt',
+    'licenses/D3D12LookDevPTwithAI/WINDOWS-APP-SDK-DWRITE-LICENSE.txt',
+    'licenses/D3D12LookDevPTwithAI/WINDOWS-APP-SDK-WIDGETS-LICENSE.txt',
+    'licenses/D3D12LookDevPTwithAI/WINDOWS-APP-SDK-SEARCH-LICENSE.txt',
+    'licenses/D3D12LookDevPTwithAI/WINDOWS-APP-SDK-RUNTIME-LICENSE.txt',
+    'licenses/D3D12LookDevPTwithAI/WINDOWS-APP-SDK-RUNTIME-NOTICE.txt'
 )
 $webViewLicenses = @(
-    'licenses/D3D12LookDevPTWinUI/WEBVIEW2-LICENSE.txt',
-    'licenses/D3D12LookDevPTWinUI/WEBVIEW2-NOTICE.txt'
+    'licenses/D3D12LookDevPTwithAI/WEBVIEW2-LICENSE.txt',
+    'licenses/D3D12LookDevPTwithAI/WEBVIEW2-NOTICE.txt'
 )
 $agilityLicenses = @(
-    'licenses/D3D12LookDevPTWinUI/D3D12-AGILITY-LICENSE.txt',
-    'licenses/D3D12LookDevPTWinUI/D3D12-AGILITY-CODE-LICENSE.txt'
+    'licenses/D3D12LookDevPTwithAI/D3D12-AGILITY-LICENSE.txt',
+    'licenses/D3D12LookDevPTwithAI/D3D12-AGILITY-CODE-LICENSE.txt'
 )
 $dxcLicenses = @(
-    'licenses/D3D12LookDevPTWinUI/DXC-LLVM-LICENSE.txt',
-    'licenses/D3D12LookDevPTWinUI/DXC-MICROSOFT-LICENSE.txt'
+    'licenses/D3D12LookDevPTwithAI/DXC-LLVM-LICENSE.txt',
+    'licenses/D3D12LookDevPTwithAI/DXC-MICROSOFT-LICENSE.txt'
 )
 $d3dAppLicenses += @(
-    'licenses/D3D12LookDevPTWinUI/CPPWINRT-LICENSE.txt'
+    'licenses/D3D12LookDevPTwithAI/CPPWINRT-LICENSE.txt'
 ) + $windowsAppSdkLicenses + $webViewLicenses + $agilityLicenses + $dxcLicenses
 $localLicenseFiles = @(
     'LocalMCPChatClient/LICENSE.txt',
@@ -136,8 +136,8 @@ function Resolve-LocalComponent([string]$RelativePath) {
 
 function Get-Record([IO.FileInfo]$File) {
     $path = Get-RelativePath $File.FullName
-    if ($path.StartsWith('D3D12LookDevPTWinUI/', [StringComparison]::OrdinalIgnoreCase)) {
-        $inside = $path.Substring('D3D12LookDevPTWinUI/'.Length)
+    if ($path.StartsWith('D3D12LookDevPTwithAI/', [StringComparison]::OrdinalIgnoreCase)) {
+        $inside = $path.Substring('D3D12LookDevPTwithAI/'.Length)
         if ($inside.Equals('D3D12/D3D12Core.dll', [StringComparison]::OrdinalIgnoreCase)) {
             return New-Record $File 'Microsoft.Direct3D.D3D12/1.619.3' 'NOASSERTION' $agilityLicenses
         }
@@ -150,8 +150,8 @@ function Get-Record([IO.FileInfo]$File) {
         if ($inside -eq 'Microsoft.WindowsAppRuntime.Bootstrap.dll') {
             return New-Record $File 'Microsoft.WindowsAppSDK.Foundation/2.3.9' 'NOASSERTION' $windowsAppSdkLicenses
         }
-        if ($inside -eq 'D3D12LookDevPTWinUI.exe' -or $inside -match '\.(cso|pri|winmd|xbf)$') {
-            return New-Record $File 'D3D12LookDevPTWinUI' 'NOASSERTION' $d3dAppLicenses
+        if ($inside -eq 'D3D12LookDevPTwithAI.exe' -or $inside -match '\.(cso|pri|winmd|xbf)$') {
+            return New-Record $File 'D3D12LookDevPTwithAI' 'NOASSERTION' $d3dAppLicenses
         }
         throw "D3D12 payload is not allowlisted: $path"
     }
@@ -160,16 +160,16 @@ function Get-Record([IO.FileInfo]$File) {
         $license = if ($component -eq 'LocalMCPChatClient') { 'MIT' } else { 'NOASSERTION' }
         return New-Record $File $component $license $localLicenseFiles
     }
-    if ($path -eq 'LICENSE') { return New-Record $File 'D3D12LookDevPTWinUI' 'MIT' @('LICENSE') }
-    if ($path.StartsWith('licenses/D3D12LookDevPTWinUI/', [StringComparison]::OrdinalIgnoreCase)) {
-        return New-Record $File 'D3D12LookDevPTWinUI license documents' 'NOASSERTION' @($path)
+    if ($path -eq 'LICENSE') { return New-Record $File 'D3D12LookDevPTwithAI' 'MIT' @('LICENSE') }
+    if ($path.StartsWith('licenses/D3D12LookDevPTwithAI/', [StringComparison]::OrdinalIgnoreCase)) {
+        return New-Record $File 'D3D12LookDevPTwithAI license documents' 'NOASSERTION' @($path)
     }
     if ($path -in @(
-        'InstallPortableSuite.ps1', 'InstallWindowsAppRuntime.ps1', 'Launch-LookDevSuite.ps1',
+        'InstallPortableSuite.ps1', 'InstallWindowsAppRuntime.ps1', 'Launch-D3D12LookDevPTwithAI.ps1',
         'REDISTRIBUTION-NOTES.txt', 'suite.lock.json', 'TestPortablePrerequisites.ps1', 'TestSuiteLicenseCompliance.ps1',
         'THIRD-PARTY-NOTICES.txt', 'UNSIGNED-BETA.ja.txt', 'UninstallPortableSuite.ps1'
     )) {
-        return New-Record $File 'D3D12 LookDev Suite packaging' 'MIT' @('LICENSE')
+        return New-Record $File 'D3D12LookDevPTwithAI packaging' 'MIT' @('LICENSE')
     }
     throw "Suite payload is not allowlisted: $path"
 }
@@ -181,7 +181,7 @@ $forbidden = @($allFiles | Where-Object {
     $_.Name -match '^(nvngx|sl\.).*\.dll$' -or
     $_.Name -match '^(NRD|RTXDI).*\.(dll|lib)$' -or
     $_.Extension -ieq '.gguf' -or $_.Name -in @('settings.json', 'history.db') -or
-    $path.StartsWith('D3D12LookDevPTWinUI/Streamline/', [StringComparison]::OrdinalIgnoreCase)
+    $path.StartsWith('D3D12LookDevPTwithAI/Streamline/', [StringComparison]::OrdinalIgnoreCase)
 })
 if ($forbidden.Count -gt 0) { throw "Forbidden release payload: $($forbidden.FullName -join ', ')" }
 
@@ -203,7 +203,7 @@ foreach ($file in $licenseTexts) {
         }
     }
 }
-$winUiLicense = Join-Path $suite 'licenses\D3D12LookDevPTWinUI\WINDOWS-APP-SDK-WINUI-LICENSE.txt'
+$winUiLicense = Join-Path $suite 'licenses\D3D12LookDevPTwithAI\WINDOWS-APP-SDK-WINUI-LICENSE.txt'
 if (-not (Test-Path -LiteralPath $winUiLicense -PathType Leaf) -or
     -not (Get-Content -LiteralPath $winUiLicense -Raw).Contains('Any files that are binplaced with your application', [StringComparison]::OrdinalIgnoreCase)) {
     throw 'The corrected Windows App SDK distributable-code license is missing.'
@@ -265,8 +265,8 @@ if ($Generate) {
         spdxVersion = 'SPDX-2.3'
         dataLicense = 'CC0-1.0'
         SPDXID = 'SPDXRef-DOCUMENT'
-        name = "D3D12LookDevSuite-$($lock.suiteVersion)-win-x64"
-        documentNamespace = "https://github.com/shaderjp/D3D12LookDevPTWinUI/releases/download/v$($lock.suiteVersion)/sbom-$([guid]::NewGuid())"
+        name = "D3D12LookDevPTwithAI-$($lock.suiteVersion)-win-x64"
+        documentNamespace = "https://github.com/shaderjp/D3D12LookDevPTwithAI/releases/download/v$($lock.suiteVersion)/sbom-$([guid]::NewGuid())"
         creationInfo = @{ created = [DateTimeOffset]::UtcNow.ToString('O'); creators = @('Tool: Scripts/TestSuiteLicenseCompliance.ps1') }
         packages = $packages
         files = $spdxFiles

@@ -3,7 +3,7 @@
 ## Visual Studio project organization
 
 Visual Studio filters are required repository metadata. Keep
-`D3D12LookDevPTWinUI.vcxproj` and `D3D12LookDevPTWinUI.vcxproj.filters`
+`D3D12LookDevPTwithAI.vcxproj` and `D3D12LookDevPTwithAI.vcxproj.filters`
 synchronized in every change that adds, removes, renames, or moves a
 project-visible file.
 

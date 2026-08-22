@@ -459,7 +459,7 @@
     </None>
   </ItemGroup>
   <ItemGroup>
-    <Manifest Include="Package\D3D12LookDevPTWinUI.manifest">
+    <Manifest Include="Package\D3D12LookDevPTwithAI.manifest">
       <Filter>Package</Filter>
     </Manifest>
   </ItemGroup>

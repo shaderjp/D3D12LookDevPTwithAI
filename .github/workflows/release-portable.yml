@@ -42,8 +42,8 @@ jobs:
       - name: Validate Visual Studio filters and beta contracts
         shell: pwsh
         run: |
-          [xml]$project = Get-Content ./D3D12LookDevPTWinUI.vcxproj -Raw
-          [xml]$filters = Get-Content ./D3D12LookDevPTWinUI.vcxproj.filters -Raw
+          [xml]$project = Get-Content ./D3D12LookDevPTwithAI.vcxproj -Raw
+          [xml]$filters = Get-Content ./D3D12LookDevPTwithAI.vcxproj.filters -Raw
           $itemTypes = @('ClCompile','ClInclude','ApplicationDefinition','Page','Midl','None','Manifest')
           $projectItems = @($project.Project.ItemGroup.ChildNodes | Where-Object { $_.LocalName -in $itemTypes -and $_.Include } | ForEach-Object { "$($_.LocalName)|$($_.Include)" })
           $filterNodes = @($filters.Project.ItemGroup.ChildNodes | Where-Object { $_.LocalName -in $itemTypes -and $_.Include })
@@ -67,12 +67,12 @@ jobs:
       - name: Build portable suite
         shell: pwsh
         run: |
-          $output = "$env:RUNNER_TEMP/D3D12LookDevSuite-${{ steps.suite-lock.outputs.suite_version }}-win-x64"
+          $output = "$env:RUNNER_TEMP/D3D12LookDevPTwithAI-${{ steps.suite-lock.outputs.suite_version }}-win-x64"
           ./Scripts/BuildPortableSuite.ps1 -OutputDirectory $output -LocalMcpRepository "$env:GITHUB_WORKSPACE/LocalMCPChatClient"
       - name: Audit dependency and license payload
         shell: pwsh
         run: |
-          $suite = "$env:RUNNER_TEMP/D3D12LookDevSuite-${{ steps.suite-lock.outputs.suite_version }}-win-x64"
+          $suite = "$env:RUNNER_TEMP/D3D12LookDevPTwithAI-${{ steps.suite-lock.outputs.suite_version }}-win-x64"
           $manifestPath = "$suite/suite-manifest.json"
           if (-not (Test-Path $manifestPath)) { throw 'suite manifest missing' }
           $manifest = Get-Content $manifestPath -Raw | ConvertFrom-Json
@@ -89,7 +89,7 @@ jobs:
             }
           }
           foreach ($required in @('LICENSE', 'THIRD-PARTY-NOTICES.txt', 'REDISTRIBUTION-NOTES.txt',
-              'UNSIGNED-BETA.ja.txt', 'Launch-LookDevSuite.ps1', 'InstallWindowsAppRuntime.ps1',
+              'UNSIGNED-BETA.ja.txt', 'Launch-D3D12LookDevPTwithAI.ps1', 'InstallWindowsAppRuntime.ps1',
               'suite-license-map.json', 'suite-sbom.spdx.json')) {
             if (-not (Test-Path (Join-Path $suite $required))) { throw "required disclosure missing: $required" }
           }
@@ -104,20 +104,20 @@ jobs:
         shell: pwsh
         run: |
           $version = '${{ steps.suite-lock.outputs.suite_version }}'
-          $zip = "$env:RUNNER_TEMP/D3D12LookDevSuite-$version-win-x64.zip"
+          $zip = "$env:RUNNER_TEMP/D3D12LookDevPTwithAI-$version-win-x64.zip"
           $hash = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash
-          $install = Join-Path $env:LOCALAPPDATA 'Programs/D3D12LookDevSuite'
+          $install = Join-Path $env:LOCALAPPDATA 'Programs/D3D12LookDevPTwithAI'
           if (Test-Path $install) { throw "test install target already exists: $install" }
           ./Scripts/InstallPortableSuite.ps1 -PackageUri ([uri]$zip) -Sha256 $hash -InstallDirectory $install
-          if (-not (Test-Path "$install/Launch-LookDevSuite.ps1")) { throw 'installed launcher missing' }
+          if (-not (Test-Path "$install/Launch-D3D12LookDevPTwithAI.ps1")) { throw 'installed launcher missing' }
           & "$install/UninstallPortableSuite.ps1" -InstallDirectory $install -Confirm:$false
           if (Test-Path $install) { throw 'uninstall left application files behind' }
       - uses: actions/upload-artifact@v4
         with:
-          name: D3D12LookDevSuite-win-x64
+          name: D3D12LookDevPTwithAI-win-x64
           path: |
-            ${{ runner.temp }}/D3D12LookDevSuite-${{ steps.suite-lock.outputs.suite_version }}-win-x64.zip
-            ${{ runner.temp }}/D3D12LookDevSuite-${{ steps.suite-lock.outputs.suite_version }}-win-x64.zip.sha256
+            ${{ runner.temp }}/D3D12LookDevPTwithAI-${{ steps.suite-lock.outputs.suite_version }}-win-x64.zip
+            ${{ runner.temp }}/D3D12LookDevPTwithAI-${{ steps.suite-lock.outputs.suite_version }}-win-x64.zip.sha256
 
   release:
     if: startsWith(github.ref, 'refs/tags/v')
@@ -128,12 +128,12 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          name: D3D12LookDevSuite-win-x64
+          name: D3D12LookDevPTwithAI-win-x64
           path: release
       - uses: softprops/action-gh-release@v2
         with:
           files: release/*
-          name: D3D12 LookDev Suite ${{ github.ref_name }}
+          name: D3D12LookDevPTwithAI ${{ github.ref_name }}
           generate_release_notes: true
           draft: false
           prerelease: true

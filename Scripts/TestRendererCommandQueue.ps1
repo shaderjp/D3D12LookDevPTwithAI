@@ -12,7 +12,7 @@ if (-not $vsRoot) {
     throw 'A Visual Studio C++ toolchain was not found.'
 }
 $vcvars = Join-Path $vsRoot 'Common7\Tools\VsDevCmd.bat'
-$testRoot = [System.IO.Path]::GetFullPath((Join-Path $env:TEMP ("D3D12LookDevPTWinUI-RendererCommandQueueBuild-{0}" -f $PID)))
+$testRoot = [System.IO.Path]::GetFullPath((Join-Path $env:TEMP ("D3D12LookDevPTwithAI-RendererCommandQueueBuild-{0}" -f $PID)))
 $tempRoot = [System.IO.Path]::GetFullPath($env:TEMP).TrimEnd('\') + '\'
 if (-not $testRoot.StartsWith($tempRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
     throw 'Refusing to use a test build directory outside the system temporary directory.'

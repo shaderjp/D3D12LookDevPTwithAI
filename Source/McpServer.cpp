@@ -1492,7 +1492,7 @@ Server::HttpResponse Server::HandleHttpRequest(const HttpRequest& request)
     {
         if (request.method != "GET") return JsonResponse(405, "Method Not Allowed", MakeHttpErrorBody(-32000, "Discovery requires GET."));
         const ServerStatus status = GetStatus();
-        return JsonResponse(200, "OK", "{\"name\":\"D3D12LookDevPTWinUI\",\"version\":\"" + std::string(ApplicationVersion) +
+        return JsonResponse(200, "OK", "{\"name\":\"D3D12LookDevPTwithAI\",\"version\":\"" + std::string(ApplicationVersion) +
             "\",\"contractVersion\":\"" + ContractVersion + "\",\"endpoint\":\"" +
             cld::EscapeJson(status.endpoint) + "\",\"pairing\":{\"available\":true,\"active\":" + (status.pairingSecondsRemaining > 0 ? "true" : "false") +
             ",\"expiresInSeconds\":" + std::to_string(status.pairingSecondsRemaining) + "}}");

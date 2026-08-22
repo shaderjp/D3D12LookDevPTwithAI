@@ -2,7 +2,7 @@
 
 English documentation: [Optional NVIDIA NRD Backend](nrd.md)
 
-D3D12LookDevPTWinUI は NVIDIA Real-Time Denoisers を optional な D3D12 compute backend として統合しています。repository は NRD `v4.17.3`（`792eff196afdd350fd9c3f862119017ccb438a0e`）へ固定しています。`interactive_game` は REBLUR、`sharp_preview` は RELAX を選択し、`reference_still` は NRD と temporal post-process を無効にします。NRD を利用できない場合、interactive profile は要求された選択を保持しつつ、internal temporal / A-Trous fallback で描画します。
+D3D12LookDevPTwithAI は NVIDIA Real-Time Denoisers を optional な D3D12 compute backend として統合しています。repository は NRD `v4.17.3`（`792eff196afdd350fd9c3f862119017ccb438a0e`）へ固定しています。`interactive_game` は REBLUR、`sharp_preview` は RELAX を選択し、`reference_still` は NRD と temporal post-process を無効にします。NRD を利用できない場合、interactive profile は要求された選択を保持しつつ、internal temporal / A-Trous fallback で描画します。
 
 ## セットアップ
 
@@ -30,7 +30,7 @@ NRD を実行する machine では strict setup check を使います。
 NRD は compile 時に default で有効です。依存を持たない backend build では無効化できます。
 
 ```powershell
-msbuild .\D3D12LookDevPTWinUI.sln /m /p:Configuration=Release /p:Platform=x64 /p:EnableNRD=false
+msbuild .\D3D12LookDevPTwithAI.sln /m /p:Configuration=Release /p:Platform=x64 /p:EnableNRD=false
 ```
 
 `EnableNRD=false` は SDK header / library を除外し、全 shader 構成を build 可能なまま維持し、`compiled=false` を公開して NRD 選択を internal backend へ route します。RTXDI と DLSS は独立した switch です。

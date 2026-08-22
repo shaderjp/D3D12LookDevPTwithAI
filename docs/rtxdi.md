@@ -2,7 +2,7 @@
 
 Japanese documentation: [NVIDIA RTXDI ReSTIR DI](rtxdi.ja.md)
 
-D3D12LookDevPTWinUI has an optional integration of the official NVIDIA RTXDI SDK. It implements ReSTIR DI, ReSTIR GI, and checkerboard ReSTIR PT. Sun, Environment, emissive triangles, and analytic area lights share one light identity/sample/evaluate/PDF contract.
+D3D12LookDevPTwithAI has an optional integration of the official NVIDIA RTXDI SDK. It implements ReSTIR DI, ReSTIR GI, and checkerboard ReSTIR PT. Sun, Environment, emissive triangles, and analytic area lights share one light identity/sample/evaluate/PDF contract.
 
 Pinned revisions:
 
@@ -31,13 +31,13 @@ The last two commands must print the commits listed above. Run the strict check 
 RTXDI is disabled at compile time by default:
 
 ```powershell
-msbuild .\D3D12LookDevPTWinUI.sln /m /p:Configuration=Release /p:Platform=x64 /p:EnableRTXDI=false
+msbuild .\D3D12LookDevPTwithAI.sln /m /p:Configuration=Release /p:Platform=x64 /p:EnableRTXDI=false
 ```
 
 Enable the ReSTIR DI/GI/PT backends with:
 
 ```powershell
-msbuild .\D3D12LookDevPTWinUI.sln /m /p:Configuration=Release /p:Platform=x64 /p:EnableRTXDI=true
+msbuild .\D3D12LookDevPTwithAI.sln /m /p:Configuration=Release /p:Platform=x64 /p:EnableRTXDI=true
 ```
 
 When enabled and present, `BuildThirdParty.ps1` builds only `ThirdParty/RTXDI/Libraries/Rtxdi` as `Rtxdi.lib`. That upstream CMake file is an `add_subdirectory` fragment, so `CMake/RtxdiRuntime/CMakeLists.txt` supplies the standalone `project()` context without modifying the pinned submodule. The application validates `RTXDI_RuntimeParameters` plus the official 24-byte DI, 32-byte GI, and 64-byte PT packed reservoir ABIs and uses RTXDI's block-linear layouts.

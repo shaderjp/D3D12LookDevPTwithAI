@@ -1,0 +1,50 @@
+{
+  "schemaVersion": 2,
+  "suiteVersion": "0.2.0-beta.1",
+  "repositories": {
+    "D3D12LookDevPTWinUI": {
+      "source": "self"
+    },
+    "LocalMCPChatClient": {
+      "commit": "8760be156d218d7d32bc78bf53356b25c767208e",
+      "repository": "shaderjp/LocalMCPChatClient",
+      "relativePath": "../LocalMCPChatClient"
+    }
+  },
+  "toolchain": {
+    "visualStudio": "2026",
+    "msvcPlatformToolset": "v145",
+    "windowsSdk": "10.0.26100.0",
+    "dotnetSdk": "10.0.300"
+  },
+  "runtimes": {
+    "windowsAppSdk": "2.4.0",
+    "windowsAppRuntimeInstaller": {
+      "architecture": "x64",
+      "fileName": "WindowsAppRuntimeInstall-x64.exe",
+      "uri": "https://aka.ms/windowsappsdk/2.4/2.4.0/windowsappruntimeinstall-x64.exe",
+      "sha256": "851c35b0b0a59ce4c55f9171f601193322fc3413143b0dc3390ea11e14cfa7fc",
+      "silentArguments": ["--quiet"]
+    },
+    "d3d12AgilitySdk": "1.619.3",
+    "dxc": "1.9.2602.17",
+    "llamaCpp": "b10205"
+  },
+  "models": {
+    "gemma-4-e2b-it-q4": {
+      "revision": "675cff42a74c774d6cb76f76d8eacb49b48c9b93",
+      "ggufSha256": "fa401b55b07ee70a54c6dae3903c783a6e65064312529ea57175cb5f8dec6634",
+      "mmprojSha256": "021059cce659fe7f9170d5599761d7bbaf644b798dab9503aca30dc43e6beb14"
+    },
+    "gemma-4-e4b-it-q4": {
+      "revision": "4b4a2c1d584be7264f87aac328a1bc739ce81b6c",
+      "ggufSha256": "676c35070db6dbe52f93e9c864ee0fba4eddea94b9c875d9cb10daff453fbaee",
+      "mmprojSha256": "7498a37cb619e55f2fcf87eb931f56e99389ed6d432e4c5c66110694c0d65578"
+    }
+  },
+  "standardBackends": {
+    "dlss": false,
+    "nrd": false,
+    "rtxdi": false
+  }
+}

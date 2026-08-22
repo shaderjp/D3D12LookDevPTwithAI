@@ -1,0 +1,25 @@
+[submodule "ThirdParty/assimp"]
+	path = ThirdParty/assimp
+	url = https://github.com/assimp/assimp.git
+	branch = master
+[submodule "ThirdParty/DirectXTex"]
+	path = ThirdParty/DirectXTex
+	url = https://github.com/microsoft/DirectXTex.git
+	branch = main
+[submodule "ThirdParty/Streamline"]
+	path = ThirdParty/Streamline
+	url = https://github.com/NVIDIA-RTX/Streamline.git
+[submodule "ThirdParty/DLSS"]
+	path = ThirdParty/DLSS
+	url = https://github.com/NVIDIA/DLSS.git
+[submodule "ThirdParty/NRD"]
+	path = ThirdParty/NRD
+	url = https://github.com/NVIDIA-RTX/NRD.git
+	ignore = untracked
+[submodule "ThirdParty/RTXDI"]
+	path = ThirdParty/RTXDI
+	url = https://github.com/NVIDIA-RTX/RTXDI.git
+[submodule "ThirdParty/tinyexr"]
+	path = ThirdParty/tinyexr
+	url = https://github.com/syoyo/tinyexr.git
+	branch = release

@@ -1,0 +1,44 @@
+# The official "all" suite includes fixture contracts that are not generic
+# protocol probes. D3D12LookDevPT intentionally does not add their fixed-name
+# tools/resources/prompts to its stable production catalog. Tasks and MRTR are
+# also outside the 2026-07-28 migration scope. Keep this baseline strict: the
+# conformance runner fails for both new failures and stale entries.
+server:
+  # Requires the fixture-only test_missing_capability tool, which would use
+  # deprecated sampling. Production tools require no client-side capability.
+  - server-stateless:sep-2575-server-rejects-undeclared-capability
+  - server-stateless:sep-2575-missing-capability-http-400
+
+  # Fixed-name conformance fixture capabilities/content not advertised by the
+  # production server.
+  - completion-complete
+  - tools-call-image
+  - tools-call-audio
+  - tools-call-embedded-resource
+  - tools-call-mixed-content
+  - tools-call-error
+  - tools-call-with-progress
+  - json-schema-2020-12
+  - resources-read-text
+  - resources-read-binary
+  - resources-templates-read
+  - prompts-get-simple
+  - prompts-get-with-args
+  - prompts-get-embedded-resource
+  - prompts-get-with-image
+  - http-custom-header-server-validation
+
+  # Multi-round-trip input_required is intentionally out of scope for this
+  # localhost renderer integration.
+  - input-required-result-basic-elicitation
+  - input-required-result-basic-sampling
+  - input-required-result-basic-list-roots
+  - input-required-result-request-state
+  - input-required-result-multiple-input-requests
+  - input-required-result-multi-round
+  - input-required-result-missing-input-response
+  - input-required-result-non-tool-request
+  - input-required-result-result-type
+  - input-required-result-tampered-state
+  - input-required-result-capability-check
+  - input-required-result-validate-input

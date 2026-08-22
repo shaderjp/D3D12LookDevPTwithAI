@@ -1,0 +1,39 @@
+{
+  "schemaVersion": 2,
+  "scenePath": "..\\Bistro_v5_2\\BistroExterior.fbx",
+  "environmentPath": "..\\Bistro_v5_2\\san_giuseppe_bridge_4k.hdr",
+  "mode": "Baseline PT",
+  "quality": {
+    "qualityProfile": "reference_still",
+    "restirBackend": "off",
+    "secondaryShadingRate": "full",
+    "rayBudget": {
+      "movingSpp": 1,
+      "movingBounces": 2,
+      "staticBaseSpp": 1,
+      "staticMaxSpp": 2,
+      "staticBounces": 4,
+      "settleFrames": 8,
+      "targetGpuMs": 14.5
+    },
+    "finalTaa": false,
+    "sharpenStrength": 0.15,
+    "referenceSpp": 4096
+  },
+  "denoise": {
+    "enabled": false,
+    "backend": "off",
+    "cameraJitter": true,
+    "jitterMode": "stable32",
+    "atrousPasses": 3
+  },
+  "view": {
+    "debugView": 0,
+    "environmentEnabled": true,
+    "exposure": 0,
+    "gamma": 2.2,
+    "toneMapper": "aces",
+    "materialFocusMode": "normal",
+    "selectedMaterial": 0
+  }
+}

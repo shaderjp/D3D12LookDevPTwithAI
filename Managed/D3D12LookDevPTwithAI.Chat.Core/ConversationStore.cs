@@ -4,6 +4,9 @@ public interface IAppPaths
 {
     string DataDirectory { get; }
     string DatabasePath { get; }
+    string ModelsDirectory { get; }
+    string RuntimesDirectory { get; }
+    string InferenceSettingsPath { get; }
     void EnsureCreated();
 }
 

@@ -26,16 +26,60 @@ hidden local ChatHost, a current-user-only named pipe, streaming, cancellation,
 and project-scoped SQLite conversation history. The only executable window the
 user launches or operates is `D3D12LookDevPTwithAI.exe`.
 
-The current ChatHost produces deterministic placeholder responses so the IPC
-and UI can be exercised. Generation is now isolated behind
-`IChatInferenceRuntime`; the registered implementation remains deterministic.
-The ChatHost history API uses SQLite sequence cursors and UTF-8 byte-bounded
-pages so long histories cannot exceed the 4 MiB IPC frame limit. The native UI
-currently displays the latest page; browsing older pages is a subsequent UI
-milestone. Real llama.cpp inference, same-instance MCP tool
-execution, one-time approval grants, model download, and the integrated
-portable/offline pack are subsequent milestones. See the
+The product-default inference path now talks to a hidden `llama-server.exe`
+child over an authenticated loopback connection. A missing local
+`inference.json` is the normal first-run state: the Assistant reports
+`not_ready` and does not substitute a placeholder response. The deterministic
+runtime is reserved for the Debug end-to-end bridge test and is not a product
+fallback. The ChatHost history API uses SQLite sequence cursors and UTF-8
+byte-bounded pages so long histories cannot exceed the 4 MiB IPC frame limit.
+The native UI currently displays the latest page; browsing older pages is a
+subsequent UI milestone.
+
+Same-instance MCP tool execution, one-time approval grants, an in-app model
+manager, and the integrated portable/offline exhibition pack are not
+implemented yet. See the
 [integrated architecture](docs/integrated-ai-architecture.ja.md).
+
+### Manual local inference setup
+
+This milestone does not automatically download a multi-gigabyte model or a
+llama.cpp runtime. For development or an explicitly user-approved setup,
+import an existing GGUF and the `llama-server.exe` from an existing CPU, CUDA,
+or Vulkan llama.cpp runtime directory:
+
+```powershell
+.\Scripts\ConfigureLocalInference.ps1 `
+  -ModelPath 'D:\AI\models\model-q4.gguf' `
+  -RuntimePath 'D:\AI\llama-cpu\llama-server.exe' `
+  -ModelId 'model-q4' `
+  -Backend cpu `
+  -ContextSize 4096 `
+  -MaxTokens 1024 `
+  -Temperature 0.2 `
+  -AcceptArtifactLicenses
+```
+
+`-AcceptArtifactLicenses` records the operator's explicit decision to use the
+supplied artifacts; it does not certify their origin. If a configuration
+already exists, replacement also requires `-ReplaceConfiguration`.
+
+The script copies the GGUF and the complete runtime directory beneath
+`%LOCALAPPDATA%\D3D12LookDevPTwithAI\AI\Models` and `Runtimes`, then writes
+`inference.json` atomically. The document records the size and SHA-256 of the
+model, `llama-server.exe`, and every other runtime file in the required
+`runtimeDependencies` manifest. At startup, ChatHost requires an exact runtime
+tree match and verifies every entry. For the child lifetime it retains read
+leases for existing files and directory handles; a runtime-tree mutation
+monitor invalidates the session and stops the child on any add, remove, or update.
+
+The hidden server binds to `127.0.0.1` on an ephemeral port and receives a new
+256-bit API key on each start. The native application owns ChatHost by verified
+PID in a kill-on-close Job Object; the llama.cpp descendant stays in that
+ownership chain and is terminated with the app. An official signed artifact
+catalog/manifest and the one-app portable/offline pack remain a later
+distribution milestone. Manual configuration is not that exhibition release
+trust path.
 
 ## Screenshots
 
@@ -272,6 +316,15 @@ WinUI-specific user data is isolated from the original application:
 %TEMP%\D3D12LookDevPTwithAI.log
 ```
 
+Assistant data is kept separately under the current user's local profile:
+
+```text
+%LOCALAPPDATA%\D3D12LookDevPTwithAI\AI\chat-history.sqlite3
+%LOCALAPPDATA%\D3D12LookDevPTwithAI\AI\Models\
+%LOCALAPPDATA%\D3D12LookDevPTwithAI\AI\Runtimes\
+%LOCALAPPDATA%\D3D12LookDevPTwithAI\AI\inference.json
+```
+
 Project paths may be absolute or relative to `baseDirectory`. Bundle-internal
 v3 paths are resolved beneath `assetRoot`, and escaping absolute or `..` paths
 are rejected. `Scripts\LookDevBundle.ps1` creates and safely imports the
@@ -353,10 +406,16 @@ Run the inherited and WinUI boundary tests from PowerShell:
 .\Scripts\TestTransientResourceAllocator.ps1
 .\Scripts\TestMcpServer.ps1
 .\Scripts\TestPbrtDxrContracts.ps1
+.\Scripts\TestConfigureLocalInference.ps1
+.\Scripts\TestAssistantProtocol.ps1
+.\Scripts\TestAssistantHostBridge.ps1
 ```
 
-The final test covers command coalescing, FIFO barriers, indexed targets, and
-atomic immutable snapshot publication.
+`TestAssistantHostBridge.ps1` is the Debug E2E test that explicitly selects the
+deterministic inference hook; ordinary app and ChatHost launches use the
+configured llama.cpp path. The renderer command-queue tests cover command
+coalescing, FIFO barriers, indexed targets, and atomic immutable snapshot
+publication.
 
 ## Third-party revisions
 

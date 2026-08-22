@@ -21,6 +21,15 @@ public sealed class AppPathsTests
             Assert.Equal(
                 Path.Combine(Path.GetFullPath(relativeDirectory), "chat-history.sqlite3"),
                 paths.DatabasePath);
+            Assert.Equal(
+                Path.Combine(Path.GetFullPath(relativeDirectory), "Models"),
+                paths.ModelsDirectory);
+            Assert.Equal(
+                Path.Combine(Path.GetFullPath(relativeDirectory), "Runtimes"),
+                paths.RuntimesDirectory);
+            Assert.Equal(
+                Path.Combine(Path.GetFullPath(relativeDirectory), "inference.json"),
+                paths.InferenceSettingsPath);
         });
     }
 
@@ -43,6 +52,30 @@ public sealed class AppPathsTests
                     "D3D12LookDevPTwithAI",
                     "AI"),
                 new AppPaths().DataDirectory));
+    }
+
+    [Fact]
+    public void Ensure_created_creates_integrated_ai_artifact_directories()
+    {
+        var dataDirectory = Path.Combine(
+            Path.GetTempPath(),
+            "D3D12LookDevPTwithAI-AppPathsTests",
+            Guid.NewGuid().ToString("N"));
+        var paths = new AppPaths(dataDirectory);
+        try
+        {
+            paths.EnsureCreated();
+
+            Assert.True(Directory.Exists(paths.DataDirectory));
+            Assert.True(Directory.Exists(paths.ModelsDirectory));
+            Assert.True(Directory.Exists(paths.RuntimesDirectory));
+            Assert.False(File.Exists(paths.InferenceSettingsPath));
+        }
+        finally
+        {
+            if (Directory.Exists(dataDirectory))
+                Directory.Delete(dataDirectory, recursive: true);
+        }
     }
 
     private static void WithDataDirectoryEnvironment(string value, Action action)

@@ -466,10 +466,16 @@
     <None Include="config\LocalMCPChatClient.mcp.json">
       <Filter>Build Scripts</Filter>
     </None>
+    <None Include="Scripts\ConfigureLocalInference.ps1">
+      <Filter>Build Scripts</Filter>
+    </None>
     <None Include="Scripts\TestAssistantHostBridge.ps1">
       <Filter>Build Scripts</Filter>
     </None>
     <None Include="Scripts\TestAssistantProtocol.ps1">
+      <Filter>Build Scripts</Filter>
+    </None>
+    <None Include="Scripts\TestConfigureLocalInference.ps1">
       <Filter>Build Scripts</Filter>
     </None>
     <None Include="Scripts\TestLocalMcpChatClientIntegration.ps1">

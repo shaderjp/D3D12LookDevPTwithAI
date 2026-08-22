@@ -397,11 +397,118 @@ public sealed class PipeRequestRouterTests
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
         await fixture.Coordinator.StopAsync(timeout.Token);
 
-        Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(3));
+        Assert.True(
+            stopwatch.Elapsed < TimeSpan.FromSeconds(1),
+            $"Coordinator shutdown took {stopwatch.Elapsed}.");
     }
 
     [Fact]
-    public async Task Stop_after_acceptance_is_observed_prevents_a_late_turn_from_starting()
+    public async Task Failed_turn_terminal_writes_are_bounded_per_event()
+    {
+        var runtime = new ScriptedInferenceRuntime
+        {
+            Failure = new ChatInferenceException(
+                "simulated_failure",
+                "Simulated failure for terminal timeout coverage."),
+        };
+        await using var fixture = new RouterFixture(runtime);
+        var conversationId = await fixture.InitializeAsync();
+        var blockedPeer = new BlockingTerminalEventPipePeer();
+
+        await fixture.Router.HandleAsync(
+            fixture.Request(
+                "sendTurn",
+                new SendTurnRequest(Guid.NewGuid(), conversationId, "block terminal writes")),
+            blockedPeer);
+        await blockedPeer.FirstTerminalWriteStarted.Task.WaitAsync(TimeSpan.FromSeconds(3));
+
+        var stopwatch = Stopwatch.StartNew();
+        await fixture.Coordinator.StopAsync().WaitAsync(TimeSpan.FromSeconds(2));
+        stopwatch.Stop();
+
+        Assert.Equal(2, blockedPeer.TerminalWriteCount);
+        Assert.True(
+            stopwatch.Elapsed < TimeSpan.FromSeconds(1),
+            $"Two terminal writes took {stopwatch.Elapsed}.");
+    }
+
+    [Fact]
+    public async Task Normal_turn_history_writes_receive_the_turn_cancellation_token()
+    {
+        AppendTokenRecordingConversationStore? recordingStore = null;
+        await using var fixture = new RouterFixture(
+            decorateConversationStore: inner =>
+                recordingStore = new AppendTokenRecordingConversationStore(inner));
+        var conversationId = await fixture.InitializeAsync();
+
+        await fixture.Router.HandleAsync(
+            fixture.Request(
+                "sendTurn",
+                new SendTurnRequest(Guid.NewGuid(), conversationId, "record append tokens")),
+            fixture.Peer);
+        Assert.Null((await fixture.Peer.ReadAsync()).Error);
+
+        PipeEnvelope envelope;
+        do
+        {
+            envelope = await fixture.Peer.ReadAsync(TimeSpan.FromSeconds(3));
+        }
+        while (envelope.Method != "completed");
+
+        var appendCalls = Assert.IsType<AppendTokenRecordingConversationStore>(
+            recordingStore).AppendCalls;
+        Assert.Collection(
+            appendCalls,
+            call =>
+            {
+                Assert.Equal("user", call.Role);
+                Assert.True(call.TokenCanBeCanceled);
+            },
+            call =>
+            {
+                Assert.Equal("assistant", call.Role);
+                Assert.True(call.TokenCanBeCanceled);
+            });
+    }
+
+    [Fact]
+    public async Task Cancelled_partial_history_write_uses_an_independent_bounded_token()
+    {
+        CancelledPartialPersistenceStore? persistenceStore = null;
+        await using var fixture = new RouterFixture(
+            new BlockingAfterFirstChunkInferenceRuntime(),
+            decorateConversationStore: inner =>
+                persistenceStore = new CancelledPartialPersistenceStore(inner));
+        var conversationId = await fixture.InitializeAsync();
+
+        await fixture.Router.HandleAsync(
+            fixture.Request(
+                "sendTurn",
+                new SendTurnRequest(Guid.NewGuid(), conversationId, "cancel after a partial")),
+            fixture.Peer);
+        Assert.Null((await fixture.Peer.ReadAsync()).Error);
+        PipeEnvelope envelope;
+        do
+        {
+            envelope = await fixture.Peer.ReadAsync(TimeSpan.FromSeconds(3));
+        }
+        while (envelope.Method != "textDelta");
+
+        var stopwatch = Stopwatch.StartNew();
+        await fixture.Coordinator.StopAsync().WaitAsync(TimeSpan.FromSeconds(2));
+        stopwatch.Stop();
+
+        var store = Assert.IsType<CancelledPartialPersistenceStore>(persistenceStore);
+        await store.PersistenceCancellationObserved.Task.WaitAsync(TimeSpan.FromSeconds(1));
+        Assert.True(store.TokenCanBeCanceled);
+        Assert.False(store.TokenWasAlreadyCancelled);
+        Assert.True(
+            stopwatch.Elapsed < TimeSpan.FromSeconds(1),
+            $"Cancelled partial persistence took {stopwatch.Elapsed}.");
+    }
+
+    [Fact]
+    public async Task Stop_after_acceptance_emits_cancelled_terminal_without_late_history()
     {
         await using var fixture = new RouterFixture();
         var conversationId = await fixture.InitializeAsync();
@@ -413,18 +520,22 @@ public sealed class PipeRequestRouterTests
             acceptancePeer);
         await acceptancePeer.AcceptanceObserved.Task.WaitAsync(TimeSpan.FromSeconds(3));
 
+        var stopping = fixture.Coordinator.StopAsync();
         try
         {
-            await fixture.Coordinator.StopAsync().WaitAsync(TimeSpan.FromSeconds(3));
+            await Task.Yield();
+            Assert.False(stopping.IsCompleted);
         }
         finally
         {
             acceptancePeer.ReleaseAcceptance.TrySetResult();
         }
         await routing.WaitAsync(TimeSpan.FromSeconds(3));
-        await fixture.Coordinator.StopAsync().WaitAsync(TimeSpan.FromSeconds(3));
+        await stopping.WaitAsync(TimeSpan.FromSeconds(3));
 
         Assert.Empty(await fixture.Store.GetMessagesAsync("project-1", conversationId));
+        var completed = await acceptancePeer.Completed.Task.WaitAsync(TimeSpan.FromSeconds(3));
+        Assert.Equal("cancelled", completed.Status);
     }
 
     [Fact]
@@ -598,11 +709,17 @@ public sealed class PipeRequestRouterTests
 
         public RouterFixture(
             IChatInferenceRuntime? inferenceRuntime = null,
-            bool failHistoryRead = false)
+            bool failHistoryRead = false,
+            Func<IConversationStore, IConversationStore>? decorateConversationStore = null)
         {
             Store = new SqliteConversationStore(new AppPaths(_dataDirectory));
+            IConversationStore coordinatorStore = failHistoryRead
+                ? new FailingHistoryConversationStore(Store)
+                : Store;
+            if (decorateConversationStore is not null)
+                coordinatorStore = decorateConversationStore(coordinatorStore);
             Coordinator = new ChatCoordinator(
-                failHistoryRead ? new FailingHistoryConversationStore(Store) : Store,
+                coordinatorStore,
                 inferenceRuntime ?? new DeterministicChatInferenceRuntime());
             Router = new PipeRequestRouter(Coordinator, _lifetime);
         }
@@ -711,6 +828,130 @@ public sealed class PipeRequestRouterTests
         }
     }
 
+    private sealed class BlockingAfterFirstChunkInferenceRuntime : IChatInferenceRuntime
+    {
+        public ValueTask<ChatInferenceRuntimeStatus> GetStatusAsync(
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return ValueTask.FromResult(new ChatInferenceRuntimeStatus(
+                "blocking-after-chunk",
+                "Blocking after chunk test runtime",
+                IsReady: true,
+                State: "ready"));
+        }
+
+        public async IAsyncEnumerable<ChatInferenceChunk> StreamAsync(
+            ChatInferenceRequest request,
+            [EnumeratorCancellation] CancellationToken cancellationToken = default)
+        {
+            yield return new ChatInferenceChunk("partial response");
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+        }
+    }
+
+    private sealed class AppendTokenRecordingConversationStore(IConversationStore inner) :
+        DelegatingConversationStore(inner)
+    {
+        public List<AppendCall> AppendCalls { get; } = [];
+
+        public override Task AppendMessageAsync(
+            string projectContextKey,
+            ConversationMessage message,
+            CancellationToken cancellationToken = default)
+        {
+            AppendCalls.Add(new AppendCall(message.Role, cancellationToken.CanBeCanceled));
+            return base.AppendMessageAsync(projectContextKey, message, cancellationToken);
+        }
+
+        public sealed record AppendCall(string Role, bool TokenCanBeCanceled);
+    }
+
+    private sealed class CancelledPartialPersistenceStore(IConversationStore inner) :
+        DelegatingConversationStore(inner)
+    {
+        public TaskCompletionSource PersistenceCancellationObserved { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public bool TokenCanBeCanceled { get; private set; }
+        public bool TokenWasAlreadyCancelled { get; private set; }
+
+        public override async Task AppendMessageAsync(
+            string projectContextKey,
+            ConversationMessage message,
+            CancellationToken cancellationToken = default)
+        {
+            if (!string.Equals(message.Role, "assistant", StringComparison.Ordinal))
+            {
+                await base.AppendMessageAsync(
+                    projectContextKey,
+                    message,
+                    cancellationToken).ConfigureAwait(false);
+                return;
+            }
+
+            TokenCanBeCanceled = cancellationToken.CanBeCanceled;
+            TokenWasAlreadyCancelled = cancellationToken.IsCancellationRequested;
+            try
+            {
+                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                PersistenceCancellationObserved.TrySetResult();
+                throw;
+            }
+        }
+    }
+
+    private abstract class DelegatingConversationStore(IConversationStore inner) :
+        IConversationStore
+    {
+        public Task InitializeAsync(CancellationToken cancellationToken = default) =>
+            inner.InitializeAsync(cancellationToken);
+
+        public Task<IReadOnlyList<ConversationSummary>> ListAsync(
+            string projectContextKey,
+            CancellationToken cancellationToken = default) =>
+            inner.ListAsync(projectContextKey, cancellationToken);
+
+        public Task<ConversationSummary?> GetAsync(
+            string projectContextKey,
+            Guid conversationId,
+            CancellationToken cancellationToken = default) =>
+            inner.GetAsync(projectContextKey, conversationId, cancellationToken);
+
+        public Task<ConversationSummary> CreateAsync(
+            string projectContextKey,
+            string title,
+            CancellationToken cancellationToken = default) =>
+            inner.CreateAsync(projectContextKey, title, cancellationToken);
+
+        public Task<IReadOnlyList<ConversationMessage>> GetMessagesAsync(
+            string projectContextKey,
+            Guid conversationId,
+            CancellationToken cancellationToken = default) =>
+            inner.GetMessagesAsync(projectContextKey, conversationId, cancellationToken);
+
+        public Task<IReadOnlyList<SequencedConversationMessage>> ListMessagesBeforeAsync(
+            string projectContextKey,
+            Guid conversationId,
+            long? beforeMessageSequence,
+            int maximumMessages,
+            CancellationToken cancellationToken = default) =>
+            inner.ListMessagesBeforeAsync(
+                projectContextKey,
+                conversationId,
+                beforeMessageSequence,
+                maximumMessages,
+                cancellationToken);
+
+        public virtual Task AppendMessageAsync(
+            string projectContextKey,
+            ConversationMessage message,
+            CancellationToken cancellationToken = default) =>
+            inner.AppendMessageAsync(projectContextKey, message, cancellationToken);
+    }
+
     private sealed class FailingHistoryConversationStore(IConversationStore inner) : IConversationStore
     {
         public const string SensitiveFailureMarker = "sensitive-history-failure-marker";
@@ -797,11 +1038,43 @@ public sealed class PipeRequestRouterTests
         }
     }
 
+    private sealed class BlockingTerminalEventPipePeer : IPipePeer
+    {
+        private int _terminalWriteCount;
+
+        public TaskCompletionSource FirstTerminalWriteStarted { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public int TerminalWriteCount => Volatile.Read(ref _terminalWriteCount);
+
+        public Task SendResponseAsync(
+            PipeEnvelope request,
+            object payload,
+            PipeError? error = null,
+            CancellationToken cancellationToken = default) =>
+            Task.CompletedTask;
+
+        public async Task SendEventAsync(
+            Guid requestId,
+            string method,
+            object payload,
+            CancellationToken cancellationToken = default)
+        {
+            if (method is not ("error" or "completed"))
+                return;
+
+            if (Interlocked.Increment(ref _terminalWriteCount) == 1)
+                FirstTerminalWriteStarted.TrySetResult();
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+        }
+    }
+
     private sealed class GatedAcceptancePipePeer : IPipePeer
     {
         public TaskCompletionSource AcceptanceObserved { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource ReleaseAcceptance { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource<TurnCompletedEvent> Completed { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public async Task SendResponseAsync(
@@ -818,8 +1091,13 @@ public sealed class PipeRequestRouterTests
             Guid requestId,
             string method,
             object payload,
-            CancellationToken cancellationToken = default) =>
-            Task.CompletedTask;
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (method == "completed" && payload is TurnCompletedEvent completed)
+                Completed.TrySetResult(completed);
+            return Task.CompletedTask;
+        }
     }
 
     private sealed class RecordingPipePeer : IPipePeer

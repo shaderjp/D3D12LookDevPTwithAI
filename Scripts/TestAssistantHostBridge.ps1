@@ -4,8 +4,12 @@ param()
 $ErrorActionPreference = 'Stop'
 $repo = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $dataEnvironmentName = 'D3D12LOOKDEVPT_AI_DATA_DIRECTORY'
+$runtimeEnvironmentName = 'D3D12LOOKDEVPT_AI_TEST_RUNTIME'
 $originalDataDirectory = [Environment]::GetEnvironmentVariable(
     $dataEnvironmentName,
+    [EnvironmentVariableTarget]::Process)
+$originalRuntime = [Environment]::GetEnvironmentVariable(
+    $runtimeEnvironmentName,
     [EnvironmentVariableTarget]::Process)
 $tempBase = [System.IO.Path]::GetFullPath($env:TEMP).TrimEnd('\', '/') + [System.IO.Path]::DirectorySeparatorChar
 $testRoot = [System.IO.Path]::GetFullPath((Join-Path $env:TEMP ("D3D12LookDevPTwithAI-AssistantHostBridge-{0}" -f [Guid]::NewGuid().ToString('N'))))
@@ -21,6 +25,10 @@ try {
     [Environment]::SetEnvironmentVariable(
         $dataEnvironmentName,
         $dataRoot,
+        [EnvironmentVariableTarget]::Process)
+    [Environment]::SetEnvironmentVariable(
+        $runtimeEnvironmentName,
+        'deterministic',
         [EnvironmentVariableTarget]::Process)
 
     $hostProject = Join-Path $repo 'Managed\D3D12LookDevPTwithAI.ChatHost\D3D12LookDevPTwithAI.ChatHost.csproj'
@@ -107,6 +115,10 @@ finally {
     [Environment]::SetEnvironmentVariable(
         $dataEnvironmentName,
         $originalDataDirectory,
+        [EnvironmentVariableTarget]::Process)
+    [Environment]::SetEnvironmentVariable(
+        $runtimeEnvironmentName,
+        $originalRuntime,
         [EnvironmentVariableTarget]::Process)
     if ($testProcess -and -not $testProcess.HasExited) {
         Stop-Process -Id $testProcess.Id -Force

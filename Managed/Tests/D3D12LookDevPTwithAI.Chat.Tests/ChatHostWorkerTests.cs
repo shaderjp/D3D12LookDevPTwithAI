@@ -6,6 +6,17 @@ namespace D3D12LookDevPTwithAI.Chat.Tests;
 public sealed class ChatHostWorkerTests
 {
     [Fact]
+    public void Shutdown_budgets_fit_the_native_grace_period()
+    {
+        Assert.Equal(
+            TimeSpan.FromMilliseconds(750),
+            ChatHostShutdownBudget.CleanupTimeout);
+        Assert.Equal(TimeSpan.FromSeconds(1), ChatHostShutdownBudget.HostTimeout);
+        Assert.True(
+            ChatHostShutdownBudget.CleanupTimeout < ChatHostShutdownBudget.HostTimeout);
+    }
+
+    [Fact]
     public async Task Cleanup_timeout_is_swallowed_and_host_stop_is_always_requested()
     {
         var lifetime = new TestApplicationLifetime();

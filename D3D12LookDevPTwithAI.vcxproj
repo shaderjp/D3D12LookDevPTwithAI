@@ -306,8 +306,10 @@
     <None Include="CMake\RtxdiRuntime\CMakeLists.txt" />
     <None Include="config\development.dsc.yaml" />
     <None Include="config\LocalMCPChatClient.mcp.json" />
+    <None Include="Scripts\ConfigureLocalInference.ps1" />
     <None Include="Scripts\TestAssistantHostBridge.ps1" />
     <None Include="Scripts\TestAssistantProtocol.ps1" />
+    <None Include="Scripts\TestConfigureLocalInference.ps1" />
     <None Include="Scripts\TestLocalMcpChatClientIntegration.ps1" />
     <None Include="Scripts\TestMcpServerHttp.ps1" />
     <None Include="Scripts\TestMcpReviewAnalysis.ps1" />

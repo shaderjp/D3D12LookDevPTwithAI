@@ -4,6 +4,12 @@ using Microsoft.Extensions.Hosting;
 
 namespace D3D12LookDevPTwithAI.ChatHost;
 
+internal static class ChatHostShutdownBudget
+{
+    internal static readonly TimeSpan CleanupTimeout = TimeSpan.FromMilliseconds(750);
+    internal static readonly TimeSpan HostTimeout = TimeSpan.FromSeconds(1);
+}
+
 public sealed class ChatHostWorker(
     CommandLineOptions options,
     NamedPipeConnection connection,
@@ -32,7 +38,7 @@ public sealed class ChatHostWorker(
             await CompleteShutdownAsync(
                 coordinator.StopAsync,
                 applicationLifetime,
-                TimeSpan.FromSeconds(10)).ConfigureAwait(false);
+                ChatHostShutdownBudget.CleanupTimeout).ConfigureAwait(false);
         }
     }
 

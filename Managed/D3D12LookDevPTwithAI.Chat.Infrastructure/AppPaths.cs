@@ -11,7 +11,9 @@ public sealed class AppPaths : IAppPaths
     {
         if (dataDirectory is not null)
         {
-            DataDirectory = dataDirectory;
+            if (string.IsNullOrWhiteSpace(dataDirectory))
+                throw new ArgumentException("The AI data directory must not be empty.", nameof(dataDirectory));
+            DataDirectory = Path.GetFullPath(dataDirectory);
             return;
         }
 
@@ -27,6 +29,14 @@ public sealed class AppPaths : IAppPaths
 
     public string DataDirectory { get; }
     public string DatabasePath => Path.Combine(DataDirectory, "chat-history.sqlite3");
+    public string ModelsDirectory => Path.Combine(DataDirectory, "Models");
+    public string RuntimesDirectory => Path.Combine(DataDirectory, "Runtimes");
+    public string InferenceSettingsPath => Path.Combine(DataDirectory, "inference.json");
 
-    public void EnsureCreated() => Directory.CreateDirectory(DataDirectory);
+    public void EnsureCreated()
+    {
+        Directory.CreateDirectory(DataDirectory);
+        Directory.CreateDirectory(ModelsDirectory);
+        Directory.CreateDirectory(RuntimesDirectory);
+    }
 }

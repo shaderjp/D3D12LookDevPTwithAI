@@ -11,7 +11,10 @@ public sealed class ChatCoordinator(
     IChatInferenceRuntime inferenceRuntime)
 {
     private const int InferenceHistoryMessageLimit = 64;
-    private static readonly TimeSpan TerminalEventWriteTimeout = TimeSpan.FromSeconds(2);
+    private static readonly TimeSpan CancelledPartialPersistenceTimeout =
+        TimeSpan.FromMilliseconds(250);
+    private static readonly TimeSpan TerminalEventWriteTimeout =
+        TimeSpan.FromMilliseconds(250);
     private readonly object _gate = new();
     private readonly ConcurrentDictionary<Guid, TaskCompletionSource<ApprovalResolution>> _approvals = new();
     private ActiveTurn? _activeTurn;
@@ -180,6 +183,11 @@ public sealed class ChatCoordinator(
                     requestId,
                     peer,
                     turnCancellationToken),
+                () => SendWithoutTurnCancellationAsync(
+                    peer,
+                    requestId,
+                    "completed",
+                    new TurnCompletedEvent(request.TurnId, "cancelled")),
                 completedTurn =>
                 {
                     lock (_gate)
@@ -295,7 +303,7 @@ public sealed class ChatCoordinator(
             await conversationStore.AppendMessageAsync(
                 projectContextKey,
                 userMessage,
-                CancellationToken.None).ConfigureAwait(false);
+                cancellationToken).ConfigureAwait(false);
             await peer.SendEventAsync(
                 requestId,
                 "messageAdded",
@@ -368,7 +376,7 @@ public sealed class ChatCoordinator(
             await conversationStore.AppendMessageAsync(
                 projectContextKey,
                 assistantMessage,
-                CancellationToken.None).ConfigureAwait(false);
+                cancellationToken).ConfigureAwait(false);
             assistantStored = true;
             await peer.SendEventAsync(
                 requestId,
@@ -387,6 +395,8 @@ public sealed class ChatCoordinator(
             {
                 try
                 {
+                    using var persistenceTimeout = new CancellationTokenSource(
+                        CancelledPartialPersistenceTimeout);
                     await conversationStore.AppendMessageAsync(
                         projectContextKey,
                         new ConversationMessage(
@@ -395,7 +405,7 @@ public sealed class ChatCoordinator(
                             "assistant",
                             visibleResponse.ToString(),
                             DateTimeOffset.UtcNow),
-                        CancellationToken.None).ConfigureAwait(false);
+                        persistenceTimeout.Token).ConfigureAwait(false);
                 }
                 catch (Exception)
                 {
@@ -626,6 +636,7 @@ public sealed class ChatCoordinator(
         private const int CancelledBeforeStart = 3;
         private readonly CancellationTokenSource _cancellation;
         private readonly CancellationToken _cancellationToken;
+        private readonly Func<Task> _cancelledBeforeStartOperation;
         private readonly TaskCompletionSource _completion = new(
             TaskCreationOptions.RunContinuationsAsynchronously);
         private readonly Func<CancellationToken, Task> _operation;
@@ -637,12 +648,14 @@ public sealed class ChatCoordinator(
             Guid turnId,
             CancellationTokenSource cancellation,
             Func<CancellationToken, Task> operation,
+            Func<Task> cancelledBeforeStartOperation,
             Action<ActiveTurn> onCompleted)
         {
             TurnId = turnId;
             _cancellation = cancellation;
             _cancellationToken = cancellation.Token;
             _operation = operation;
+            _cancelledBeforeStartOperation = cancelledBeforeStartOperation;
             _onCompleted = onCompleted;
         }
 
@@ -652,19 +665,28 @@ public sealed class ChatCoordinator(
 
         public void Start()
         {
-            var previous = Interlocked.CompareExchange(
-                ref _disposition,
-                Started,
-                Prepared);
+            var previous = Interlocked.CompareExchange(ref _disposition, Started, Prepared);
+            var operationFactory = _operation;
             if (previous == CancelledBeforeStart)
-                return;
-            if (previous != Prepared)
+            {
+                if (Interlocked.CompareExchange(
+                        ref _disposition,
+                        Started,
+                        CancelledBeforeStart) != CancelledBeforeStart)
+                {
+                    throw new InvalidOperationException("The active turn has already been handled.");
+                }
+                operationFactory = _ => _cancelledBeforeStartOperation();
+            }
+            else if (previous != Prepared)
+            {
                 throw new InvalidOperationException("The active turn has already been handled.");
+            }
 
             Task operation;
             try
             {
-                operation = _operation(_cancellationToken);
+                operation = operationFactory(_cancellationToken);
             }
             catch (Exception exception)
             {
@@ -675,14 +697,19 @@ public sealed class ChatCoordinator(
 
         public void Abort()
         {
-            var previous = Interlocked.CompareExchange(
-                ref _disposition,
-                Aborted,
-                Prepared);
-            if (previous == Prepared)
+            while (true)
             {
+                var current = Volatile.Read(ref _disposition);
+                if (current is Started or Aborted)
+                    return;
+                if (current is not (Prepared or CancelledBeforeStart))
+                    throw new InvalidOperationException("The active turn has already been handled.");
+                if (Interlocked.CompareExchange(ref _disposition, Aborted, current) != current)
+                    continue;
+
                 TryCancel();
                 CompleteSuccessfully();
+                return;
             }
         }
 
@@ -691,13 +718,13 @@ public sealed class ChatCoordinator(
             try
             {
                 _cancellation.Cancel();
-                if (Interlocked.CompareExchange(
-                        ref _disposition,
-                        CancelledBeforeStart,
-                        Prepared) == Prepared)
-                {
-                    CompleteSuccessfully();
-                }
+                // The sendTurn response decides whether this prepared turn was
+                // accepted. Start emits the cancellation terminal; Abort
+                // completes without one when the response failed.
+                Interlocked.CompareExchange(
+                    ref _disposition,
+                    CancelledBeforeStart,
+                    Prepared);
                 return true;
             }
             catch (ObjectDisposedException)

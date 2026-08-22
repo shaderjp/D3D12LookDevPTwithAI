@@ -23,14 +23,54 @@ scene load、MCP `2026-07-28` transport も合流しています。
 取消、project ごとの SQLite 会話履歴が含まれます。利用者が起動・操作するウィンドウは
 `D3D12LookDevPTwithAI.exe` だけです。
 
-現段階の ChatHost は IPC と UI を検証する deterministic placeholder 応答です。
-応答生成は `IChatInferenceRuntime` 境界へ分離済みで、現在は deterministic 実装を
-登録しています。ChatHost の会話履歴 API は SQLite の連番 cursor による UTF-8
-byte 制限付きpageで取得するため、長期履歴でも4 MiBのIPC frame上限を超えません。
-Native UI が表示するのは現時点では最新pageで、過去pageの閲覧UIは後続milestoneです。
-実際の llama.cpp 推論、同一アプリの MCP Tool 実行、一回承認 grant、model download、
-一体型 portable / offline pack は次の milestone です。設計と境界は
+製品既定の推論経路は、認証付き loopback 接続で非表示の `llama-server.exe` 子プロセス
+を使用します。local の `inference.json` がない状態は正常な初回状態であり、Assistant
+は `not_ready` を表示して placeholder 応答へ fallback しません。deterministic runtime
+は Debug の end-to-end bridge test 専用で、製品 runtime の fallback ではありません。
+ChatHost の会話履歴 API は SQLite の連番 cursor による UTF-8 byte 制限付き page で
+取得するため、長期履歴でも 4 MiB の IPC frame 上限を超えません。Native UI が表示する
+のは現時点では最新 page で、過去 page の閲覧 UI は後続 milestone です。
+
+同一アプリの MCP Tool 実行、一回承認 grant、アプリ内 model manager、一体型 portable /
+offline 展示 pack はまだ実装していません。設計と境界は
 [統合アーキテクチャ](docs/integrated-ai-architecture.ja.md)を参照してください。
+
+### ローカル推論の手動 setup
+
+この milestone は数 GB 規模の model や llama.cpp runtime を自動 download しません。
+開発時または利用者が明示的に承認した setup として、手元の GGUF と、CPU / CUDA /
+Vulkan の llama.cpp runtime directory にある `llama-server.exe` を import します。
+
+```powershell
+.\Scripts\ConfigureLocalInference.ps1 `
+  -ModelPath 'D:\AI\models\model-q4.gguf' `
+  -RuntimePath 'D:\AI\llama-cpu\llama-server.exe' `
+  -ModelId 'model-q4' `
+  -Backend cpu `
+  -ContextSize 4096 `
+  -MaxTokens 1024 `
+  -Temperature 0.2 `
+  -AcceptArtifactLicenses
+```
+
+`-AcceptArtifactLicenses` は、指定 artifact を使用する操作者の明示判断を記録するもので、
+入手元を認証するものではありません。既存設定を置き換える場合は
+`-ReplaceConfiguration` も必要です。
+
+script は GGUF と runtime directory 全体を
+`%LOCALAPPDATA%\D3D12LookDevPTwithAI\AI\Models` / `Runtimes` 以下へコピーし、
+`inference.json` を atomic に書き込みます。設定には model、`llama-server.exe`、および
+それ以外の全 runtime file を必須 `runtimeDependencies` manifest として列挙し、各 file
+の size と SHA-256 を記録します。ChatHost は起動時に runtime tree の完全一致と全 entry
+を検証します。子プロセスの生存中は既存 file の read lease と directory handle を保持し、
+runtime tree の変更監視で追加・削除・更新を検出した場合は session を失効させて子を停止します。
+
+非表示 server は `127.0.0.1` の ephemeral port だけへ bind し、起動ごとに新しい
+256-bit API key を受け取ります。Native application は検証済み PID と kill-on-close
+Job Object で ChatHost を所有し、llama.cpp の子孫プロセスも同じ所有 chain に残して
+終了時に破棄します。公式署名済み artifact catalog / manifest と一体型 portable /
+offline pack は後続の配布 milestone です。手動設定は展示 release の trust path では
+ありません。
 
 ## スクリーンショット
 
@@ -254,6 +294,15 @@ WinUI 版の user data は元アプリと競合しない専用 path に保存し
 %TEMP%\D3D12LookDevPTwithAI.log
 ```
 
+Assistant data は current user の local profile 以下へ分離します。
+
+```text
+%LOCALAPPDATA%\D3D12LookDevPTwithAI\AI\chat-history.sqlite3
+%LOCALAPPDATA%\D3D12LookDevPTwithAI\AI\Models\
+%LOCALAPPDATA%\D3D12LookDevPTwithAI\AI\Runtimes\
+%LOCALAPPDATA%\D3D12LookDevPTwithAI\AI\inference.json
+```
+
 project path は absolute または `baseDirectory` 基準の relative path を
 使用できます。bundle内部のv3 pathは`assetRoot`以下で解決され、absolute pathや
 `..`による脱出を拒否します。`Scripts\LookDevBundle.ps1`はZIPベースの`thin` /
@@ -330,10 +379,15 @@ AOV artifactを取得できます。完了または中止後はcheckpointから�
 .\Scripts\TestTransientResourceAllocator.ps1
 .\Scripts\TestMcpServer.ps1
 .\Scripts\TestPbrtDxrContracts.ps1
+.\Scripts\TestConfigureLocalInference.ps1
+.\Scripts\TestAssistantProtocol.ps1
+.\Scripts\TestAssistantHostBridge.ps1
 ```
 
-最後の test は command coalescing、FIFO barrier、index 付き target、immutable
-snapshot の atomic publish を検証します。
+`TestAssistantHostBridge.ps1` は deterministic inference hook を明示的に選択する
+Debug E2E test です。通常の app / ChatHost 起動では、設定済みの llama.cpp 経路を
+使用します。renderer command queue の test は command coalescing、FIFO barrier、
+index 付き target、immutable snapshot の atomic publish を検証します。
 
 ## ThirdParty revision
 

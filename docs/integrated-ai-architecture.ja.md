@@ -111,7 +111,7 @@ llama.cpp には128 Tool、description 4 KiB、schema 64 KiB、catalog 合計512
 
 ## ローカル AI
 
-製品既定の `IChatInferenceRuntime` は llama.cpp server 経路である。
+製品既定の `IChatInferenceRuntime` は llama.cpp server 経路である。通常の開発配置では
 `%LOCALAPPDATA%\D3D12LookDevPTwithAI\AI\inference.json` が存在しない初回状態では
 runtime を起動せず `not_ready` を返す。deterministic placeholder へ暗黙 fallback
 しない。deterministic runtime は Debug の IPC end-to-end test hook だけに限定し、
@@ -141,19 +141,28 @@ runtime を起動せず `not_ready` を返す。deterministic placeholder へ暗
 
 この milestone は数 GB 規模の model / runtime を自動 download せず、標準 model も
 確定しない。renderer と共有する GPU memory budget、自動 backend tuning、アプリ内
-model manager も未実装である。公式署名済み artifact catalog / portable manifest と
-その hash を用いた配布経路は、展示用 one-app portable / offline pack と同じ後続
-milestone で実装する。手動 setup は、その公式配布 trust path の代替ではない。
+model manager も未実装である。手動 artifact を明示承認して同梱する one-app portable
+経路は実装したが、manifest / ZIP の SHA-256 は整合性だけを示し、出所を認証しない。
+公式署名済み artifact catalog と署名済み製品配布は後続であり、手動 setup / pack は
+その trust path の代替ではない。
 
 ## 保存
 
 - 製品設定: `%APPDATA%\D3D12LookDevPTwithAI`
-- AI root: `%LOCALAPPDATA%\D3D12LookDevPTwithAI\AI`
-- model: `AI\Models\...`
-- llama.cpp runtime: `AI\Runtimes\...`
-- local inference 設定: `AI\inference.json`
-- 会話履歴: `AI\chat-history.sqlite3` 内で project context key ごとに分離
+- writable AI data root: `%LOCALAPPDATA%\D3D12LookDevPTwithAI\AI`
+- 通常開発配置の artifact root: writable AI data root と同じ場所
+- portable artifact root: executable 隣接の read-only `AI`
+- model: artifact root の `Models\...`
+- llama.cpp runtime: artifact root の `Runtimes\...`
+- local inference 設定: artifact root の `inference.json`
+- 会話履歴: writable AI data root の `chat-history.sqlite3` 内で project context key ごとに分離
 - MCP token: ChatHost へ初期化時だけ渡すメモリ内 secret。ChatHost は永続化しない。
+
+executable 隣に `integrated-portable-manifest.json` がある場合、ambient な
+`D3D12LOOKDEVPT_AI_DATA_DIRECTORY` / `D3D12LOOKDEVPT_AI_ARTIFACT_DIRECTORY` は無視する。
+これにより同梱 artifact を外部 path で黙って置き換えず、履歴も package / USB ではなく
+現在 user の LocalAppData へ固定する。portable に `AI\inference.json` がない
+`-WithoutAi` 配置でも外部 AI artifact は暗黙に有効化しない。
 
 project context key は正規化した project path / scene path から生成する。同名ファイルを別ディレクトリで開いた場合、Save As、未保存 preview を区別する。
 
@@ -167,17 +176,29 @@ project context key は正規化した project path / scene path から生成す
 
 ## 配布
 
-利用者が起動する executable と shortcut を `D3D12LookDevPTwithAI` だけにする方針は維持する。ただし one-app portable / installer と展示用 offline pack はまだ実装していない。repository に残る `BuildPortableSuite.ps1` / `BuildOfflinePack.ps1` は、外部 `LocalMCPChatClient` を組み合わせる移行 pipeline であり、統合 Assistant の配布物ではない。
+`BuildIntegratedPortable.ps1` は、利用者が起動する executable を
+`D3D12LookDevPTwithAI.exe` ひとつに保った Release x64 payload を生成する。内部 ChatHost、
+self-contained .NET runtime / Windows App SDK、Agility SDK、DXC、app-local VC runtime、
+third-party notices、file単位 license map、SPDX SBOM、全 payload file の size / SHA-256 を
+同梱し、旧 `LocalMCPChatClient` と launcher は含めない。source worktree の clean 状態を
+要求し、build / publish は transaction-scoped staging 内で行う。各artifactは完成後にrenameし、
+payload directoryのrenameをcommit pointとする。例外時は所有確認できたsidecarだけをrollbackするが、
+異なる複数pathを跨ぐcrash-atomicなtransactionではない。
 
-後続の portable / installer には内部 ChatHost、.NET runtime、llama.cpp、ライセンス、公式署名済み artifact catalog / manifest を含め、旧 `LocalMCPChatClient` launcher を含めない。
+展示 pack は AI を既定で必須とし、operator が指定した `inference.json` と redistribution
+metadata、GGUF、llama runtime全体を再検証する。artifact license と署名なしtrust境界の
+明示承認を要求し、自動 download、secret、承認rule、会話履歴、user settings、symbolを
+含めない。現在の capability は text chat と同一instance MCP Toolであり、vision用
+`mmproj` は参照も同梱もしない。`-WithoutAi` は renderer 開発用の明示的な例外である。
 
-後続の展示用 offline pack は、ネットワークなしで次を検証・展開できるようにする。
-
-- renderer と ChatHost
-- Windows App Runtime / .NET runtime
-- llama.cpp backend
-- 標準 GGUF / mmproj
-- third-party notices と source offer
+この manual pack は外部installerなしで起動できる自己完結性と改変検出を提供するが、
+code signing / artifact provenance は提供しない。公式署名済み catalog、認証済み配布、
+in-app model manager、installer は後続である。repository の `BuildPortableSuite.ps1` /
+`BuildOfflinePack.ps1` は外部 `LocalMCPChatClient` を組み合わせる旧移行pipelineとして残す。
+build時の NuGet restore はoperatorが設定したfeed/cacheをmanual trust境界に含み、actual SDK、
+resolved package identity、最終payload hashを記録するが、bit単位の再現性やpackage provenance
+を保証しない。lock file、固定feed、transaction-local package cache、署名検証は公式signed
+release milestoneの必須条件とする。
 
 ## 実装マイルストーン
 
@@ -187,6 +208,7 @@ project context key は正規化した project path / scene path から生成す
 4. 完了: 親所有の単一 loopback MCP 接続、`readOnlyHint` policy、一回承認 grant
 5. 完了: llama Tool-call loop、Tool event / result 統合、複数 round 上限
 6. 未完: 公式 model catalog / manager、GPU budget、クイック操作、demo reset
-7. 未完: one-app portable / offline pack、署名済み配布 manifest、障害試験、展示 acceptance test
+7. 完了: 手動・署名なし one-app portable、self-contained runtime、license/SBOM/hash manifest、bounded packaging regression
+8. 未完: 公式署名済み artifact catalog / 配布、実modelを用いた展示 acceptance、installer、vision payload
 
 各マイルストーンで `Debug|x64`、IPC protocol tests、MCP tests、Visual Studio filter の一対一整合性を検証する。

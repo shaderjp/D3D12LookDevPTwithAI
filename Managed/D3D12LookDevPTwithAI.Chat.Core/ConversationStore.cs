@@ -4,6 +4,7 @@ public interface IAppPaths
 {
     string DataDirectory { get; }
     string DatabasePath { get; }
+    string ArtifactDirectory { get; }
     string ModelsDirectory { get; }
     string RuntimesDirectory { get; }
     string InferenceSettingsPath { get; }

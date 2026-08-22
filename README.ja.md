@@ -41,8 +41,8 @@ body の buffer 前に拒否し、受信全体を10秒、body buffer を1 reques
 catalog を model へ渡し、上限付きの複数 round Tool loop を実行します。read-only Tool は
 自動実行し、変更 Tool は LookDev dock に canonical 引数全文を表示して Native の一回承認を
 必須とします。Tool の進行と結果は同じ画面へ表示し、SQLite へ保存するのは user message と
-最終的な assistant 応答だけです。アプリ内 model manager と一体型 portable / offline 展示
-pack は未実装です。設計と境界は
+最終的な assistant 応答だけです。手動・署名なしの一体型展示 pack は実装済みで、
+アプリ内 model manager と公式署名済み artifact catalog は後続です。設計と境界は
 [統合アーキテクチャ](docs/integrated-ai-architecture.ja.md)を参照してください。
 
 ### ローカル推論の手動 setup
@@ -78,9 +78,9 @@ runtime tree の変更監視で追加・削除・更新を検出した場合は 
 非表示 server は `127.0.0.1` の ephemeral port だけへ bind し、起動ごとに新しい
 256-bit API key を受け取ります。Native application は検証済み PID と kill-on-close
 Job Object で ChatHost を所有し、llama.cpp の子孫プロセスも同じ所有 chain に残して
-終了時に破棄します。公式署名済み artifact catalog / manifest と一体型 portable /
-offline pack は後続の配布 milestone です。手動設定は展示 release の trust path では
-ありません。
+終了時に破棄します。統合 portable builder は、license と署名なし trust 境界を明示承認
+した手動 artifact を同梱できます。公式署名済み artifact catalog / manifest は後続です。
+ローカル SHA-256 manifest は改変検出用であり、artifact の出所を認証しません。
 
 ## スクリーンショット
 
@@ -99,7 +99,8 @@ slot、RTXDI / DLSS の詳細 status を操作・確認できます。
 - MSVC `v145`
 - Windows SDK `10.0.26100.0`
 - Windows App Runtime 2.4 x64
-- .NET 9 SDK（build）および .NET 9 Runtime x64（現在の ChatHost 実行）
+- .NET 9 SDK（build）および通常の source-tree 実行用 .NET 9 Runtime x64。
+  統合 portable payload は ChatHost を self-contained で同梱します
 - submodule 対応 Git
 
 Debug / Release build は unpackaged、Windows App SDK framework-dependent です。
@@ -164,10 +165,52 @@ Assimp、DirectXTex、NRD、RTXDI は `BuildThirdParty.ps1` が必要時に buil
 出力先は `Bin\x64\<Configuration>` です。Agility SDK、DXC で生成した shader、
 利用可能な Streamline / DLSS runtime も executable の横へコピーされます。
 
-## 再現可能な開発環境とPortableスイート
+## 一体型 one-app portable 展示パッケージ
 
-> この節の script は移行元の外部 `LocalMCPChatClient` を組み合わせる既存 pipeline
-> です。統合 Assistant の一体型配布としてはまだ使用しません。
+`BuildIntegratedPortable.ps1` は clean な Release x64 payload を生成します。利用者が
+起動するのは `D3D12LookDevPTwithAI.exe` だけで、非表示 ChatHost、.NET runtime、
+Windows App SDK、Agility SDK、DXC、app-local VC runtime、license、file 単位 license map、
+SPDX SBOM、整合性 manifest を同じ payload に格納します。`LocalMCPChatClient`、旧2-process
+launcher、credential、承認状態、user settings、会話履歴は含めません。
+
+PowerShell 7.4 以降が必要です。展示 build は AI 同梱を既定とし、準備済み `AI`
+directory、その直下の厳密な `inference.json`、model/runtime それぞれの `name`、
+`revision`、HTTPS `sourceUrl`、SPDX `licenseExpression`、`licenseFile` を持つ schema-v1
+redistribution manifest を要求します。出力directoryはsource repository外に置き、
+そのdirectoryとZIP/hash sidecarはいずれも事前に存在しないpathを指定します。
+
+```powershell
+.\Scripts\BuildIntegratedPortable.ps1 `
+  -OutputDirectory ..\artifacts\D3D12LookDevPTwithAI-integrated-win-x64 `
+  -AiArtifactDirectory 'D:\AI\LookDevPack\AI' `
+  -AiArtifactManifest 'D:\AI\LookDevPack\AI\inference.json' `
+  -AiRedistributionManifest 'D:\AI\LookDevPack\AI\redistribution.json' `
+  -AcceptArtifactLicenses `
+  -AcceptUnsignedArtifactTrust
+```
+
+builder は model/runtime を download せず、宣言済み GGUF、`llama-server.exe`、全 runtime
+dependency、license document を隔離transaction staging内で検証してからpublishします。
+build時の NuGet restore はoperatorが設定したfeed/cacheを使用し、この手動・署名なし経路は
+それらbuild入力の
+出所認証やbit単位の再現性を保証しません。生成 ZIP と manifest の SHA-256 は整合性を
+示しますが署名ではないため、digest は認証済みの別経路で配布します。
+同梱 `AI` は read-only input として扱い、会話履歴は現在 user の `%LOCALAPPDATA%` へ保存します。
+現在の pack は text chat と同一instance MCP Tool用で、`mmproj` を含めず vision 対応を
+標榜しません。`-WithoutAi` は明示的な renderer 開発用 pack で、展示既定ではありません。
+
+bounded packaging regression は次で単独実行できます。
+
+```powershell
+.\Scripts\TestIntegratedPortable.ps1
+```
+
+公式署名済み artifact catalog、アプリ内 model manager、署名済み製品 release は後続です。
+
+### 旧2アプリ移行スイート
+
+以下は外部 `LocalMCPChatClient` を組み合わせる既存の移行 pipeline です。統合 Assistant の
+一体型配布ではありません。
 
 `suite.lock.json` schema v2でLocalMCPChatClientの互換commit、SDK、package、
 model/projector、llama runtimeを固定します。D3D12自身は`source: self`とし、実際に

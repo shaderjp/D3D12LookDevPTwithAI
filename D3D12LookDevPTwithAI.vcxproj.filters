@@ -373,6 +373,9 @@
     <None Include="Scripts\BuildPortableSuite.ps1">
       <Filter>Build Scripts</Filter>
     </None>
+    <None Include="Scripts\BuildIntegratedPortable.ps1">
+      <Filter>Build Scripts</Filter>
+    </None>
     <None Include="Scripts\BuildOfflinePack.ps1">
       <Filter>Build Scripts</Filter>
     </None>
@@ -392,6 +395,9 @@
       <Filter>Build Scripts</Filter>
     </None>
     <None Include="Scripts\TestOfflinePack.ps1">
+      <Filter>Build Scripts</Filter>
+    </None>
+    <None Include="Scripts\TestIntegratedPortable.ps1">
       <Filter>Build Scripts</Filter>
     </None>
     <None Include="Scripts\TestPortablePrerequisites.ps1">
@@ -489,6 +495,9 @@
     </None>
     <None Include="Scripts\TestGltfSceneImporter.ps1">
       <Filter>Build Scripts</Filter>
+    </None>
+    <None Include="Package\Licenses\OpenJPH-BSD-2-Clause.txt">
+      <Filter>Package</Filter>
     </None>
   </ItemGroup>
   <ItemGroup>

@@ -49,9 +49,9 @@ adapter now exposes the live MCP catalog to the model and runs a bounded
 multi-round tool loop. Read-only tools execute automatically; every mutation
 shows its exact canonical arguments in the LookDev dock and requires a native
 one-time approval. Tool progress and results stay in the same window, while
-only the user message and final visible assistant response are persisted. The
-in-app model manager and integrated portable/offline exhibition pack are still
-pending. See the
+only the user message and final visible assistant response are persisted. A
+manual, unsigned one-app exhibition pack is now available; the in-app model
+manager and an officially signed artifact catalog remain pending. See the
 [integrated architecture](docs/integrated-ai-architecture.ja.md).
 
 ### Manual local inference setup
@@ -89,10 +89,11 @@ monitor invalidates the session and stops the child on any add, remove, or updat
 The hidden server binds to `127.0.0.1` on an ephemeral port and receives a new
 256-bit API key on each start. The native application owns ChatHost by verified
 PID in a kill-on-close Job Object; the llama.cpp descendant stays in that
-ownership chain and is terminated with the app. An official signed artifact
-catalog/manifest and the one-app portable/offline pack remain a later
-distribution milestone. Manual configuration is not that exhibition release
-trust path.
+ownership chain and is terminated with the app. The integrated portable builder
+can package these manually supplied artifacts after explicit license and
+unsigned-trust acceptance. An official signed artifact catalog/manifest remains
+a later distribution milestone; a local SHA-256 manifest proves integrity, not
+artifact provenance.
 
 ## Screenshots
 
@@ -111,7 +112,8 @@ cancellation, the seventh alpha texture slot, and detailed RTXDI / DLSS status.
 - MSVC `v145`
 - Windows SDK `10.0.26100.0`
 - Windows App Runtime 2.4 x64
-- .NET 9 SDK for builds and .NET 9 Runtime x64 for the current ChatHost
+- .NET 9 SDK for builds and .NET 9 Runtime x64 for a normal source-tree run;
+  the integrated portable payload contains a self-contained ChatHost
 - Git with submodule support
 
 Debug and Release builds are unpackaged and Windows App SDK framework-dependent;
@@ -176,11 +178,59 @@ Build output is written to `Bin\x64\<Configuration>`. The project copies the
 Agility SDK, DXC-produced shaders, and available Streamline / DLSS runtimes
 beside the executable.
 
-## Reproducible and portable suite
+## Integrated one-app portable exhibition package
 
-> The scripts in this section are the existing transition pipeline that pairs
-> an external `LocalMCPChatClient`; they are not yet the integrated Assistant
-> distribution.
+`BuildIntegratedPortable.ps1` creates a clean Release x64 payload in which the
+user launches only `D3D12LookDevPTwithAI.exe`. The hidden ChatHost, .NET runtime,
+Windows App SDK, Agility SDK, DXC, app-local VC runtime, licenses, file-level
+license map, SPDX SBOM, and integrity manifests are placed beside it. It does
+not contain `LocalMCPChatClient`, the old two-process launcher, credentials,
+approval state, user settings, or conversation history.
+
+PowerShell 7.4 or later is required. An exhibition build includes AI by default
+and requires an already prepared `AI` directory, its exact `inference.json`, and
+a schema-v1 redistribution manifest containing `name`, `revision`, HTTPS
+`sourceUrl`, SPDX `licenseExpression`, and `licenseFile` for both the model and
+runtime. The output directory must be outside the source repository; it and its
+ZIP/hash sidecars must not already exist:
+
+```powershell
+.\Scripts\BuildIntegratedPortable.ps1 `
+  -OutputDirectory ..\artifacts\D3D12LookDevPTwithAI-integrated-win-x64 `
+  -AiArtifactDirectory 'D:\AI\LookDevPack\AI' `
+  -AiArtifactManifest 'D:\AI\LookDevPack\AI\inference.json' `
+  -AiRedistributionManifest 'D:\AI\LookDevPack\AI\redistribution.json' `
+  -AcceptArtifactLicenses `
+  -AcceptUnsignedArtifactTrust
+```
+
+The builder performs no model/runtime download. It verifies the declared GGUF,
+`llama-server.exe`, every runtime dependency, and license document in isolated
+transaction staging before publication. Build-time NuGet restore still uses
+the operator's configured feeds and cache; this manual unsigned path does not
+authenticate those build
+inputs or promise bit-for-bit reproducibility. The resulting ZIP and manifest
+contain SHA-256 integrity data, but are not signatures; deliver their digest
+over an authenticated channel.
+Bundled `AI` is treated as read-only, while chat history remains under the
+current user's `%LOCALAPPDATA%`. This milestone supports text chat and
+same-instance MCP tools only; it does not package an `mmproj` or claim vision
+support. `-WithoutAi` is an explicit renderer-development pack, not the default
+exhibition configuration.
+
+Run the bounded packaging regression independently with:
+
+```powershell
+.\Scripts\TestIntegratedPortable.ps1
+```
+
+An official signed artifact catalog, in-app model manager, and signed product
+release remain future work.
+
+### Legacy two-app transition suite
+
+The following scripts retain the older external `LocalMCPChatClient` transition
+pipeline. They are not the integrated Assistant distribution.
 
 `suite.lock.json` schema v2 pins the compatible LocalMCPChatClient revision,
 SDKs, packages, model/projector, and llama runtime versions. D3D12 uses

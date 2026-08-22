@@ -77,6 +77,7 @@
     <DirectXTexProject>$(ProjectDir)ThirdParty\DirectXTex\DirectXTex\DirectXTex_Desktop_$(LookDevPtVsFamily).vcxproj</DirectXTexProject>
     <DirectXTexLibDir>$(ProjectDir)ThirdParty\DirectXTex\DirectXTex\Bin\Desktop_$(LookDevPtVsFamily)\x64\$(Configuration)</DirectXTexLibDir>
     <EnableDLSS Condition="'$(EnableDLSS)'==''">false</EnableDLSS>
+    <LookDevPtGenerateDebugInformation Condition="'$(LookDevPtGenerateDebugInformation)'==''">true</LookDevPtGenerateDebugInformation>
     <D3D12LookDevPtWithDlss Condition="'$(EnableDLSS)'=='true' Or '$(EnableDLSS)'=='True' Or '$(EnableDLSS)'=='1'">1</D3D12LookDevPtWithDlss>
     <D3D12LookDevPtWithDlss Condition="'$(D3D12LookDevPtWithDlss)'==''">0</D3D12LookDevPtWithDlss>
     <EnableNRD Condition="'$(EnableNRD)'==''">true</EnableNRD>
@@ -130,7 +131,7 @@
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
-      <GenerateDebugInformation>true</GenerateDebugInformation>
+      <GenerateDebugInformation>$(LookDevPtGenerateDebugInformation)</GenerateDebugInformation>
       <AdditionalDependencies>$(AssimpLibName);$(AssimpZlibName);$(NrdAdditionalDependencies)$(RtxdiAdditionalDependencies)DirectXTex.lib;xinput9_1_0.lib;d3d12.lib;dxgi.lib;dxguid.lib;d3dcompiler.lib;dwmapi.lib;comctl32.lib;comdlg32.lib;windowscodecs.lib;ole32.lib;shell32.lib;advapi32.lib;ws2_32.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <AdditionalLibraryDirectories>$(AssimpLibDir);$(AssimpZlibDir);$(DirectXTexLibDir);$(NrdAdditionalLibraryDirs)$(RtxdiAdditionalLibraryDirs)%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <DelayLoadDLLs>d3d12.dll;%(DelayLoadDLLs)</DelayLoadDLLs>
@@ -154,7 +155,7 @@
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
-      <GenerateDebugInformation>true</GenerateDebugInformation>
+      <GenerateDebugInformation>$(LookDevPtGenerateDebugInformation)</GenerateDebugInformation>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
       <AdditionalDependencies>$(AssimpLibName);$(AssimpZlibName);$(NrdAdditionalDependencies)$(RtxdiAdditionalDependencies)DirectXTex.lib;xinput9_1_0.lib;d3d12.lib;dxgi.lib;dxguid.lib;d3dcompiler.lib;dwmapi.lib;comctl32.lib;comdlg32.lib;windowscodecs.lib;ole32.lib;shell32.lib;advapi32.lib;ws2_32.lib;%(AdditionalDependencies)</AdditionalDependencies>
@@ -316,6 +317,7 @@
     <None Include="Scripts\TestGltfSceneImporter.ps1" />
     <None Include="Scripts\BootstrapSuite.ps1" />
     <None Include="Scripts\BuildPortableSuite.ps1" />
+    <None Include="Scripts\BuildIntegratedPortable.ps1" />
     <None Include="Scripts\BuildOfflinePack.ps1" />
     <None Include="Scripts\InstallOfflinePack.ps1" />
     <None Include="Scripts\InstallPortableSuite.ps1" />
@@ -323,6 +325,8 @@
     <None Include="Scripts\LookDevBundle.ps1" />
     <None Include="Scripts\TestLookDevBundle.ps1" />
     <None Include="Scripts\TestOfflinePack.ps1" />
+    <None Include="Scripts\TestIntegratedPortable.ps1" />
+    <None Include="Package\Licenses\OpenJPH-BSD-2-Clause.txt" />
     <None Include="Scripts\TestPortablePrerequisites.ps1" />
     <None Include="Scripts\TestSuiteLicenseCompliance.ps1" />
     <None Include="Scripts\UninstallPortableSuite.ps1" />

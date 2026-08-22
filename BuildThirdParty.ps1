@@ -7,6 +7,7 @@ param(
     [Parameter(Mandatory = $true)][string]$AssimpZlibName,
     [Parameter(Mandatory = $true)][string]$DirectXTexProject,
     [Parameter(Mandatory = $true)][string]$DirectXTexLibDir,
+    [string]$DirectXTexIntermediateDir = '',
     [string]$NrdRoot = "",
     [string]$NrdBuildRoot = "",
     [string]$NrdLibDir = "",
@@ -189,7 +190,18 @@ $CMakeGeneratorName = $cmakeGeneratorArgs[1]
 Invoke-WithMutex -Name "Local\D3D12LookDevPTwithAI-DirectXTex-$Configuration" -Body {
     $directXTexLib = Join-Path $DirectXTexLibDir 'DirectXTex.lib'
     if (!(Test-Path $directXTexLib)) {
-        & $MSBuildPath $DirectXTexProject /p:Platform=x64 /p:Configuration=$Configuration /v:minimal
+        $directXTexArguments = @(
+            $DirectXTexProject, '/p:Platform=x64',
+            "/p:Configuration=$Configuration", '/v:minimal')
+        if ($DirectXTexIntermediateDir) {
+            New-Item -ItemType Directory -Force -Path $DirectXTexLibDir | Out-Null
+            New-Item -ItemType Directory -Force -Path $DirectXTexIntermediateDir | Out-Null
+            $directXTexArguments += "/p:OutDir=$DirectXTexLibDir\"
+            $directXTexArguments += "/p:IntDir=$DirectXTexIntermediateDir\"
+            $directXTexArguments += "/p:BaseIntermediateOutputPath=$DirectXTexIntermediateDir\"
+            $directXTexArguments += "/p:MSBuildProjectExtensionsPath=$DirectXTexIntermediateDir\"
+        }
+        & $MSBuildPath @directXTexArguments
         if ($LASTEXITCODE -ne 0) {
             exit $LASTEXITCODE
         }

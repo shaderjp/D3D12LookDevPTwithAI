@@ -7,6 +7,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+$repo = [IO.Path]::GetFullPath((Split-Path -Parent $PSScriptRoot))
 $suite = [System.IO.Path]::GetFullPath($PortableSuiteDirectory)
 $output = [System.IO.Path]::GetFullPath($OutputDirectory)
 if (-not (Test-Path -LiteralPath (Join-Path $suite 'suite-manifest.json'))) { throw 'Portable suite manifest was not found.' }

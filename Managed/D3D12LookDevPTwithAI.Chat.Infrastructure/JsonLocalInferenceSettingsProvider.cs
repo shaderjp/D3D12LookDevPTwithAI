@@ -45,7 +45,7 @@ public sealed class JsonLocalInferenceSettingsProvider(IAppPaths paths) :
         if ((settingsAttributes & (FileAttributes.Directory | FileAttributes.ReparsePoint)) != 0)
             throw UnsafePath();
 
-        EnsureExistingPathIsNotReparsePoint(paths.DataDirectory);
+        EnsureExistingPathIsNotReparsePoint(paths.ArtifactDirectory);
 
         byte[] payload;
         try
@@ -118,9 +118,9 @@ public sealed class JsonLocalInferenceSettingsProvider(IAppPaths paths) :
             throw InvalidSettings("The configured temperature is outside the supported range.");
         }
 
-        var dataDirectory = NormalizeDirectory(paths.DataDirectory);
-        var modelsDirectory = NormalizeArtifactRoot(paths.ModelsDirectory, dataDirectory);
-        var runtimesDirectory = NormalizeArtifactRoot(paths.RuntimesDirectory, dataDirectory);
+        var artifactDirectory = NormalizeDirectory(paths.ArtifactDirectory);
+        var modelsDirectory = NormalizeArtifactRoot(paths.ModelsDirectory, artifactDirectory);
+        var runtimesDirectory = NormalizeArtifactRoot(paths.RuntimesDirectory, artifactDirectory);
         var model = ValidateArtifact(
             document.Model,
             modelsDirectory,

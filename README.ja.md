@@ -15,13 +15,14 @@ PT、DLSS Ray Reconstruction evaluation、dynamic internal resolution / TAAU、c
 secondary work dispatch、BLAS compaction / instancing、shader ray counter、非同期
 scene load、MCP `2026-07-28` transport も合流しています。
 
-## 統合 AI Assistant（実装中）
+## 統合 AI Assistant
 
-このブランチでは、別のチャットアプリへ移動せず LookDev の右ドックから操作する
-一体型 UI を実装しています。現在の最初の縦断実装には、`Inspector / AI Assistant`
-切替、F9、非表示のローカル ChatHost、current-user 限定 named pipe、ストリーミング、
-取消、project ごとの SQLite 会話履歴が含まれます。利用者が起動・操作するウィンドウは
-`D3D12LookDevPTwithAI.exe` だけです。
+現在の application は、別のチャットアプリへ移動せず右側の AI Assistant から LookDev を
+操作する一体型 UI です。`Inspector / AI Assistant` 切替、F9、quick prompt、会話管理、
+streaming、取消、`Ctrl+Enter` 送信、読み込み済み model / backend 表示、model 起動・生成・
+Tool 実行・承認待ちを示す進行表示を備えています。利用者が起動・操作する window は
+`D3D12LookDevPTwithAI.exe` だけで、ChatHost と llama.cpp は所有関係を検証した非表示の
+子 process として動作します。
 
 製品既定の推論経路は、認証付き loopback 接続で非表示の `llama-server.exe` 子プロセス
 を使用します。local の `inference.json` がない状態は正常な初回状態であり、Assistant
@@ -42,8 +43,10 @@ catalog を model へ渡し、上限付きの複数 round Tool loop を実行し
 自動実行し、変更 Tool は LookDev dock に canonical 引数全文を表示して Native の一回承認を
 必須とします。Tool の進行と結果は同じ画面へ表示し、SQLite へ保存するのは user message と
 最終的な assistant 応答だけです。固定 revision の Gemma 4 と llama.cpp を取得する
-アプリ内 setup、および手動・署名なしの一体型展示 pack は実装済みです。任意 model を扱う
-model manager と公式署名済み artifact catalog は後続です。設計と境界は
+アプリ内 setup、および手動・署名なしの一体型展示 pack は実装済みです。text chat と
+Tool 操作には対応していますが、model へ viewport pixel は渡していません。scene の理解は
+vision ではなく MCP state / diagnostics に基づきます。任意 model を扱う model manager と
+公式署名済み artifact catalog は後続です。設計と境界は
 [統合アーキテクチャ](docs/integrated-ai-architecture.ja.md)を参照してください。
 
 ### ローカル推論の setup
@@ -53,6 +56,14 @@ Gemma 4 E2B / E4B と llama.cpp b10205 の CPU / CUDA / Vulkan runtime を取得
 画面には file 名、受信量 / 総量、全体の百分率を表示します。中断時は `.partial` を保持し、
 次回同じ setup で HTTP Range download を再開します。取得物は固定 size と SHA-256 を検証し、
 検証完了後にだけ `inference.json` を置き換えます。
+
+| Model / backend の選択 | Download / 検証の進捗 |
+|:---:|:---:|
+| ![licenseへの明示同意を伴うGemma 4とllama.cppのsetup](docs/images/installllm002.png) | ![受信量と全体percentageを表示するlocal model download](docs/images/installllm003.png) |
+
+model は最初の turn で遅延 load します。そのため起動直後の `Loaded model: none` は正常です。
+最初の送信後は実際の model 名と runtime backend を表示します。複数行 prompt は
+`Ctrl+Enter` で送信し、`Enter` だけの場合は改行を挿入します。
 
 独自 GGUF または手元の llama.cpp runtime を使う開発時 setup は、従来どおり次の script で
 import できます。
@@ -90,13 +101,20 @@ Job Object で ChatHost を所有し、llama.cpp の子孫プロセスも同じ�
 
 ## スクリーンショット
 
-| Bistro Interior | Bistro Exterior |
-|:---:|:---:|
-| ![ダークテーマのWinUI editorで描画したBistro Interior](docs/images/screenshot001.jpg) | ![ダークテーマのWinUI editorで描画したBistro Exterior](docs/images/screenshot002.jpg) |
+![PBRT BMW M6を表示し、Gemma 4のmodel名と思考中状態を示す統合editor](docs/images/screenshot008.png)
 
-WinUI から6種類すべての render mode、quality profile / ray budget、固定・動的
-render scale、camera roll / FOV、scene load progress / cancel、7番目の alpha texture
-slot、RTXDI / DLSS の詳細 status を操作・確認できます。
+| AIによる変更の一回承認 | アプリ内local model setup |
+|:---:|:---:|
+| ![露出変更の前に一回承認を待つGemma Tool call](docs/images/screenshot009.png) | ![Gemma 4とllama.cppのsetup flyoutを開いた統合AI Assistant](docs/images/installllm.png) |
+
+| Material編集 | Lighting編集 |
+|:---:|:---:|
+| ![Bistro InteriorとWinUI material editor](docs/images/material.png) | ![Bistro InteriorとWinUI lighting editor](docs/images/lighting001.png) |
+
+現在の WinUI から6種類すべての render mode、quality profile / ray budget、固定・動的
+render scale、camera roll / FOV、scene load progress / cancel、material texture residency、
+PBRT dielectric material、RTXDI / DLSS の詳細 status を操作・確認できます。画像内の
+Bistro / PBRT sample asset は local 配置で、repository には含みません。
 
 ## 対応環境
 
@@ -105,8 +123,9 @@ slot、RTXDI / DLSS の詳細 status を操作・確認できます。
 - MSVC `v145`
 - Windows SDK `10.0.26100.0`
 - Windows App Runtime 2.4 x64
-- .NET 9 SDK（build）および通常の source-tree 実行用 .NET 9 Runtime x64。
-  統合 portable payload は ChatHost を self-contained で同梱します
+- ChatHost と test を build するための .NET 9 SDK。通常の build output と統合 portable
+  payload はどちらも self-contained ChatHost を含むため、完成した出力の実行に別途
+  .NET Runtime をインストールする必要はありません
 - submodule 対応 Git
 
 Debug / Release build は unpackaged、Windows App SDK framework-dependent です。
@@ -137,7 +156,7 @@ Windows App Runtime redistributable をインストールしてください。
 ThirdParty を固定 revision で取得するため、recursive clone します。
 
 ```powershell
-git clone --recursive <repository-url> D3D12LookDevPTwithAI
+git clone --recursive https://github.com/shaderjp/D3D12LookDevPTwithAI.git
 cd D3D12LookDevPTwithAI
 git submodule update --init --recursive
 ```
@@ -149,7 +168,9 @@ NuGet restore 後に build します。Local Windows Debugger 構成済みなの
 command line からの build 例です。
 
 ```powershell
-$msbuild = "C:\Program Files\Microsoft Visual Studio\18\Insiders\MSBuild\Current\Bin\amd64\MSBuild.exe"
+$vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+$vsRoot = & $vswhere -latest -products * -requires Microsoft.Component.MSBuild -property installationPath
+$msbuild = Join-Path $vsRoot 'MSBuild\Current\Bin\MSBuild.exe'
 & $msbuild .\D3D12LookDevPTwithAI.sln /m /restore /p:Configuration=Debug /p:Platform=x64
 ```
 
@@ -170,6 +191,12 @@ Assimp、DirectXTex、NRD、RTXDI は `BuildThirdParty.ps1` が必要時に buil
 
 出力先は `Bin\x64\<Configuration>` です。Agility SDK、DXC で生成した shader、
 利用可能な Streamline / DLSS runtime も executable の横へコピーされます。
+
+実行・コピー時は出力 directory 全体を使用してください。
+`D3D12LookDevPTwithAI.exe` だけを別の場所へコピーすると、隣接する ChatHost、
+self-contained .NET file、Windows App SDK、shader、renderer runtime が欠けます。
+この不完全な配置では ChatHost 起動時に、実際の原因とは異なる
+「.NET をインストールまたは更新してください」という dialog が出ることがあります。
 
 ## 一体型 one-app portable 展示パッケージ
 
@@ -213,39 +240,14 @@ bounded packaging regression は次で単独実行できます。
 
 公式署名済み artifact catalog、任意 model を管理する UI、署名済み製品 release は後続です。
 
-### 旧2アプリ移行スイート
+### 旧2アプリ移行script（保守用）
 
-以下は外部 `LocalMCPChatClient` を組み合わせる既存の移行 pipeline です。統合 Assistant の
-一体型配布ではありません。
-
-`suite.lock.json` schema v2でLocalMCPChatClientの互換commit、SDK、package、
-model/projector、llama runtimeを固定します。D3D12自身は`source: self`とし、実際に
-buildした両repositoryのcommitは生成済みsuite manifestへ記録します。`.vsconfig`と`config/development.dsc.yaml`はVisual
-StudioとWinGet Configurationの前提を定義します。bootstrapは冪等で、
-`-InstallPrerequisites`を明示した場合だけsystemを変更します。
-
-```powershell
-.\Scripts\BootstrapSuite.ps1 -LocalMcpRepository ..\LocalMCPChatClient
-```
-
-公開ベータ用の`DLSS=false / NRD=false / RTXDI=false` suiteを生成します。
-
-```powershell
-.\Scripts\BuildPortableSuite.ps1 -LocalMcpRepository ..\LocalMCPChatClient `
-  -OutputDirectory .\artifacts\D3D12LookDevPTwithAI-0.2.0-beta.1-win-x64
-```
-
-ZIPにはframework-dependentなD3D12 application、self-containedなLocalMCPChatClient、
-Agility SDK、launcher、online install、clean uninstall、license、file単位license map、
-SPDX SBOM、version固定manifest、全fileとarchiveのSHA-256が入ります。target PCでは
-現在userの`%LocalAppData%\Programs`へ展開し、Visual Studioと.NETを要求しません。
-初回起動時にMicrosoft署名済みWindows App Runtime 2.4.0 installerを公式URLから取得し、
-固定SHA-256とAuthenticode署名を検証します。非昇格時は現在userへruntimeを導入します。
-`0.2.0-beta.1`はコード署名のない公開ベータです。ZIP内の
-`UNSIGNED-BETA.ja.txt`とarchiveのSHA-256を確認してください。launcherはMCP serverと
-90秒のpairing codeを開始し、LocalMCPChatClientの初回画面からmodel取得前に交換します。
-`BuildOfflinePack.ps1`ではmodel/projectorと選択したCPU/CUDA/Vulkan llama runtimeを
-追加できますが、token、資格情報、承認rule、会話履歴は含めません。
+`BootstrapSuite.ps1`、`BuildPortableSuite.ps1`、`BuildOfflinePack.ps1` は、外部
+`LocalMCPChatClient` を使う旧 `0.2.0-beta.1` workflow の再現・移行専用として残しています。
+現在の setup、release package、受け入れ対象ではありません。新規開発と展示 build は統合
+Assistant と `BuildIntegratedPortable.ps1` を使用してください。これらの script が残っていても、
+統合製品に2つ目の application、pairing code、projector、vision model が必要という意味では
+ありません。
 
 ## 起動
 
@@ -266,9 +268,12 @@ project を開けます。移植元と
 
 .\Bin\x64\Debug\D3D12LookDevPTwithAI.exe `
   --project .\projects\benchmark_interactive.lookdevpt.json
+
+.\Bin\x64\Debug\D3D12LookDevPTwithAI.exe `
+  --scene .\pbrt-v4-scenes-master\bmw-m6\bmw-m6.pbrt
 ```
 
-`Bistro_v5_2` は local test asset であり、git の対象外です。配置については
+`Bistro_v5_2` と `pbrt-v4-scenes-master` は local test asset であり、git の対象外です。配置については
 [Asset setup](docs/assets.ja.md) を参照してください。
 
 ### glTF材質とtexture経路
@@ -288,10 +293,11 @@ skinning、morph target、hierarchy編集、raster fallbackは今回の対象外
 
 ## WinUI editor
 
-固定 IDE 型 layout には移植元と同じ9 panelがあります。
+固定 IDE 型 layout は renderer panel と統合 AI mode から構成されます。
 
 - 左: Scene、Material、Lighting
-- 右: Viewport、Path Tracing、Denoise、ReSTIR
+- 右: Inspector の Viewport、Path Tracing、Denoise、ReSTIR
+- 右の alternate mode: AI Assistant
 - 下: Diagnostics、MCP の `TabView`
 
 左、右、下領域は splitter で resize できます。View menu から panel 表示、
@@ -480,6 +486,8 @@ WinUI composition は DXGI 側で行い、UI 専用 shader pass は追加しま�
 - [Asset setup](docs/assets.ja.md)
 - [Rendering pipeline](docs/rendering-pipeline.ja.md)
 - [MCP integration](docs/mcp.ja.md)
+- [統合 AI アーキテクチャ](docs/integrated-ai-architecture.ja.md)
+- [統合公開ベータ受け入れチェックリスト](docs/public-beta-acceptance.ja.md)
 - [DLSS integration](docs/dlss.ja.md)
 - [NRD integration](docs/nrd.ja.md)
 - [RTXDI integration](docs/rtxdi.ja.md)

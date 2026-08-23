@@ -2,6 +2,10 @@
 
 D3D12LookDevPTwithAI includes a local MCP server for inspecting and controlling the running renderer from tools such as VS Code, Codex, or custom JSON-RPC clients. The server and WinUI editor share the same validation-oriented renderer-command layer.
 
+This document is for **external MCP clients**. The integrated AI Assistant is
+already wired to the same running application and does not require a VS Code
+configuration, a second chat application, or LocalMCPChatClient pairing.
+
 Japanese documentation: [MCP サーバー](mcp.ja.md)
 
 ## MCP-Driven Workflow Example
@@ -12,6 +16,8 @@ JSON-RPC requests. Do not commit real MCP tokens in screenshots or project
 files.
 
 The client should validate settings first, apply mutation tools, then read state back to confirm that the renderer accepted the same values. Treat the live schema returned by `tools/list` or `lookdevpt://actions/schema`—and the examples below—as authoritative for the current build.
+
+![The integrated application showing the MCP Server panel and recent local requests](images/screenshot004.png)
 
 ## Availability And Security
 
@@ -76,9 +82,18 @@ The server is disabled by default. It can also be started from the command line:
 
 Access modes:
 
-- `read_only`: read tools work; mutation tools are rejected.
-- `confirm_mutations`: mutation tools wait for approval in the WinUI `MCP` panel.
-- `allow_mutations`: mutation tools execute without UI approval.
+- `read_only`: read tools work and every mutation is rejected. Use this for
+  scene inspection, diagnostics, captures, and clients that should never edit
+  renderer state.
+- `confirm_mutations`: mutation tools wait for approval in the WinUI `MCP`
+  panel. This is the recommended interactive mode for Codex, VS Code, and
+  other general-purpose clients because the exact request remains visible
+  before it changes LookDev state.
+- `allow_mutations`: mutation tools execute without UI approval. Reserve this
+  for deliberate, trusted local automation where the caller and requested
+  changes are already controlled. Loopback binding and bearer authentication
+  still apply; this mode removes the human approval boundary, not the network
+  or validation boundaries.
 
 Authentication modes:
 

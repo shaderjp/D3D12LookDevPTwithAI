@@ -30,6 +30,28 @@ local asset を検証します。
 
 strict check が必須にするのは `BistroExterior.fbx` と `Textures/` です。interior FBX と HDRI は optional のままなので、完全な validation package がなくても app を build できます。
 
+## PBRT v4 の推奨配置
+
+PBRT validation scene も local asset として扱います。相対 `Include`、PLY、texture path を
+配布元の構造のまま解決できるよう、展開した `pbrt-v4-scenes` tree を solution の横へ置きます。
+
+```text
+D3D12LookDevPTwithAI/
+  pbrt-v4-scenes-master/
+    bmw-m6/bmw-m6.pbrt
+    crown/crown.pbrt
+    ...
+```
+
+`pbrt-v4-scenes-master/` は git の ignore 対象です。この repository は scene 自体を再配布
+しません。配布 archive に含まれる license / attribution file を維持してください。
+`Project > Open Scene...` または次の CLI で開けます。
+
+```powershell
+.\Bin\x64\Release\D3D12LookDevPTwithAI.exe `
+  --scene .\pbrt-v4-scenes-master\bmw-m6\bmw-m6.pbrt
+```
+
 ## 起動と project file
 
 scene と environment を直接指定して起動できます。
@@ -64,8 +86,16 @@ startup file 例:
 - glTF / GLB
 - FBX
 - OBJ
+- PBRT v4
 
-glTF / GLB は tinygltf 2.9.6 に固定した専用 `GltfSceneImporter` で読み込みます。material index は `gltf:material/<index>` として保持し、node transform はload時に頂点へ適用し、`TEXCOORD_0` / `TEXCOORD_1`を対応付けます。画像は相対path、data URI、GLB buffer viewだけを受け付け、HTTP画像とscene directory外へ抜けるpathは拒否します。FBX / OBJ / PBRTは既存のimport経路を維持します。
+glTF / GLB は tinygltf 2.9.6 に固定した専用 `GltfSceneImporter` で読み込みます。material index は `gltf:material/<index>` として保持し、node transform はload時に頂点へ適用し、`TEXCOORD_0` / `TEXCOORD_1`を対応付けます。画像は相対path、data URI、GLB buffer viewだけを受け付け、HTTP画像とscene directory外へ抜けるpathは拒否します。FBX / OBJ は既存経路、PBRT は専用 `PbrtSceneImporter` を使います。
+
+PBRT 経路は `diffuse`、`coateddiffuse`、`conductor`、`coatedconductor`、
+`dielectric`、`thindielectric`、`diffusetransmission` material を対応付けます。smooth
+dielectric は正確な Fresnel / Snell 屈折、thin dielectric は透過方向を維持した2界面 Fresnel
+を使用します。rough dielectric や未対応 PBRT feature は、完全対応を装わず scene audit に
+fallback 診断を出します。transport の詳細と estimator の制約は
+[Rendering pipeline](rendering-pipeline.ja.md)を参照してください。
 
 初期glTF材質は `KHR_texture_transform`、`KHR_materials_specular`、`KHR_materials_ior`、`KHR_materials_transmission`、`KHR_materials_volume`、`KHR_materials_clearcoat`、`KHR_texture_basisu` に対応します。`extensionsRequired`内の未対応拡張はimportを停止し、任意拡張はcore materialへfallbackしてscene監査へ記録します。animation、skinning、morph target、連続deformation、moving-instance transformは未対応で、raster fallbackもありません。geometry / topology editはhistory invalidationを伴う変更として扱います。
 

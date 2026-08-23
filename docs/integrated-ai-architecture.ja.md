@@ -40,10 +40,13 @@ Native UI ── process-local one-time approval broker
 - 右ペインに `Inspector` / `AI Assistant` のモード切替を置く。
 - 新製品の初期モードは `AI Assistant`、推奨幅は 420 px とする。
 - `F9` で Assistant を開閉し、`F10` の render-only 動作は維持する。
-- Assistant は会話、runtime 状態、ストリーミング応答、取消、Tool 実行状態を表示・操作する。
+- Assistant は会話、読み込み済み model / backend、ストリーミング応答、取消、Tool 実行状態を表示・操作する。turn 中は model 起動、思考中、応答生成、Tool 実行、承認待ちを ProgressRing と status text で区別する。
+- `Ctrl+Enter` は WinUI `KeyboardAccelerator` から送信し、`Enter` だけは複数行入力の改行として扱う。quick prompt は Describe scene、Review view、Frame camera、Suggest denoise、Compare、Benchmark を提供する。
 - 変更 Tool の一回承認カードには、実際の hash と一致する canonical JSON 引数を8 KiB上限で全文表示する。Tool 開始後に取消・切断された場合は、未実行と断定せず結果不明として LookDev 状態の確認を促す。
-- 過去履歴 page の閲覧 UI と固定クイック操作は後続 milestone とする。
+- 過去履歴 page の閲覧 UI は後続 milestone とする。
 - 変更操作を統合した後の承認は `今回のみ承認` と `拒否` の2択とし、永続許可は設けない。
+
+![読み込み済みGemma 4とturn中statusを表示するAI Assistant](images/screenshot008.png)
 
 ## IPC
 
@@ -65,6 +68,8 @@ C++ 側を Named Pipe server、Managed ChatHost を client とする。
 - `sendTurn`
 - `cancelTurn`
 - `approval.respond`
+- `modelSetup.start`
+- `modelSetup.cancel`
 - `shutdown`
 
 現在の chat 経路で使う event:
@@ -75,6 +80,7 @@ C++ 側を Named Pipe server、Managed ChatHost を client とする。
 - `toolApprovalRequired`
 - `toolStarted`
 - `toolCompleted`
+- `modelSetupProgress`
 - `completed`
 - `error`
 
@@ -126,6 +132,10 @@ SHA-256 は ChatHost 内の catalog に固定し、HTTPS redirect、再開可能
 cancel 後も partial file を保持する。全 artifact の検証と安全な runtime 展開が完了した後にだけ
 schema v1 `inference.json` と license acceptance record を atomic replace する。portable pack の
 read-only artifact root はアプリ内 setup で置き換えない。
+
+| Setupの選択とlicense同意 | Download / 検証の進捗 |
+|:---:|:---:|
+| ![Gemma 4とbackendを選択するsetup](images/installllm002.png) | ![受信量と全体percentageを表示するsetup](images/installllm003.png) |
 
 独自 artifact を使う開発／手動 setup は次の script を利用する。
 

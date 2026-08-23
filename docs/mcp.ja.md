@@ -2,6 +2,10 @@
 
 D3D12LookDevPTwithAI には、実行中の renderer を VS Code、Codex、独自 JSON-RPC client などから参照・操作するための local MCP server が入っています。WinUI editor と同じ validation-oriented renderer-command layer を経由します。
 
+この文書は **外部 MCP client** 用です。統合 AI Assistant は同じ実行中 application へ
+接続済みであり、VS Code 設定、2つ目の chat application、LocalMCPChatClient pairing は
+必要ありません。
+
 English documentation: [MCP Server](mcp.md)
 
 ## MCP 経由の操作例
@@ -11,6 +15,8 @@ WinUI の MCP panel には session、承認待ち、recent local JSON-RPC reques
 されます。実 token は screenshot や project file に入れないでください。
 
 client 側では先に validation を通し、mutation tool を適用し、その後 `get_state` で renderer state が同じ値になったことを確認します。現在の build では、`tools/list` または `lookdevpt://actions/schema` が返す live schema と、この文書の例を正として扱ってください。
+
+![MCP Server panelとrecent local requestを表示する統合application](images/screenshot004.png)
 
 ## 利用条件とセキュリティ
 
@@ -72,9 +78,14 @@ server は default disabled です。command line から明示的に起動する
 
 Access mode:
 
-- `read_only`: read tool は使えます。mutation tool は拒否されます。
+- `read_only`: read tool は使えますが、mutation はすべて拒否します。scene 監査、diagnostics、
+  capture、renderer state を変更させたくない client に使用します。
 - `confirm_mutations`: mutation tool は WinUI の `MCP` panel で Approve されるまで待ちます。
-- `allow_mutations`: mutation tool を UI 承認なしで実行します。
+  正確な request を変更前に確認できるため、Codex、VS Code、その他の汎用 client に推奨する
+  interactive mode です。
+- `allow_mutations`: mutation tool を UI 承認なしで実行します。caller と変更内容を事前に
+  管理できる、意図した trusted local automation だけに使用してください。loopback bind、
+  bearer 認証、schema / value validation は維持されますが、人による承認境界はなくなります。
 
 Authentication mode:
 

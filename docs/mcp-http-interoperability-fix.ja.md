@@ -1,4 +1,11 @@
-# MCP HTTP相互運用性 修正指示書
+# MCP HTTP相互運用性（完了済み実装記録）
+
+> **Status: historical / resolved.** この文書は、`Transfer-Encoding: chunked`
+> 非対応だった時点の障害原因、修正条件、受け入れ手順を保存した実装記録です。現在の server は
+> `Content-Length` / chunked、MCP `2026-07-28`、legacy `2025-11-25` / `2025-06-18`、
+> POST-based resource subscription に対応しています。現在の接続方法と契約は
+> [MCPサーバー](mcp.ja.md)を正とし、以下の「非対象」や LocalMCPChatClient 固有手順を
+> 現在の制限・導入手順として読まないでください。
 
 ## 目的
 

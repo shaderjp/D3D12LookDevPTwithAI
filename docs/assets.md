@@ -30,6 +30,29 @@ Validate local assets with:
 
 The strict check requires `BistroExterior.fbx` and `Textures/`. The interior FBX files and HDRI remain optional so the application can still be built without the full validation package.
 
+## Recommended PBRT v4 Layout
+
+PBRT validation scenes are also local-only assets. Keep an extracted
+`pbrt-v4-scenes` tree next to the solution so relative `Include`, PLY, and
+texture paths retain their upstream layout:
+
+```text
+D3D12LookDevPTwithAI/
+  pbrt-v4-scenes-master/
+    bmw-m6/bmw-m6.pbrt
+    crown/crown.pbrt
+    ...
+```
+
+`pbrt-v4-scenes-master/` is ignored by git. The repository does not redistribute
+these scenes; retain the license and attribution files that accompany the
+source archive. Open a scene directly with `Project > Open Scene...` or:
+
+```powershell
+.\Bin\x64\Release\D3D12LookDevPTwithAI.exe `
+  --scene .\pbrt-v4-scenes-master\bmw-m6\bmw-m6.pbrt
+```
+
 ## Launch And Project Files
 
 Launch a scene and environment directly:
@@ -64,8 +87,18 @@ The intended static-mesh scene inputs are:
 - glTF / GLB
 - FBX
 - OBJ
+- PBRT v4
 
-glTF / GLB uses the dedicated `GltfSceneImporter` pinned to tinygltf 2.9.6. It preserves material indices as `gltf:material/<index>`, applies node transforms while loading, maps `TEXCOORD_0` and `TEXCOORD_1`, and accepts relative images, data URIs, and GLB buffer views. HTTP images and paths escaping the scene directory are rejected. FBX / OBJ / PBRT keep their existing import paths.
+glTF / GLB uses the dedicated `GltfSceneImporter` pinned to tinygltf 2.9.6. It preserves material indices as `gltf:material/<index>`, applies node transforms while loading, maps `TEXCOORD_0` and `TEXCOORD_1`, and accepts relative images, data URIs, and GLB buffer views. HTTP images and paths escaping the scene directory are rejected. FBX / OBJ keep their existing import paths; PBRT uses the dedicated `PbrtSceneImporter`.
+
+The PBRT path maps `diffuse`, `coateddiffuse`, `conductor`,
+`coatedconductor`, `dielectric`, `thindielectric`, and
+`diffusetransmission` materials. Smooth dielectric uses exact Fresnel and
+Snell refraction; thin dielectric keeps the transmitted direction while using
+the two-interface Fresnel term. Rough dielectric and unsupported PBRT features
+fall back with scene-audit diagnostics rather than silently claiming full PBRT
+v4 coverage. See [Rendering pipeline](rendering-pipeline.md) for the transport
+details and estimator limitations.
 
 The initial glTF material scope is `KHR_texture_transform`, `KHR_materials_specular`, `KHR_materials_ior`, `KHR_materials_transmission`, `KHR_materials_volume`, `KHR_materials_clearcoat`, and `KHR_texture_basisu`. An unsupported extension in `extensionsRequired` stops import. Unsupported optional extensions use the core-material fallback and appear in scene audit diagnostics. The current renderer does not evaluate animation, skinning, morph targets, continuous deformation, or moving-instance transforms, and it has no raster fallback. Geometry/topology edits are treated as history-invalidating changes.
 

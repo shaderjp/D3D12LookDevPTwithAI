@@ -17,14 +17,16 @@ dynamic internal resolution with TAAU, compact secondary work dispatch, BLAS
 compaction / instancing, shader ray counters, asynchronous scene loading, and
 the MCP `2026-07-28` transport.
 
-## Integrated AI Assistant (in progress)
+## Integrated AI Assistant
 
-This branch adds a single-window workflow: the user controls LookDev from an
-AI Assistant dock instead of switching to a separate chat application. The
-first vertical slice includes the Inspector / AI Assistant switch, F9, a
-hidden local ChatHost, a current-user-only named pipe, streaming, cancellation,
-and project-scoped SQLite conversation history. The only executable window the
-user launches or operates is `D3D12LookDevPTwithAI.exe`.
+The current application uses a single-window workflow: the user controls
+LookDev from the right-side AI Assistant instead of switching to a separate
+chat application. The dock includes the Inspector / AI Assistant switch, F9,
+quick prompts, conversations, streaming, cancellation, `Ctrl+Enter` send, the
+loaded model and backend, and an animated state for model startup, generation,
+tool execution, and approval waits. The only window the user launches or
+operates is `D3D12LookDevPTwithAI.exe`; ChatHost and llama.cpp are owned hidden
+child processes.
 
 The product-default inference path now talks to a hidden `llama-server.exe`
 child over an authenticated loopback connection. A missing local
@@ -37,7 +39,7 @@ The native UI currently displays the latest page; browsing older pages is a
 subsequent UI milestone.
 
 The private same-instance MCP transport and native one-time approval boundary
-are now implemented. ChatHost accepts only the parent-owned
+are implemented. ChatHost accepts only the parent-owned
 `127.0.0.1` endpoint, preserves `readOnlyHint`, and requires a 30-second
 single-use grant bound to the MCP session, tool name, and canonical argument
 hash for every non-read-only call. The native endpoint rejects invalid or
@@ -51,8 +53,10 @@ shows its exact canonical arguments in the LookDev dock and requires a native
 one-time approval. Tool progress and results stay in the same window, while
 only the user message and final visible assistant response are persisted. A
 fixed-revision in-app setup for Gemma 4 and llama.cpp and a manual, unsigned
-one-app exhibition pack are now available; an arbitrary-model manager and an
-officially signed artifact catalog remain pending. See the
+one-app exhibition pack are available. Text chat and tool use are implemented;
+the model is not given viewport pixels, so its scene understanding comes from
+MCP state and diagnostics rather than vision. An arbitrary-model manager and
+an officially signed artifact catalog remain pending. See the
 [integrated architecture](docs/integrated-ai-architecture.ja.md).
 
 ### Local inference setup
@@ -63,6 +67,15 @@ the llama.cpp b10205 CPU, CUDA, or Vulkan runtime. It displays the current file,
 received and total bytes, and overall percentage. Cancellation keeps a
 `.partial` file so the same setup can resume with an HTTP Range request. Fixed
 sizes and SHA-256 hashes are verified before `inference.json` is replaced.
+
+| Model and backend selection | Download and verification progress |
+|:---:|:---:|
+| ![Gemma 4 and llama.cpp setup with explicit license acceptance](docs/images/installllm002.png) | ![Local model download showing bytes and overall percentage](docs/images/installllm003.png) |
+
+Model loading is lazy. `Loaded model: none` is therefore expected immediately
+after startup; after the first turn starts, the dock reports the actual model
+name and runtime backend. Press `Ctrl+Enter` to send a multiline prompt and
+`Enter` alone to insert a line break.
 
 For development with a custom GGUF or an existing llama.cpp runtime, import the
 artifacts with the existing script:
@@ -103,13 +116,21 @@ artifact provenance.
 
 ## Screenshots
 
-| Bistro Interior | Bistro Exterior |
-|:---:|:---:|
-| ![Bistro Interior rendered in the dark-themed WinUI editor](docs/images/screenshot001.jpg) | ![Bistro Exterior rendered in the dark-themed WinUI editor](docs/images/screenshot002.jpg) |
+![PBRT BMW M6 in the integrated editor while Gemma 4 reports its loaded model and thinking state](docs/images/screenshot008.png)
 
-The WinUI controls expose all six render modes, quality profiles and ray
-budgets, fixed/dynamic render scale, camera roll/FOV, scene-load progress and
-cancellation, the seventh alpha texture slot, and detailed RTXDI / DLSS status.
+| AI-approved LookDev mutation | In-app local model setup |
+|:---:|:---:|
+| ![A Gemma tool call waiting for one-time approval before changing exposure](docs/images/screenshot009.png) | ![Integrated AI Assistant with the Gemma 4 and llama.cpp setup flyout](docs/images/installllm.png) |
+
+| Material editing | Lighting editing |
+|:---:|:---:|
+| ![Bistro Interior with the WinUI material editor](docs/images/material.png) | ![Bistro Interior with the WinUI lighting editor](docs/images/lighting001.png) |
+
+The current WinUI controls expose all six render modes, quality profiles and
+ray budgets, fixed/dynamic render scale, camera roll/FOV, scene-load progress
+and cancellation, material texture residency, PBRT dielectric materials, and
+detailed RTXDI / DLSS status. The screenshots use local Bistro and PBRT sample
+assets that are intentionally not stored in this repository.
 
 ## Supported environment
 
@@ -118,8 +139,9 @@ cancellation, the seventh alpha texture slot, and detailed RTXDI / DLSS status.
 - MSVC `v145`
 - Windows SDK `10.0.26100.0`
 - Windows App Runtime 2.4 x64
-- .NET 9 SDK for builds and .NET 9 Runtime x64 for a normal source-tree run;
-  the integrated portable payload contains a self-contained ChatHost
+- .NET 9 SDK for building ChatHost and its tests. ChatHost is self-contained in
+  both the normal build output and the integrated portable payload; a separate
+  .NET runtime installation is not required to run a complete build output
 - Git with submodule support
 
 Debug and Release builds are unpackaged and Windows App SDK framework-dependent;
@@ -149,7 +171,7 @@ redistributable before running the unpackaged executable.
 Clone recursively so that all pinned third-party repositories are present:
 
 ```powershell
-git clone --recursive <repository-url> D3D12LookDevPTwithAI
+git clone --recursive https://github.com/shaderjp/D3D12LookDevPTwithAI.git
 cd D3D12LookDevPTwithAI
 git submodule update --init --recursive
 ```
@@ -161,7 +183,9 @@ Debugger, so F5 launches the unpackaged WinUI executable.
 The command-line equivalent is:
 
 ```powershell
-$msbuild = "C:\Program Files\Microsoft Visual Studio\18\Insiders\MSBuild\Current\Bin\amd64\MSBuild.exe"
+$vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+$vsRoot = & $vswhere -latest -products * -requires Microsoft.Component.MSBuild -property installationPath
+$msbuild = Join-Path $vsRoot 'MSBuild\Current\Bin\MSBuild.exe'
 & $msbuild .\D3D12LookDevPTwithAI.sln /m /restore /p:Configuration=Debug /p:Platform=x64
 ```
 
@@ -183,6 +207,12 @@ Assimp, DirectXTex, NRD, and RTXDI are built on demand by
 Build output is written to `Bin\x64\<Configuration>`. The project copies the
 Agility SDK, DXC-produced shaders, and available Streamline / DLSS runtimes
 beside the executable.
+
+Run and copy the complete output directory. Copying only
+`D3D12LookDevPTwithAI.exe` is unsupported because the sibling ChatHost, its
+self-contained .NET files, Windows App SDK files, shaders, and renderer
+runtimes are also required. An incomplete copy can produce a misleading
+"install or update .NET" dialog when ChatHost starts.
 
 ## Integrated one-app portable exhibition package
 
@@ -233,45 +263,15 @@ Run the bounded packaging regression independently with:
 An officially signed artifact catalog, arbitrary-model management UI, and a
 signed product release remain future work.
 
-### Legacy two-app transition suite
+### Archived two-app transition scripts
 
-The following scripts retain the older external `LocalMCPChatClient` transition
-pipeline. They are not the integrated Assistant distribution.
-
-`suite.lock.json` schema v2 pins the compatible LocalMCPChatClient revision,
-SDKs, packages, model/projector, and llama runtime versions. D3D12 uses
-`source: self`; the generated suite manifest records the exact commits built
-for both repositories. `.vsconfig` and
-`config/development.dsc.yaml` describe the Visual Studio and WinGet
-Configuration prerequisites. The bootstrap is idempotent and modifies the
-machine only when `-InstallPrerequisites` is explicitly supplied:
-
-```powershell
-.\Scripts\BootstrapSuite.ps1 -LocalMcpRepository ..\LocalMCPChatClient
-```
-
-Build the public beta suite with `DLSS=false / NRD=false / RTXDI=false`:
-
-```powershell
-.\Scripts\BuildPortableSuite.ps1 -LocalMcpRepository ..\LocalMCPChatClient `
-  -OutputDirectory .\artifacts\D3D12LookDevPTwithAI-0.2.0-beta.1-win-x64
-```
-
-The ZIP contains the framework-dependent D3D12 application, the self-contained
-LocalMCPChatClient, Agility SDK, launch/bootstrap/uninstall scripts, licenses,
-a file-level license map, an SPDX SBOM, a version-locked manifest, and SHA-256
-for every file and the archive. Installation defaults to the current user's
-`%LocalAppData%\Programs`; Visual Studio and .NET are not required. On first
-launch, the suite downloads Microsoft's signed Windows App Runtime 2.4.0
-installer, verifies the pinned SHA-256 and Authenticode signature, and installs
-the runtime for the current user when not elevated. Version `0.2.0-beta.1` is
-an unsigned public beta. Verify the archive SHA-256
-and read `UNSIGNED-BETA.ja.txt` before running it. The launcher starts the MCP
-server and a 90-second pairing code so LocalMCPChatClient can pair before its
-model download. Use
-`BuildOfflinePack.ps1` to add selected model/projector and CPU/CUDA/Vulkan
-llama runtimes without including tokens, credentials, approval rules, or chat
-history.
+`BootstrapSuite.ps1`, `BuildPortableSuite.ps1`, and `BuildOfflinePack.ps1`
+remain only to reproduce or migrate the older `0.2.0-beta.1` workflow with an
+external `LocalMCPChatClient`. They are not the current setup path, release
+package, or acceptance target. New development and exhibition builds should
+use the integrated Assistant and `BuildIntegratedPortable.ps1`. The continued
+presence of these scripts does not mean that a second application, pairing
+code, projector, or vision model is required by the integrated product.
 
 ## Run
 
@@ -292,10 +292,13 @@ the same paths used by the original application:
 
 .\Bin\x64\Debug\D3D12LookDevPTwithAI.exe `
   --project .\projects\benchmark_interactive.lookdevpt.json
+
+.\Bin\x64\Debug\D3D12LookDevPTwithAI.exe `
+  --scene .\pbrt-v4-scenes-master\bmw-m6\bmw-m6.pbrt
 ```
 
-`Bistro_v5_2` is a local test asset directory and is intentionally ignored by
-git. See [Asset setup](docs/assets.md).
+`Bistro_v5_2` and `pbrt-v4-scenes-master` are local test asset directories and
+are intentionally ignored by git. See [Asset setup](docs/assets.md).
 
 ### glTF material and texture path
 
@@ -315,11 +318,12 @@ raster fallback are not included in this release. See [Asset setup](docs/assets.
 
 ## WinUI editor
 
-The fixed IDE-style layout contains the same nine editor panels as the source
-application:
+The fixed IDE-style layout contains the renderer panels plus the integrated AI
+mode:
 
 - Scene, Material, and Lighting on the left
-- Viewport, Path Tracing, Denoise, and ReSTIR on the right
+- Inspector panels for Viewport, Path Tracing, Denoise, and ReSTIR on the right
+- AI Assistant as the alternate right-side mode
 - Diagnostics and MCP in the bottom `TabView`
 
 The left, right, and bottom regions are resizable. The View menu controls panel
@@ -520,6 +524,8 @@ DXGI concern and does not add a UI shader pass.
 - [Asset setup](docs/assets.md)
 - [Rendering pipeline](docs/rendering-pipeline.md)
 - [MCP integration](docs/mcp.md)
+- [Integrated AI architecture](docs/integrated-ai-architecture.ja.md)
+- [Integrated public-beta acceptance checklist](docs/public-beta-acceptance.ja.md)
 - [DLSS integration](docs/dlss.md)
 - [NRD integration](docs/nrd.md)
 - [RTXDI integration](docs/rtxdi.md)

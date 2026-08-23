@@ -5,6 +5,10 @@
 2アプリ構成のチェックリストではありません。自動 test に合格しても、この実機確認が完了する
 までは公開用 tag を push しません。
 
+`BuildNvidiaRelease.ps1`で生成するNVIDIA renderer backend同梱payloadは別の配布境界で、
+このチェックリストの対象外です。license、NGX Application ID、対象GPU、file台帳の確認は
+[NVIDIA開発・Release setup](nvidia-setup.ja.md)のRelease checklistを使用してください。
+
 ## 必須環境
 
 - Visual Studio、.NET Runtime、Windows App Runtime を追加導入していない Windows 11 x64

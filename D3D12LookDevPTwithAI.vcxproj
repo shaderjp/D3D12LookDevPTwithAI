@@ -83,10 +83,10 @@
     <EnableNRD Condition="'$(EnableNRD)'==''">true</EnableNRD>
     <D3D12LookDevPtWithNrd Condition="'$(EnableNRD)'=='true' Or '$(EnableNRD)'=='True' Or '$(EnableNRD)'=='1'">1</D3D12LookDevPtWithNrd>
     <D3D12LookDevPtWithNrd Condition="'$(D3D12LookDevPtWithNrd)'==''">0</D3D12LookDevPtWithNrd>
-    <StreamlineRoot>$(ProjectDir)ThirdParty\Streamline</StreamlineRoot>
-    <DlssRoot>$(ProjectDir)ThirdParty\DLSS</DlssRoot>
+    <StreamlineRoot Condition="'$(StreamlineRoot)'==''">$(ProjectDir)ThirdParty\Streamline</StreamlineRoot>
+    <DlssRoot Condition="'$(DlssRoot)'==''">$(ProjectDir)ThirdParty\DLSS</DlssRoot>
     <DlssIncludeDirs Condition="'$(D3D12LookDevPtWithDlss)'=='1'">$(StreamlineRoot)\include;$(DlssRoot)\include;</DlssIncludeDirs>
-    <NrdRoot>$(ProjectDir)ThirdParty\NRD</NrdRoot>
+    <NrdRoot Condition="'$(NrdRoot)'==''">$(ProjectDir)ThirdParty\NRD</NrdRoot>
     <NrdBuildRoot>$(NrdRoot)\Build\$(LookDevPtPlatformToolset)\$(Platform)\$(Configuration)</NrdBuildRoot>
     <NrdLibDir>$(NrdBuildRoot)\Lib</NrdLibDir>
     <NrdLibName>NRD.lib</NrdLibName>
@@ -98,7 +98,7 @@
     <D3D12LookDevPtRtxdiRequested Condition="'$(EnableRTXDI)'=='true' Or '$(EnableRTXDI)'=='True' Or '$(EnableRTXDI)'=='1'">1</D3D12LookDevPtRtxdiRequested>
     <D3D12LookDevPtRtxdiRequested Condition="'$(D3D12LookDevPtRtxdiRequested)'==''">0</D3D12LookDevPtRtxdiRequested>
     <RtxdiRoot Condition="'$(RtxdiRoot)'==''">$(ProjectDir)ThirdParty\RTXDI</RtxdiRoot>
-    <RtxdiRuntimeRoot>$(RtxdiRoot)\Libraries\Rtxdi</RtxdiRuntimeRoot>
+    <RtxdiRuntimeRoot Condition="'$(RtxdiRuntimeRoot)'==''">$(RtxdiRoot)\Libraries\Rtxdi</RtxdiRuntimeRoot>
     <RtxdiSdkAvailable>false</RtxdiSdkAvailable>
     <RtxdiSdkAvailable Condition="Exists('$(RtxdiRuntimeRoot)\Include\Rtxdi\RtxdiParameters.h') And Exists('$(RtxdiRuntimeRoot)\Source\ReSTIRDI.cpp') And Exists('$(RtxdiRuntimeRoot)\CMakeLists.txt')">true</RtxdiSdkAvailable>
     <D3D12LookDevPtWithRtxdi Condition="'$(D3D12LookDevPtRtxdiRequested)'=='1' And '$(RtxdiSdkAvailable)'=='true'">1</D3D12LookDevPtWithRtxdi>
@@ -303,10 +303,16 @@
     <None Include=".vsconfig" />
     <None Include="suite.lock.json" />
     <None Include=".github\workflows\release-portable.yml" />
+    <None Include=".github\workflows\release-nvidia.yml" />
     <None Include="BuildThirdParty.ps1" />
     <None Include="CMake\RtxdiRuntime\CMakeLists.txt" />
     <None Include="config\development.dsc.yaml" />
     <None Include="config\LocalMCPChatClient.mcp.json" />
+    <None Include="config\nvidia-dependencies.json" />
+    <None Include="Scripts\NvidiaDependencyTools.psm1" />
+    <None Include="Scripts\SetupNvidiaEnvironment.ps1" />
+    <None Include="Scripts\BuildNvidiaRelease.ps1" />
+    <None Include="Scripts\TestNvidiaDependencyTools.ps1" />
     <None Include="Scripts\ConfigureLocalInference.ps1" />
     <None Include="Scripts\TestAssistantHostBridge.ps1" />
     <None Include="Scripts\TestAssistantProtocol.ps1" />

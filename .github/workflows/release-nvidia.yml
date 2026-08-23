@@ -1,0 +1,66 @@
+name: release-nvidia
+
+on:
+  workflow_dispatch:
+    inputs:
+      acknowledge_nvidia_license:
+        description: I reviewed the NVIDIA SDK/runtime licenses and may create this internal artifact
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-2025-vs2026
+    env:
+      D3D12LOOKDEVPT_NGX_APPLICATION_ID: ${{ secrets.NVIDIA_NGX_APPLICATION_ID }}
+    steps:
+      - name: Require explicit license acknowledgement
+        shell: pwsh
+        run: |
+          if ('${{ inputs.acknowledge_nvidia_license }}' -ne 'true') {
+            throw 'NVIDIA license acknowledgement is required.'
+          }
+          if ($env:D3D12LOOKDEVPT_NGX_APPLICATION_ID -notmatch '^\d+$') {
+            throw 'Repository secret NVIDIA_NGX_APPLICATION_ID must contain the NVIDIA-issued decimal ID.'
+          }
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.300
+      - name: Test NVIDIA dependency tooling
+        shell: pwsh
+        run: ./Scripts/TestNvidiaDependencyTools.ps1
+      - name: Build auditable NVIDIA payload
+        shell: pwsh
+        run: |
+          $output = Join-Path $env:RUNNER_TEMP 'D3D12LookDevPTwithAI-NVIDIA-win-x64'
+          ./Scripts/BuildNvidiaRelease.ps1 -OutputDirectory $output -AcceptNvidiaLicense
+          $manifest = Get-Content (Join-Path $output 'nvidia-release-manifest.json') -Raw | ConvertFrom-Json
+          if ($manifest.ngxApplicationIdIncluded -ne $false -or $manifest.sourceDirty -ne $false -or
+              !$manifest.backends.dlss -or !$manifest.backends.nrd -or !$manifest.backends.rtxdi) {
+            throw 'NVIDIA release manifest identity is invalid.'
+          }
+          foreach ($record in $manifest.files) {
+            $path = Join-Path $output ([string]$record.path).Replace('/', '\')
+            if (!(Test-Path -LiteralPath $path -PathType Leaf)) { throw "Manifest file missing: $($record.path)" }
+            $actual = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($actual -ne $record.sha256) { throw "Manifest hash mismatch: $($record.path)" }
+          }
+          Compress-Archive -LiteralPath $output -DestinationPath "$output.zip" -CompressionLevel Optimal
+          (Get-FileHash -LiteralPath "$output.zip" -Algorithm SHA256).Hash.ToLowerInvariant() |
+            Set-Content -LiteralPath "$output.zip.sha256" -Encoding ascii
+      - uses: actions/upload-artifact@v4
+        with:
+          name: D3D12LookDevPTwithAI-NVIDIA-win-x64
+          path: |
+            ${{ runner.temp }}/D3D12LookDevPTwithAI-NVIDIA-win-x64.zip
+            ${{ runner.temp }}/D3D12LookDevPTwithAI-NVIDIA-win-x64.zip.sha256
+
+  # Deliberately no GitHub Release publication step. A human must review the
+  # staged NVIDIA license documents and redistribution scope first.

@@ -31,6 +31,8 @@
 
         <MenuBar x:Name="MainMenu" Grid.Row="0" Grid.ColumnSpan="5">
             <MenuBarItem Title="Project">
+                <MenuFlyoutItem x:Name="NewSceneMenu" Text="New Scene" Tag="newScene" Click="OnProjectMenuClick" />
+                <MenuFlyoutSeparator />
                 <MenuFlyoutItem Text="Open Scene…" Tag="openScene" Click="OnProjectMenuClick" />
                 <MenuFlyoutItem Text="Open Environment…" Tag="openEnvironment" Click="OnProjectMenuClick" />
                 <MenuFlyoutSeparator />
@@ -40,6 +42,11 @@
                 <MenuFlyoutSeparator />
                 <MenuFlyoutItem x:Name="SaveStartupMenu" Text="Save Startup Settings" Tag="saveStartup" Click="OnProjectMenuClick" />
                 <MenuFlyoutItem Text="Clear Startup Settings" Tag="clearStartup" Click="OnProjectMenuClick" />
+                <MenuFlyoutSeparator />
+                <ToggleMenuFlyoutItem x:Name="RestorePreviousSessionMenu"
+                                      Text="Restore Previous Session"
+                                      Tag="restorePreviousSession"
+                                      Click="OnProjectMenuClick" />
             </MenuBarItem>
             <MenuBarItem Title="View">
                 <ToggleMenuFlyoutItem x:Name="ScenePanelMenu" Text="Scene" Tag="SceneTab" IsChecked="True" Click="OnPanelToggleClick" />

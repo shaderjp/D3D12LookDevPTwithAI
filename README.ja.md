@@ -107,6 +107,10 @@ Job Object で ChatHost を所有し、llama.cpp の子孫プロセスも同じ�
 |:---:|:---:|
 | ![露出変更の前に一回承認を待つGemma Tool call](docs/images/screenshot009.png) | ![Gemma 4とllama.cppのsetup flyoutを開いた統合AI Assistant](docs/images/installllm.png) |
 
+| AI Tool実行と進行status | Denoise backend設定 |
+|:---:|:---:|
+| ![PBRT crown sceneでcolor management Toolを実行し、Tool結果の処理中statusを示すGemma](docs/images/screenshot010.png) | ![readyなNRD REBLUR backendとtemporal設定を表示するDenoise Inspector](docs/images/nvidiareblur.png) |
+
 | Material編集 | Lighting編集 |
 |:---:|:---:|
 | ![Bistro InteriorとWinUI material editor](docs/images/material.png) | ![Bistro InteriorとWinUI lighting editor](docs/images/lighting001.png) |
@@ -128,8 +132,9 @@ Bistro / PBRT sample asset は local 配置で、repository には含みませ�
   .NET Runtime をインストールする必要はありません
 - submodule 対応 Git
 
-Debug / Release build は unpackaged、Windows App SDK framework-dependent です。
-Release は Hybrid CRT を使用します。
+通常のDebug / Release buildはunpackaged、Windows App SDK framework-dependentです。
+ReleaseはHybrid CRTを使用します。明示的なNVIDIA Release builderだけはnative buildを
+app-local Windows App SDK deploymentへ上書きします。
 VS 2022 / `v143`、MSIX、ARM64 は対象外です。
 
 Visual Studio project は次の NuGet package を固定します。
@@ -144,12 +149,32 @@ Visual Studio project は次の NuGet package を固定します。
 初回 build の前に setup checker を実行してください。
 
 ```powershell
-.\Scripts\CheckSetup.ps1 -CheckDLSS -CheckNRD
+.\Scripts\CheckSetup.ps1 -CheckNRD
 ```
 
 Windows App Runtime 2.4 x64 や build component が不足している場合は、checker
 が具体的な不足項目を表示します。unpackaged executable の起動前に、対応する
 Windows App Runtime redistributable をインストールしてください。
+
+NVIDIA 機能をすべて使う開発環境は manifest 駆動の setup で構築できます。GPU / driver、
+固定 Streamline / DLSS / NRD / RTXDI revision、header、license、生成 library を一括検査し、
+repository 外の SDK root も指定できます。
+
+```powershell
+$env:D3D12LOOKDEVPT_NGX_APPLICATION_ID = '<NVIDIAから発行された10進ID>'
+.\Scripts\SetupNvidiaEnvironment.ps1 -Profile LocalNvidia -InitializeSubmodules
+.\Scripts\SetupNvidiaEnvironment.ps1 -Profile LocalNvidia -Configuration Debug -Build
+```
+
+NVIDIA Release builderは3種類のrenderer backendを有効にし、必要runtime DLL / license
+とSHA-256台帳をstagingします。NGX Application IDの値は記録しません。対象machineには
+v145 toolset互換の最新Microsoft Visual C++ x64 Redistributableが必要です。
+
+```powershell
+.\Scripts\BuildNvidiaRelease.ps1 -AcceptNvidiaLicense
+```
+
+公開前に [NVIDIA setup と再配布境界](docs/nvidia-setup.ja.md)を確認してください。
 
 ## Clone と build
 
@@ -189,8 +214,8 @@ Assimp、DirectXTex、NRD、RTXDI は `BuildThirdParty.ps1` が必要時に buil
 .\Scripts\BuildBackendMatrix.ps1 -Configuration Release -SkipLaunch
 ```
 
-出力先は `Bin\x64\<Configuration>` です。Agility SDK、DXC で生成した shader、
-利用可能な Streamline / DLSS runtime も executable の横へコピーされます。
+出力先は`Bin\x64\<Configuration>`です。Agility SDKとDXCで生成したshaderをexecutable
+横へcopyします。DLSS有効buildでは利用可能なStreamline / DLSS runtimeもcopyします。
 
 実行・コピー時は出力 directory 全体を使用してください。
 `D3D12LookDevPTwithAI.exe` だけを別の場所へコピーすると、隣接する ChatHost、
@@ -205,6 +230,9 @@ self-contained .NET file、Windows App SDK、shader、renderer runtime が欠け
 Windows App SDK、Agility SDK、DXC、app-local VC runtime、license、file 単位 license map、
 SPDX SBOM、整合性 manifest を同じ payload に格納します。`LocalMCPChatClient`、旧2-process
 launcher、credential、承認状態、user settings、会話履歴は含めません。
+このvendor-neutral展示経路はrenderer backendを意図的に`DLSS=false`、`NRD=false`、
+`RTXDI=false`でbuildします。SDK / runtimeを配布する場合は、別途reviewするNVIDIA Release
+workflowを使用してください。
 
 PowerShell 7.4 以降が必要です。展示 build は AI 同梱を既定とし、準備済み `AI`
 directory、その直下の厳密な `inference.json`、model/runtime それぞれの `name`、
@@ -354,10 +382,29 @@ WinUI 版の user data は元アプリと競合しない専用 path に保存し
 ```text
 %APPDATA%\D3D12LookDevPTwithAI\settings.json
 %APPDATA%\D3D12LookDevPTwithAI\startup.json
+%APPDATA%\D3D12LookDevPTwithAI\session.json
+%APPDATA%\D3D12LookDevPTwithAI\last-session.lookdevpt.json
 %APPDATA%\D3D12LookDevPTwithAI\materials\
 %APPDATA%\D3D12LookDevPTwithAI\ui.json
 %TEMP%\D3D12LookDevPTwithAI.log
 ```
+
+`Project > Restore Previous Session` は opt-in の自動復元 mode です。有効化時に
+現在の project state を直ちに保存し、正常終了時に snapshot を更新して、次回起動時に
+復元します。`Project > New Scene` は未保存変更の確認後に built-in preview scene を作り、
+復元 snapshot もその状態へ置き換えます。その起動で `--project` または `--scene` を
+明示した場合は command line を優先します。
+
+| 前回セッションの復元 | 安全な新規シーン作成 |
+| --- | --- |
+| ![Restore Previous Session を表示した Project メニュー](docs/images/session-restore-menu.png) | ![未保存変更を保護する New Scene 確認ダイアログ](docs/images/new-scene-confirmation.png) |
+
+snapshot と設定 file は atomic replace します。必須 scene / environment の削除・
+読込不能、snapshot の破損、復元途中の終了があっても起動失敗にはせず、候補を
+`last-session.lookdevpt.json.failed` へ隔離して preview scene を維持します。隔離した
+候補を毎回再試行することもありません。任意の texture override が利用できない場合は
+import 元 material へ fallback し、renderer diagnostics に残します。この自動復元 mode は
+固定の手動起動設定である `startup.json` とは独立しています。
 
 Assistant data は current user の local profile 以下へ分離します。
 
@@ -488,6 +535,8 @@ WinUI composition は DXGI 側で行い、UI 専用 shader pass は追加しま�
 - [MCP integration](docs/mcp.ja.md)
 - [統合 AI アーキテクチャ](docs/integrated-ai-architecture.ja.md)
 - [統合公開ベータ受け入れチェックリスト](docs/public-beta-acceptance.ja.md)
+- [NVIDIA開発・Release setup](docs/nvidia-setup.ja.md)
+- [Denoise UIとfallback比較](docs/denoise-ui.ja.md)
 - [DLSS integration](docs/dlss.ja.md)
 - [NRD integration](docs/nrd.ja.md)
 - [RTXDI integration](docs/rtxdi.ja.md)
@@ -500,3 +549,5 @@ Portable SuiteはtinygltfのMIT license、Basis UniversalのApache-2.0 license /
 （Zstandard licenseを含む）を収集し、全同梱fileをlicense allowlistとSPDX 2.3 SBOMへ
 対応付けます。設計時に`nvpro-samples/vk_gltf_renderer`を参考にしましたが、Vulkan、
 `nvpro_core`、UI source codeは取り込んでいません。
+別のNVIDIA Release builderは有効なNVIDIA componentのlicenseを`Licenses/NVIDIA`へ
+copyします。acknowledgement switch自体が再配布権を付与するものではありません。

@@ -26,6 +26,17 @@ git -C ThirdParty/RTXDI/Libraries/Rtxdi rev-parse HEAD
 .\Scripts\CheckSetup.ps1 -CheckRTXDI
 ```
 
+統合full-NVIDIA workflowは同じtop-level / nested revision、license、GPU / application
+identity、生成libraryを検証します。
+
+```powershell
+$env:D3D12LOOKDEVPT_NGX_APPLICATION_ID = '<NVIDIAから発行された10進ID>'
+.\Scripts\SetupNvidiaEnvironment.ps1 -Profile LocalNvidia -Configuration Release -Build
+```
+
+安全なsubmodule初期化、外部SDK root、Release stagingは
+[NVIDIA開発・Release setup](nvidia-setup.ja.md)を参照してください。
+
 ## Build switch と matrix
 
 RTXDI は compile 時に default で無効です。
@@ -44,7 +55,8 @@ msbuild .\D3D12LookDevPTwithAI.sln /m /p:Configuration=Release /p:Platform=x64 /
 
 固定 header / source がない状態で `EnableRTXDI=true` を要求すると、MSBuild は warning を出して `D3D12LOOKDEVPT_WITH_RTXDI=0` で compile します。SDK include / library link は追加せず、全 ReSTIR mode が Baseline PT fallback になります。
 
-repository の build matrix は backend の全組み合わせを確認し、最後に target 構成（`NRD=true`、`RTXDI=true`、`DLSS=false`）を残します。
+repositoryのbuild matrixはbackendの全組み合わせを確認し、最後にmanifest定義target構成
+（`NRD=true`、`RTXDI=false`、`DLSS=false`）を残します。
 
 ```powershell
 .\Scripts\BuildBackendMatrix.ps1 -Configuration Release
@@ -116,4 +128,9 @@ UI / MCP は requested / effective state、SDK / runtime revision、`diEvaluatio
 
 fixed seed / camera path、alpha foliage、微小 emissive、高 dynamic range、camera cut、camera motion で ReSTIR DI/GI/PT を検証してください。performance benchmark は full-screen quality counter を省略し、quality / combined run は実行します。1 枚の still だけではなく high-SPP Baseline reference に対する mean energy と temporal error を比較します。
 
-独立 Primary Visibility / compact secondary task graph は、条件を満たす DXR 1.1 Interactive Baseline/DI frame で利用できます。GI/PT と正式 GI+DI gate では使わず、現在の secondary task は保存した primary intersection から継続せず camera sample を再 trace します。未完了の大項目は、現在の reconnection target shift を超える完全な SDK 相当 hybrid-shift path replay、NVIDIA 発行 NGX application ID を使う feature-active DLSS-RR 認証、全必須 scene の temporal/reference 品質 gate です。
+独立Primary Visibility / compact secondary task graphは、条件を満たすDXR 1.1 Interactive
+Baseline / DI frameで利用できます。GI / PTと正式GI+DI gateでは使わず、現在のsecondary
+taskは保存したprimary intersectionから継続せずcamera sampleを再traceします。未完了の
+大項目は、現在のreconnection target shiftを超える完全なSDK相当hybrid-shift path replayと、
+全必須sceneのtemporal / reference品質gateです。DLSS-RR認証は
+[DLSS](dlss.ja.md)に記載した別backendの検証境界です。

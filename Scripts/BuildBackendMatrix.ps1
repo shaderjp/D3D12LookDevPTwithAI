@@ -8,6 +8,9 @@ param(
 
 $ErrorActionPreference = "Stop"
 $root = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+Import-Module (Join-Path $PSScriptRoot 'NvidiaDependencyTools.psm1') -Force
+$nvidiaManifest = Import-NvidiaDependencyManifest -Path (Join-Path $root 'config\nvidia-dependencies.json')
+$repositoryDefault = Get-NvidiaProfile -Manifest $nvidiaManifest -Name RepositoryDefault
 if (-not [System.IO.Path]::IsPathRooted($OutputRoot)) {
     $OutputRoot = Join-Path $root $OutputRoot
 }
@@ -28,15 +31,20 @@ if (-not $msbuild -or -not (Test-Path -LiteralPath $msbuild -PathType Leaf)) {
     throw "MSBuild.exe was not found."
 }
 
-# Target is last so the checked build output remains in the documented
-# default configuration: DLSS and NRD enabled, RTXDI disabled.
+# Target is last so the checked build output remains in the repository default
+# configuration defined by config/nvidia-dependencies.json.
 $configurations = @(
     [pscustomobject]@{ Name = "all-enabled"; NRD = $true; RTXDI = $true; DLSS = $true },
     [pscustomobject]@{ Name = "no-nrd"; NRD = $false; RTXDI = $true; DLSS = $true },
     [pscustomobject]@{ Name = "no-rtxdi"; NRD = $true; RTXDI = $false; DLSS = $true },
     [pscustomobject]@{ Name = "no-dlss"; NRD = $true; RTXDI = $true; DLSS = $false },
     [pscustomobject]@{ Name = "all-disabled"; NRD = $false; RTXDI = $false; DLSS = $false },
-    [pscustomobject]@{ Name = "target"; NRD = $true; RTXDI = $false; DLSS = $true }
+    [pscustomobject]@{
+        Name = "target"
+        NRD = [bool]$repositoryDefault.nrd
+        RTXDI = [bool]$repositoryDefault.rtxdi
+        DLSS = [bool]$repositoryDefault.dlss
+    }
 )
 
 $results = [System.Collections.Generic.List[object]]::new()

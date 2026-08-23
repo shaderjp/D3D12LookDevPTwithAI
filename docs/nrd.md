@@ -25,6 +25,16 @@ Use the strict setup check on a machine intended to run NRD:
 .\Scripts\CheckSetup.ps1 -CheckNRD
 ```
 
+For the repository-supported coordinated check/build, use the manifest-driven
+profile instead. It validates the exact revision and generated library path:
+
+```powershell
+.\Scripts\SetupNvidiaEnvironment.ps1 -Profile RepositoryDefault -Configuration Release -Build
+```
+
+See [NVIDIA development and release setup](nvidia-setup.md) when enabling NRD
+together with DLSS and RTXDI or when using SDK roots outside the checkout.
+
 ## Build Switch And Matrix
 
 NRD is compile-enabled by default. Disable it for a dependency-free backend build:
@@ -35,7 +45,9 @@ msbuild .\D3D12LookDevPTwithAI.sln /m /p:Configuration=Release /p:Platform=x64 /
 
 `EnableNRD=false` excludes the SDK headers and libraries, keeps every shader configuration buildable, reports `compiled=false`, and routes NRD selections to the internal backend. RTXDI and DLSS are independent switches.
 
-The repository includes a build/launch matrix covering all-enabled, each single backend disabled, all-disabled, and the current target configuration (`NRD=true`, `RTXDI=true`, `DLSS=false`):
+The repository includes a build/launch matrix covering all-enabled, each single
+backend disabled, all-disabled, and the current manifest-defined target
+configuration (`NRD=true`, `RTXDI=false`, `DLSS=false`):
 
 ```powershell
 .\Scripts\BuildBackendMatrix.ps1 -Configuration Release
@@ -86,8 +98,21 @@ The Denoise panel and `lookdevpt.set_denoise` accept:
 - `internal`: split diffuse/specular temporal history followed by hit-distance-aware A-Trous;
 - `nrd_reblur`: `REBLUR_DIFFUSE_SPECULAR`;
 - `nrd_relax`: `RELAX_DIFFUSE_SPECULAR`;
-- `dlss_rr`: the separate, currently non-evaluating DLSS-RR probe path;
+- `dlss_rr`: the separate DLSS-RR evaluation path, with native reconstruction
+  fallback when it is not ready;
 - `off`: no real-time denoiser.
+
+| NRD REBLUR | NRD RELAX |
+|:---:|:---:|
+| ![Bistro Interior using the NRD REBLUR backend](images/nvidiareblur.png) | ![Bistro Interior using the NRD RELAX backend](images/nvdiarelax.png) |
+
+The Denoise Inspector exposes the requested backend while the status block
+reports whether NRD is compiled and ready. REBLUR is the interactive default;
+RELAX is the sharper preview-oriented option.
+
+The [Denoise UI and fallback gallery](denoise-ui.md) compares these selections
+with Internal, DLSS Ray Reconstruction, and Off while keeping the DLSS
+availability preference explicit.
 
 Example:
 
@@ -106,6 +131,11 @@ The bridge creates the selected NRD instance, permanent/transient pools, compute
 If the SDK, method, resource format, pipeline, or evaluation is unavailable, the UI keeps the requested NRD selection visible and reports the effective `internal` backend with an exact fallback reason. A runtime evaluation failure queues a backend-resource rebuild before the internal fallback is used; partially written NRD resources are never reinterpreted as internal history in the same frame.
 
 Read status from `lookdevpt.get_state` or `lookdevpt.get_stats` under `denoise.nrd` / `denoiser.nrd`. Useful fields include `compiled`, `evaluationReady`, SDK version, selected denoiser, resource resolution, pool counts, encoding names, `lastError`, and `fallbackReason`.
+
+The status lines distinguish a backend that is compiled and ready from the
+currently selected backend and its effective fallback. In the checked-in
+gallery captures NRD is ready, while DLSS Ray Reconstruction is unavailable in
+the build and the renderer reports that fallback explicitly.
 
 ## History And Resource Behavior
 

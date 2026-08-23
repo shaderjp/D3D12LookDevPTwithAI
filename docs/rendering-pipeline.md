@@ -334,6 +334,15 @@ When NRD is not compiled, SDK evaluation is unavailable, or the internal backend
 
 See [NRD backend](nrd.md) for details about NRD and the fallback.
 
+| Denoise Off | Internal temporal / A-Trous |
+|:---:|:---:|
+| ![Bistro Interior with the Denoise Backend set to Off](images/denoisenone.png) | ![Bistro Interior with the Internal denoiser selected](images/internal.png) |
+
+The `Off` capture exposes current Monte Carlo variance. `Internal` selects the
+native split-signal temporal and A-Trous path. See the
+[Denoise UI and fallback gallery](denoise-ui.md) for every backend with the
+independent DLSS availability preference enabled and disabled.
+
 ## 10. Final HDR TAA, Sharpening, and Tone Mapping
 
 The denoiser mainly stabilizes surface lighting, but temporal variation remains at silhouettes, in the sky, in alpha coverage, and in the final composite. A 1:1 Final TAA pass therefore runs in HDR after denoising and before tone mapping.
@@ -351,6 +360,14 @@ The denoiser mainly stabilizes surface lighting, but temporal variation remains 
 A long history window suppresses stationary noise, but locking too early would also preserve the denoiser's initial blur. The current implementation keeps an update aperture of up to roughly 32 frames during REBLUR's maturity period, then transitions to a longer stability window. Sharpening is capped by the configured strength and weakens in flat regions, across extreme edges, and during motion. It is opt-in (`0` by default), because nonzero sharpening can amplify residual Monte Carlo variance in difficult scenes.
 
 The available tone mappers are `None`, Reinhard, and an ACES fitted curve. The ACES option here is not a complete ACES color-management pipeline. None of these options changes the path estimator; they are display transforms that map HDR values into a displayable range.
+
+| None | Reinhard | ACES fitted curve |
+|:---:|:---:|:---:|
+| ![Bistro Interior with Tone Mapper set to None](images/tonemapnone.png) | ![Bistro Interior with Tone Mapper set to Reinhard](images/tonemapreinhard.png) | ![Bistro Interior with Tone Mapper set to ACES](images/tonemapaces.png) |
+
+These captures use the same Bistro view and exposure. The Inspector can change
+the display transform directly, and the AI Assistant can reach the same setting
+through `lookdevpt.set_color_management` as shown in the application screenshots.
 
 ## 11. Adaptive Sampling and the Ray Budget
 
@@ -434,6 +451,22 @@ Looking only at Beauty does not reveal whether a problem originates in sampling,
 5. Inspect `History Length`, `History Confidence`, and `TAA History Acceptance`
 6. Compare Final and Reference Still from the same camera
 
+| Base Color | World Normal |
+|:---:|:---:|
+| ![Bistro Interior Base Color debug view](images/basecolor.png) | ![Bistro Interior World Normal debug view](images/worldnormal.png) |
+
+`Base Color` isolates imported material color from lighting, while `World
+Normal` makes orientation discontinuities and normal-map convention problems
+visible before they contaminate denoising or temporal reuse.
+
+| Hit Distance | Indirect lighting |
+|:---:|:---:|
+| ![Bistro Interior Hit Distance debug view](images/hitdistance.png) | ![Bistro Interior Indirect debug view](images/indirect.png) |
+
+`Hit Distance` exposes the geometry scale seen by reconstruction filters.
+`Indirect` isolates multi-bounce transport so direct-light sampling and
+indirect-light noise can be investigated separately.
+
 Suggested small experiments:
 
 - Pan across a roughness sweep and observe specular highlights and changes in ray-cone mip selection
@@ -499,6 +532,7 @@ An optional backend being able to start does not mean it meets the 1080p60, blur
 
 ## Related Documentation
 
+- [NVIDIA development and release setup](nvidia-setup.md)
 - [Optional NVIDIA NRD Backend](nrd.md)
 - [Optional NVIDIA RTXDI ReSTIR DI](rtxdi.md)
 - [Optional DLSS Ray Reconstruction](dlss.md)

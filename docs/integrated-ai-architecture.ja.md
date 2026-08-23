@@ -46,7 +46,9 @@ Native UI ── process-local one-time approval broker
 - 過去履歴 page の閲覧 UI は後続 milestone とする。
 - 変更操作を統合した後の承認は `今回のみ承認` と `拒否` の2択とし、永続許可は設けない。
 
-![読み込み済みGemma 4とturn中statusを表示するAI Assistant](images/screenshot008.png)
+| model / turn status | Tool実行 lifecycle |
+|:---:|:---:|
+| ![読み込み済みGemma 4とturn中statusを表示するAI Assistant](images/screenshot008.png) | ![承認済みcolor management ToolとTool結果処理中statusを表示するAI Assistant](images/screenshot010.png) |
 
 ## IPC
 

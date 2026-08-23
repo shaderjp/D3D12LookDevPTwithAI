@@ -1126,6 +1126,39 @@ namespace
         return (std::filesystem::path(UserSettingsDirectory()) / L"startup.json").wstring();
     }
 
+    std::wstring DefaultSessionSettingsPath()
+    {
+        return (std::filesystem::path(UserSettingsDirectory()) / L"session.json").wstring();
+    }
+
+    std::wstring DefaultSessionSnapshotPath()
+    {
+        return (std::filesystem::path(UserSettingsDirectory()) /
+            L"last-session.lookdevpt.json").wstring();
+    }
+
+    bool ReplaceFileAtomically(
+        const std::filesystem::path& source,
+        const std::filesystem::path& destination) noexcept
+    {
+        return MoveFileExW(
+            source.c_str(),
+            destination.c_str(),
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != FALSE;
+    }
+
+    void QuarantineSessionFile(
+        const std::filesystem::path& source,
+        const std::filesystem::path& destination) noexcept
+    {
+        std::error_code ec;
+        if (!std::filesystem::exists(source, ec) || ec)
+        {
+            return;
+        }
+        ReplaceFileAtomically(source, destination);
+    }
+
     std::wstring ResolveStartupPath(const std::string& text, const std::filesystem::path& baseDirectory)
     {
         const std::wstring wide = Utf8ToWide(text);
@@ -1473,6 +1506,7 @@ void D3D12PathTracingBackend::OnInit()
     m_rtxdiBackendRuntime.RefreshStatus();
     m_rtxdiAvailable = m_rtxdiBackendRuntime.IsDiEvaluationReady();
     LoadStartupSettings();
+    LoadSessionSettings();
     if (m_benchmarkOptions.enabled)
     {
         m_benchmarkHarness = std::make_unique<lookdevpt::benchmark::Harness>(m_benchmarkOptions);
@@ -1879,7 +1913,15 @@ void D3D12PathTracingBackend::LoadAssets()
     InitializeMaterialLookDevState(true);
 
     CreateGpuResourcesForCurrentScene();
-    ApplyStartupSettings();
+    const bool sessionModeOwnsStartup =
+        m_sessionRestoreEnabled &&
+        !m_hasCommandLineProjectPath &&
+        !m_hasCommandLineScenePath;
+    if (sessionModeOwnsStartup)
+    {
+        TryRestorePreviousSession();
+    }
+    ApplyStartupSettings(sessionModeOwnsStartup);
 }
 
 void D3D12PathTracingBackend::CreateGpuResourcesForCurrentScene()
@@ -2862,7 +2904,9 @@ bool D3D12PathTracingBackend::ApplyMaterialPreset(int materialIndex, size_t pres
     return true;
 }
 
-bool D3D12PathTracingBackend::SaveProjectToDisk(const std::wstring& path)
+bool D3D12PathTracingBackend::SaveProjectToDisk(
+    const std::wstring& path,
+    bool adoptAsProject)
 {
     std::ofstream file(std::filesystem::path(path), std::ios::binary);
     if (!file)
@@ -2878,7 +2922,27 @@ bool D3D12PathTracingBackend::SaveProjectToDisk(const std::wstring& path)
     file << "  \"mode\": \"" << PathtracingModeName(m_mode) << "\",\n";
     file << "  \"quality\": " << rb::QualitySettingsToJson(m_qualitySettings) << ",\n";
     file << "  \"camera\": {\"position\": [" << camera.x << ", " << camera.y << ", " << camera.z << "], \"yaw\": " << m_camera.GetYawRadians() << ", \"pitch\": " << m_camera.GetPitchRadians() << ", \"roll\": " << m_camera.GetRollRadians() << ", \"fovDegrees\": " << m_cameraFovDegrees << "},\n";
-    file << "  \"lighting\": {\"direction\": [" << m_lightDirection[0] << ", " << m_lightDirection[1] << ", " << m_lightDirection[2] << "], \"intensity\": " << m_lightIntensity << "},\n";
+    file << "  \"lighting\": {\"direction\": [" << m_lightDirection[0] << ", " << m_lightDirection[1] << ", " << m_lightDirection[2] << "]"
+         << ", \"lightColor\": [" << m_lightColor[0] << ", " << m_lightColor[1] << ", " << m_lightColor[2] << "]"
+         << ", \"intensity\": " << m_lightIntensity
+         << ", \"rayTMin\": " << m_rayTMin
+         << ", \"skyEnabled\": " << (m_skyEnabled ? "true" : "false")
+         << ", \"skyIntensity\": " << m_skyIntensity
+         << ", \"skyColor\": [" << m_skyColor[0] << ", " << m_skyColor[1] << ", " << m_skyColor[2] << "]"
+         << ", \"skyHorizonColor\": [" << m_skyHorizonColor[0] << ", " << m_skyHorizonColor[1] << ", " << m_skyHorizonColor[2] << "]"
+         << ", \"skyZenithColor\": [" << m_skyZenithColor[0] << ", " << m_skyZenithColor[1] << ", " << m_skyZenithColor[2] << "]"
+         << ", \"skyGroundColor\": [" << m_skyGroundColor[0] << ", " << m_skyGroundColor[1] << ", " << m_skyGroundColor[2] << "]"
+         << ", \"skyGroundBlend\": " << m_skyGroundBlend
+         << ", \"sunIntensity\": " << m_sunIntensity
+         << ", \"sunAngularRadius\": " << m_sunAngularRadius
+         << ", \"sunNee\": " << (m_shadowEnabled ? "true" : "false")
+         << ", \"skyNee\": " << (m_skyNeeEnabled ? "true" : "false")
+         << ", \"emissiveEnabled\": " << (m_emissiveLightsEnabled ? "true" : "false")
+         << ", \"emissiveIntensity\": " << m_emissiveLightIntensity
+         << ", \"areaEnabled\": " << (m_proceduralLightsEnabled ? "true" : "false")
+         << ", \"areaIntensity\": " << m_proceduralLightIntensity
+         << ", \"environmentIntensity\": " << m_environmentIntensity
+         << ", \"environmentRotation\": " << m_environmentRotation << "},\n";
     file << "  \"materials\": [\n";
     for (size_t i = 0; i < m_scene.materials.size(); ++i)
     {
@@ -3002,9 +3066,17 @@ bool D3D12PathTracingBackend::SaveProjectToDisk(const std::wstring& path)
          << ", \"materialFocusMode\": \"" << MaterialFocusModeName(m_materialFocusMode) << "\""
          << ", \"selectedMaterial\": " << m_selectedMaterial << "}\n";
     file << "}\n";
-    m_projectPath = path;
-    m_projectDirty = false;
-    m_projectDiagnostics = "Project saved.";
+    file.flush();
+    if (!file)
+    {
+        return false;
+    }
+    if (adoptAsProject)
+    {
+        m_projectPath = path;
+        m_projectDirty = false;
+        m_projectDiagnostics = "Project saved.";
+    }
     return true;
 }
 
@@ -3073,6 +3145,8 @@ bool D3D12PathTracingBackend::LoadProjectFromDisk(const std::wstring& path, std:
         DenoiseBackend projectDenoiseBackend = m_denoiseBackend;
         bool explicitDenoiserEnabled = false;
         bool projectDenoiserEnabled = m_denoiserEnabled;
+        bool lightingResourcesChanged = false;
+        std::vector<std::string> resourceWarnings;
 
         const PathTracingMode loadedMode = PathtracingModeFromName(cld::JsonStringOr(root, "mode"), m_mode);
         const bool modeChanged = loadedMode != m_mode;
@@ -3199,6 +3273,14 @@ bool D3D12PathTracingBackend::LoadProjectFromDisk(const std::wstring& path, std:
                                 m_textureOverrideEnabled[materialIndex][slot] = true;
                             }
                         }
+                        else
+                        {
+                            resourceWarnings.push_back(
+                                "Texture override for material '" +
+                                WideToUtf8(material.name) + "' (" +
+                                TextureSlotKeys[slot] + ") was ignored: " +
+                                textureDiagnostics);
+                        }
                     }
                 }
                 if (const cld::JsonValue* bindings = cld::FindMember(overrideValue, "textureBindings"); bindings && bindings->type == cld::JsonValue::Type::Object)
@@ -3313,7 +3395,32 @@ bool D3D12PathTracingBackend::LoadProjectFromDisk(const std::wstring& path, std:
             m_lightDirection[0] = direction[0];
             m_lightDirection[1] = direction[1];
             m_lightDirection[2] = direction[2];
-            m_lightIntensity = static_cast<float>(cld::JsonNumberOr(*lighting, "intensity", m_lightIntensity));
+            const std::array<float, 3> lightColor = cld::JsonFloat3Or(*lighting, "lightColor", { m_lightColor[0], m_lightColor[1], m_lightColor[2] });
+            const std::array<float, 3> skyColor = cld::JsonFloat3Or(*lighting, "skyColor", { m_skyColor[0], m_skyColor[1], m_skyColor[2] });
+            const std::array<float, 3> skyHorizonColor = cld::JsonFloat3Or(*lighting, "skyHorizonColor", { m_skyHorizonColor[0], m_skyHorizonColor[1], m_skyHorizonColor[2] });
+            const std::array<float, 3> skyZenithColor = cld::JsonFloat3Or(*lighting, "skyZenithColor", { m_skyZenithColor[0], m_skyZenithColor[1], m_skyZenithColor[2] });
+            const std::array<float, 3> skyGroundColor = cld::JsonFloat3Or(*lighting, "skyGroundColor", { m_skyGroundColor[0], m_skyGroundColor[1], m_skyGroundColor[2] });
+            std::copy(lightColor.begin(), lightColor.end(), m_lightColor);
+            std::copy(skyColor.begin(), skyColor.end(), m_skyColor);
+            std::copy(skyHorizonColor.begin(), skyHorizonColor.end(), m_skyHorizonColor);
+            std::copy(skyZenithColor.begin(), skyZenithColor.end(), m_skyZenithColor);
+            std::copy(skyGroundColor.begin(), skyGroundColor.end(), m_skyGroundColor);
+            m_lightIntensity = std::clamp(static_cast<float>(cld::JsonNumberOr(*lighting, "intensity", m_lightIntensity)), 0.0f, 20.0f);
+            m_rayTMin = std::clamp(static_cast<float>(cld::JsonNumberOr(*lighting, "rayTMin", m_rayTMin)), 0.001f, 0.25f);
+            m_skyEnabled = cld::JsonBoolOr(*lighting, "skyEnabled", m_skyEnabled);
+            m_skyIntensity = std::clamp(static_cast<float>(cld::JsonNumberOr(*lighting, "skyIntensity", m_skyIntensity)), 0.0f, 10.0f);
+            m_skyGroundBlend = std::clamp(static_cast<float>(cld::JsonNumberOr(*lighting, "skyGroundBlend", m_skyGroundBlend)), 0.0f, 1.0f);
+            m_sunIntensity = std::clamp(static_cast<float>(cld::JsonNumberOr(*lighting, "sunIntensity", m_sunIntensity)), 0.0f, 50.0f);
+            m_sunAngularRadius = std::clamp(static_cast<float>(cld::JsonNumberOr(*lighting, "sunAngularRadius", m_sunAngularRadius)), 0.001f, 0.08f);
+            m_shadowEnabled = cld::JsonBoolOr(*lighting, "sunNee", m_shadowEnabled);
+            m_skyNeeEnabled = cld::JsonBoolOr(*lighting, "skyNee", m_skyNeeEnabled);
+            m_emissiveLightsEnabled = cld::JsonBoolOr(*lighting, "emissiveEnabled", m_emissiveLightsEnabled);
+            m_emissiveLightIntensity = std::clamp(static_cast<float>(cld::JsonNumberOr(*lighting, "emissiveIntensity", m_emissiveLightIntensity)), 0.0f, 30.0f);
+            m_proceduralLightsEnabled = cld::JsonBoolOr(*lighting, "areaEnabled", m_proceduralLightsEnabled);
+            m_proceduralLightIntensity = std::clamp(static_cast<float>(cld::JsonNumberOr(*lighting, "areaIntensity", m_proceduralLightIntensity)), 0.0f, 50.0f);
+            m_environmentIntensity = std::clamp(static_cast<float>(cld::JsonNumberOr(*lighting, "environmentIntensity", m_environmentIntensity)), 0.0f, 10.0f);
+            m_environmentRotation = std::clamp(static_cast<float>(cld::JsonNumberOr(*lighting, "environmentRotation", m_environmentRotation)), -XM_PI, XM_PI);
+            lightingResourcesChanged = true;
         }
         if (const cld::JsonValue* pathTracing = cld::FindMember(root, "pathTracing"))
         {
@@ -3488,15 +3595,23 @@ bool D3D12PathTracingBackend::LoadProjectFromDisk(const std::wstring& path, std:
         {
             CreateGpuResourcesForCurrentScene();
         }
-        else if (materialOverridesChanged)
+        else if (materialOverridesChanged || lightingResourcesChanged)
         {
-            InvalidateHistory(rb::FrameChangeMask::Material);
-            RefreshEditableGpuResources(true, true);
+            InvalidateHistory(
+                materialOverridesChanged
+                    ? rb::FrameChangeMask::Material
+                    : rb::FrameChangeMask::Light);
+            RefreshEditableGpuResources(materialOverridesChanged, true);
         }
         m_projectPath = path;
         m_projectDirty = false;
         ResetRenderingHistory();
         diagnostics = "Project loaded.";
+        for (const std::string& warning : resourceWarnings)
+        {
+            diagnostics += " " + warning;
+            LogDiagnostic(warning);
+        }
         if (!denoiseCompatibilityWarning.empty())
         {
             diagnostics += " " + denoiseCompatibilityWarning;
@@ -3591,10 +3706,11 @@ void D3D12PathTracingBackend::LoadStartupSettings()
     }
 }
 
-void D3D12PathTracingBackend::ApplyStartupSettings()
+void D3D12PathTracingBackend::ApplyStartupSettings(
+    bool skipProjectAndScene)
 {
     bool startupProjectLoaded = false;
-    if (!m_startupProjectPath.empty())
+    if (!skipProjectAndScene && !m_startupProjectPath.empty())
     {
         std::string diagnostics;
         LogDiagnostic(L"Startup project load: " + m_startupProjectPath);
@@ -3612,7 +3728,7 @@ void D3D12PathTracingBackend::ApplyStartupSettings()
         }
     }
 
-    if (!startupProjectLoaded && !m_startupScenePath.empty())
+    if (!skipProjectAndScene && !startupProjectLoaded && !m_startupScenePath.empty())
     {
         std::string diagnostics;
         LogDiagnostic(L"Startup scene load: " + m_startupScenePath);
@@ -3629,7 +3745,8 @@ void D3D12PathTracingBackend::ApplyStartupSettings()
         }
     }
 
-    if (!m_startupEnvironmentPath.empty())
+    if (!m_startupEnvironmentPath.empty() &&
+        (!skipProjectAndScene || m_hasCommandLineEnvironmentPath))
     {
         std::string diagnostics;
         LogDiagnostic(L"Startup environment load: " + m_startupEnvironmentPath);
@@ -3724,6 +3841,490 @@ bool D3D12PathTracingBackend::DeleteStartupSettings()
     m_startupDiagnostics = "Startup settings cleared.";
     m_projectDiagnostics = m_startupDiagnostics;
     return true;
+}
+
+void D3D12PathTracingBackend::LoadSessionSettings()
+{
+    m_sessionSettingsPath = DefaultSessionSettingsPath();
+    m_sessionSnapshotPath = DefaultSessionSnapshotPath();
+
+    std::ifstream file(
+        std::filesystem::path(m_sessionSettingsPath),
+        std::ios::binary);
+    if (!file)
+    {
+        m_sessionRestoreEnabled = false;
+        m_sessionDiagnostics = "Previous-session restore is off.";
+        return;
+    }
+
+    std::stringstream buffer;
+    buffer << file.rdbuf();
+    try
+    {
+        const cld::JsonValue root = cld::JsonParser(buffer.str()).Parse();
+        if (root.type != cld::JsonValue::Type::Object)
+        {
+            throw std::runtime_error("Session settings root must be an object.");
+        }
+        const double version = cld::JsonNumberOr(root, "version", 1.0);
+        if (!std::isfinite(version) || version != 1.0)
+        {
+            throw std::runtime_error("Session settings version is unsupported.");
+        }
+
+        m_sessionRestoreEnabled =
+            cld::JsonBoolOr(root, "restoreOnStartup", false);
+        m_sessionProjectPath = Utf8ToWide(
+            cld::JsonStringOr(root, "projectPath"));
+        m_sessionProjectDirty =
+            cld::JsonBoolOr(root, "projectDirty", false);
+        m_sessionDiagnostics = m_sessionRestoreEnabled
+            ? "Previous-session restore is on."
+            : "Previous-session restore is off.";
+    }
+    catch (const std::exception& ex)
+    {
+        // A malformed preference file must never make startup fatal.  Keep
+        // the mode off until the user enables it again from the Project menu.
+        m_sessionRestoreEnabled = false;
+        m_sessionProjectPath.clear();
+        m_sessionProjectDirty = false;
+        m_sessionDiagnostics =
+            std::string("Session settings ignored: ") + ex.what();
+        LogDiagnostic(m_sessionDiagnostics);
+    }
+}
+
+bool D3D12PathTracingBackend::SaveSessionSettingsToDisk()
+{
+    if (m_sessionSettingsPath.empty())
+    {
+        m_sessionSettingsPath = DefaultSessionSettingsPath();
+    }
+
+    const std::filesystem::path settingsPath(m_sessionSettingsPath);
+    const std::filesystem::path temporaryPath(
+        settingsPath.wstring() + L".tmp");
+    std::error_code ec;
+    std::filesystem::create_directories(settingsPath.parent_path(), ec);
+    if (ec)
+    {
+        m_sessionDiagnostics =
+            "Could not create the session settings directory.";
+        return false;
+    }
+
+    std::ofstream file(temporaryPath, std::ios::binary | std::ios::trunc);
+    if (!file)
+    {
+        m_sessionDiagnostics = "Could not write session settings.";
+        return false;
+    }
+    file << "{\n";
+    file << "  \"version\": 1,\n";
+    file << "  \"restoreOnStartup\": "
+         << (m_sessionRestoreEnabled ? "true" : "false") << ",\n";
+    file << "  \"projectPath\": \""
+         << cld::EscapeJson(WideToUtf8(m_sessionProjectPath)) << "\",\n";
+    file << "  \"projectDirty\": "
+         << (m_sessionProjectDirty ? "true" : "false") << "\n";
+    file << "}\n";
+    file.flush();
+    if (!file)
+    {
+        file.close();
+        std::filesystem::remove(temporaryPath, ec);
+        m_sessionDiagnostics = "Could not finish writing session settings.";
+        return false;
+    }
+    file.close();
+
+    if (!ReplaceFileAtomically(temporaryPath, settingsPath))
+    {
+        std::filesystem::remove(temporaryPath, ec);
+        m_sessionDiagnostics = "Could not replace session settings.";
+        return false;
+    }
+    return true;
+}
+
+void D3D12PathTracingBackend::ClearSessionSnapshotFiles()
+{
+    if (m_sessionSnapshotPath.empty())
+    {
+        m_sessionSnapshotPath = DefaultSessionSnapshotPath();
+    }
+    const std::filesystem::path snapshotPath(m_sessionSnapshotPath);
+    std::error_code ec;
+    for (const wchar_t* suffix :
+         { L"", L".tmp", L".restore-pending", L".rollback" })
+    {
+        std::filesystem::remove(
+            std::filesystem::path(snapshotPath.wstring() + suffix),
+            ec);
+        ec.clear();
+    }
+}
+
+bool D3D12PathTracingBackend::SaveSessionSnapshotToDisk()
+{
+    if (m_sessionSnapshotPath.empty())
+    {
+        m_sessionSnapshotPath = DefaultSessionSnapshotPath();
+    }
+
+    const std::filesystem::path snapshotPath(m_sessionSnapshotPath);
+    const std::filesystem::path temporaryPath(
+        snapshotPath.wstring() + L".tmp");
+    const std::filesystem::path failedPath(
+        snapshotPath.wstring() + L".failed");
+    std::error_code ec;
+    std::filesystem::create_directories(snapshotPath.parent_path(), ec);
+    if (ec)
+    {
+        m_sessionDiagnostics =
+            "Previous session was not saved: the settings directory is unavailable.";
+        return false;
+    }
+    std::filesystem::remove(temporaryPath, ec);
+    ec.clear();
+
+    if (!SaveProjectToDisk(temporaryPath.wstring(), false) ||
+        !ReplaceFileAtomically(temporaryPath, snapshotPath))
+    {
+        std::filesystem::remove(temporaryPath, ec);
+        // Never silently restore an older snapshot after a newer clean exit
+        // failed to save.  Keep it as a diagnostic artifact instead.
+        QuarantineSessionFile(snapshotPath, failedPath);
+        m_sessionDiagnostics =
+            "Previous session was not saved; the stale snapshot was isolated.";
+        LogDiagnostic(m_sessionDiagnostics);
+        return false;
+    }
+
+    m_sessionProjectPath = m_projectPath;
+    m_sessionProjectDirty = m_projectDirty;
+    if (!SaveSessionSettingsToDisk())
+    {
+        LogDiagnostic(m_sessionDiagnostics);
+        return false;
+    }
+    m_sessionDiagnostics = "Previous session snapshot saved.";
+    LogDiagnostic(m_sessionDiagnostics);
+    return true;
+}
+
+bool D3D12PathTracingBackend::SetSessionRestoreEnabled(bool enabled)
+{
+    m_sessionRestoreEnabled = enabled;
+    if (!enabled)
+    {
+        ClearSessionSnapshotFiles();
+        m_sessionProjectPath.clear();
+        m_sessionProjectDirty = false;
+        if (!SaveSessionSettingsToDisk())
+        {
+            m_projectDiagnostics = m_sessionDiagnostics;
+            return false;
+        }
+        m_sessionDiagnostics =
+            "Previous-session restore is off; saved session data was cleared.";
+        m_projectDiagnostics = m_sessionDiagnostics;
+        return true;
+    }
+
+    const bool saved = SaveSessionSnapshotToDisk();
+    if (!saved)
+    {
+        // Persist the selected mode even when the initial snapshot cannot be
+        // created.  Startup will safely use the preview scene until a later
+        // clean exit succeeds.
+        SaveSessionSettingsToDisk();
+        m_projectDiagnostics = m_sessionDiagnostics;
+        return false;
+    }
+    m_sessionDiagnostics =
+        "Previous-session restore is on; the snapshot will update on exit.";
+    m_projectDiagnostics = m_sessionDiagnostics;
+    return true;
+}
+
+bool D3D12PathTracingBackend::ResetToPreviewScene(
+    std::string& diagnostics)
+{
+    if (m_sceneLoadFuture.valid() || m_sceneLoadCpuResult)
+    {
+        diagnostics =
+            "Wait for the current scene load to finish or cancel it before creating a new scene.";
+        return false;
+    }
+
+    try
+    {
+        WaitForPreviousFrame();
+        m_scene = MakePreviewScene();
+        m_scenePath.clear();
+        m_environmentTexturePath.clear();
+        m_environmentMapEnabled = false;
+        m_environmentEqualAreaMapping = false;
+        m_environmentIntensity = 1.0f;
+        m_environmentRotation = 0.0f;
+        m_environmentTint = XMFLOAT3(1.0f, 1.0f, 1.0f);
+        m_lightDirection[0] = -0.35f;
+        m_lightDirection[1] = -0.8f;
+        m_lightDirection[2] = 0.45f;
+        m_lightColor[0] = 1.0f;
+        m_lightColor[1] = 0.96f;
+        m_lightColor[2] = 0.88f;
+        m_lightIntensity = 4.0f;
+        m_rayTMin = 0.03f;
+        m_skyEnabled = true;
+        m_skyNeeEnabled = true;
+        m_skyIntensity = 1.0f;
+        m_skyColor[0] = 0.015f;
+        m_skyColor[1] = 0.08f;
+        m_skyColor[2] = 0.16f;
+        m_skyHorizonColor[0] = 0.42f;
+        m_skyHorizonColor[1] = 0.63f;
+        m_skyHorizonColor[2] = 0.86f;
+        m_skyZenithColor[0] = 0.05f;
+        m_skyZenithColor[1] = 0.20f;
+        m_skyZenithColor[2] = 0.52f;
+        m_skyGroundColor[0] = 0.025f;
+        m_skyGroundColor[1] = 0.035f;
+        m_skyGroundColor[2] = 0.045f;
+        m_skyGroundBlend = 0.35f;
+        m_sunIntensity = 8.0f;
+        m_sunAngularRadius = 0.012f;
+        m_shadowEnabled = true;
+        m_emissiveLightsEnabled = true;
+        m_emissiveLightIntensity = 4.0f;
+        m_proceduralLightsEnabled = true;
+        m_proceduralLightIntensity = 12.0f;
+        XMStoreFloat4x4(
+            &m_environmentLightToWorld,
+            XMMatrixIdentity());
+        XMStoreFloat4x4(
+            &m_environmentWorldToLight,
+            XMMatrixIdentity());
+        m_defaultCameraPosition = XMFLOAT3(0.0f, 0.4f, -5.0f);
+        m_defaultCameraYaw = 0.0f;
+        m_defaultCameraPitch = XMConvertToRadians(4.0f);
+        m_defaultCameraRoll = 0.0f;
+        m_defaultCameraFovDegrees = 60.0f;
+        m_cameraFovDegrees = 60.0f;
+        m_selectedMaterial = 0;
+        ResetCameraView();
+        InitializeMaterialLookDevState(true);
+        m_mcpSceneAuditSummary = lookdevpt::review::AnalyzeScene(m_scene);
+        m_mcpSceneAuditFresh = true;
+        InvalidateHistory(rb::FrameChangeMask::Geometry);
+        CreateGpuResourcesForCurrentScene();
+        m_sceneLoadStage.store(
+            SceneLoadStage::Idle,
+            std::memory_order_relaxed);
+        m_sceneLoadCompleted.store(0, std::memory_order_relaxed);
+        m_sceneLoadTotal.store(0, std::memory_order_relaxed);
+        {
+            std::scoped_lock lock(m_sceneLoadProgressMutex);
+            m_sceneLoadCurrentAsset.clear();
+        }
+        m_projectPath.clear();
+        m_projectDirty = false;
+        m_sceneDiagnostics = "Using a new built-in preview scene.";
+        diagnostics = "New scene created.";
+        return true;
+    }
+    catch (const std::exception& ex)
+    {
+        diagnostics = std::string("New scene creation failed: ") + ex.what();
+        return false;
+    }
+}
+
+bool D3D12PathTracingBackend::CreateNewScene()
+{
+    if (m_sceneLoadFuture.valid() || m_sceneLoadCpuResult)
+    {
+        m_projectDiagnostics =
+            "Wait for the current scene load to finish or cancel it before creating a new scene.";
+        return false;
+    }
+
+    m_pendingProjectPath.clear();
+    m_pendingScenePath.clear();
+    m_pendingEnvironmentPath.clear();
+    m_queuedSceneLoadPath.clear();
+
+    if (m_sessionSnapshotPath.empty())
+    {
+        m_sessionSnapshotPath = DefaultSessionSnapshotPath();
+    }
+    const std::filesystem::path rollbackPath(
+        m_sessionSnapshotPath + L".rollback");
+    const std::wstring previousProjectPath = m_projectPath;
+    const bool previousProjectDirty = m_projectDirty;
+
+    std::error_code ec;
+    std::filesystem::create_directories(
+        rollbackPath.parent_path(), ec);
+    if (ec || !SaveProjectToDisk(rollbackPath.wstring(), false))
+    {
+        m_projectDiagnostics =
+            "New scene was not created because a rollback snapshot could not be saved.";
+        return false;
+    }
+
+    std::string diagnostics;
+    if (!ResetToPreviewScene(diagnostics))
+    {
+        std::string restoreDiagnostics;
+        const bool restored =
+            LoadProjectFromDisk(rollbackPath.wstring(), restoreDiagnostics);
+        m_projectPath = previousProjectPath;
+        m_projectDirty = previousProjectDirty;
+        m_projectDiagnostics = restored
+            ? diagnostics + " The previous scene was restored."
+            : diagnostics + " Rollback also failed: " + restoreDiagnostics;
+        std::filesystem::remove(rollbackPath, ec);
+        return false;
+    }
+
+    std::filesystem::remove(rollbackPath, ec);
+    if (m_sessionRestoreEnabled)
+    {
+        SaveSessionSnapshotToDisk();
+    }
+    else
+    {
+        ClearSessionSnapshotFiles();
+    }
+    m_projectDiagnostics = diagnostics;
+    return true;
+}
+
+bool D3D12PathTracingBackend::TryRestorePreviousSession()
+{
+    if (!m_sessionRestoreEnabled ||
+        m_hasCommandLineProjectPath ||
+        m_hasCommandLineScenePath)
+    {
+        return false;
+    }
+    if (m_sessionSnapshotPath.empty())
+    {
+        m_sessionSnapshotPath = DefaultSessionSnapshotPath();
+    }
+
+    const std::filesystem::path snapshotPath(m_sessionSnapshotPath);
+    const std::filesystem::path pendingPath(
+        snapshotPath.wstring() + L".restore-pending");
+    const std::filesystem::path failedPath(
+        snapshotPath.wstring() + L".failed");
+    const std::filesystem::path rollbackPath(
+        snapshotPath.wstring() + L".rollback");
+    std::error_code ec;
+
+    // A leftover pending file means the previous process stopped during
+    // restore.  Isolate it before considering any newer complete snapshot.
+    if (std::filesystem::exists(pendingPath, ec) && !ec)
+    {
+        QuarantineSessionFile(pendingPath, failedPath);
+        m_sessionDiagnostics =
+            "An interrupted session restore was isolated; startup continued safely.";
+    }
+    ec.clear();
+    if (!std::filesystem::exists(snapshotPath, ec) || ec)
+    {
+        if (m_sessionDiagnostics.find("interrupted") == std::string::npos)
+        {
+            m_sessionDiagnostics =
+                "Previous-session restore is on, but no saved session is available.";
+        }
+        LogDiagnostic(m_sessionDiagnostics);
+        return false;
+    }
+
+    std::filesystem::create_directories(snapshotPath.parent_path(), ec);
+    if (ec || !SaveProjectToDisk(rollbackPath.wstring(), false))
+    {
+        m_sessionDiagnostics =
+            "Session restore was skipped because a safe rollback snapshot could not be created.";
+        LogDiagnostic(m_sessionDiagnostics);
+        return false;
+    }
+    if (!ReplaceFileAtomically(snapshotPath, pendingPath))
+    {
+        std::filesystem::remove(rollbackPath, ec);
+        m_sessionDiagnostics =
+            "Session restore was skipped because the snapshot could not be prepared.";
+        LogDiagnostic(m_sessionDiagnostics);
+        return false;
+    }
+
+    const std::wstring previewProjectPath = m_projectPath;
+    const bool previewProjectDirty = m_projectDirty;
+    std::string diagnostics;
+    if (LoadProjectFromDisk(pendingPath.wstring(), diagnostics))
+    {
+        m_projectPath = m_sessionProjectPath;
+        m_projectDirty = m_sessionProjectDirty;
+        ReplaceFileAtomically(pendingPath, snapshotPath);
+        std::filesystem::remove(rollbackPath, ec);
+        m_sessionDiagnostics = diagnostics == "Project loaded."
+            ? "Previous session restored."
+            : "Previous session restored with diagnostics: " + diagnostics;
+        m_projectDiagnostics = m_sessionDiagnostics;
+        LogDiagnostic(m_sessionDiagnostics);
+        return true;
+    }
+
+    std::string previewDiagnostics;
+    const bool previewReset = ResetToPreviewScene(previewDiagnostics);
+    std::string rollbackDiagnostics;
+    const bool rollbackSucceeded = previewReset &&
+        LoadProjectFromDisk(rollbackPath.wstring(), rollbackDiagnostics);
+    m_projectPath = previewProjectPath;
+    m_projectDirty = previewProjectDirty;
+    QuarantineSessionFile(pendingPath, failedPath);
+    std::filesystem::remove(rollbackPath, ec);
+    m_sessionDiagnostics =
+        "Previous session could not be restored and was isolated: " +
+        diagnostics;
+    if (!rollbackSucceeded)
+    {
+        m_sessionDiagnostics +=
+            " Preview-scene rollback also reported: " +
+            (previewReset ? rollbackDiagnostics : previewDiagnostics);
+    }
+    m_projectDiagnostics = m_sessionDiagnostics;
+    LogDiagnostic(m_sessionDiagnostics);
+    return false;
+}
+
+void D3D12PathTracingBackend::SaveSessionOnExit() noexcept
+{
+    if (!m_sessionRestoreEnabled || m_benchmarkOptions.enabled)
+    {
+        return;
+    }
+    try
+    {
+        SaveSessionSnapshotToDisk();
+    }
+    catch (const std::exception& ex)
+    {
+        m_sessionDiagnostics =
+            std::string("Previous session was not saved: ") + ex.what();
+        LogDiagnostic(m_sessionDiagnostics);
+    }
+    catch (...)
+    {
+        m_sessionDiagnostics =
+            "Previous session was not saved because of an unknown error.";
+        LogDiagnostic(m_sessionDiagnostics);
+    }
 }
 
 bool D3D12PathTracingBackend::ApplyAction(const std::string& method, const cld::JsonValue& params, std::string& diagnostics, bool validateOnly)

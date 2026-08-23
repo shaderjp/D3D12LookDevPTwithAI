@@ -80,6 +80,23 @@ Example startup file:
 
 Use `--startup-config <path>` to select another startup file. The checked-in files under `projects/` contain relative Bistro paths and renderer settings but not the assets themselves.
 
+For automatic continuation instead of a fixed startup target, enable
+`Project > Restore Previous Session`. The app writes
+`%APPDATA%\D3D12LookDevPTwithAI\session.json` and an atomic
+`last-session.lookdevpt.json` snapshot on shutdown. The mode is off by default.
+`Project > New Scene` clears the current asset state and replaces the restore
+snapshot with the safe built-in preview scene. If a referenced resource is
+missing or unreadable, startup remains non-fatal: a snapshot whose required
+scene or environment cannot load is isolated and startup continues with the
+preview scene, while an optional texture override falls back to its imported
+material with a diagnostic. Explicit `--project` / `--scene` arguments bypass
+automatic restore for that launch; `--environment` can still override the
+restored environment.
+
+| Previous-session restore | Safe new-scene reset |
+| --- | --- |
+| ![Project menu with Restore Previous Session](images/session-restore-menu.png) | ![New Scene confirmation protecting unsaved changes](images/new-scene-confirmation.png) |
+
 ## Supported Inputs And Scene Scope
 
 The intended static-mesh scene inputs are:

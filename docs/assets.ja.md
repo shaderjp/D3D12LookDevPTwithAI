@@ -79,6 +79,20 @@ startup file 例:
 
 別の startup file は `--startup-config <path>` で選択します。`projects/` の checked-in file は相対 Bistro path と renderer setting を含みますが、asset 自体は含みません。
 
+固定の起動対象ではなく前回の作業を自動継続する場合は、
+`Project > Restore Previous Session` を有効にします。初期値は無効です。終了時に
+`%APPDATA%\D3D12LookDevPTwithAI\session.json` と atomic replace される
+`last-session.lookdevpt.json` snapshot を保存します。`Project > New Scene` は現在の
+asset state を解除し、復元 snapshot も安全な built-in preview scene へ置き換えます。
+参照 resource が削除済み・読込不能でも起動失敗にはしません。必須 scene / environment
+を読めない snapshot は隔離して preview scene のまま起動し、任意 texture override は
+import 元 material へ fallback して診断を残します。その起動で明示した `--project` /
+`--scene` は自動復元を迂回し、`--environment` は復元後の environment を上書きできます。
+
+| 前回セッションの復元 | 安全な新規シーン作成 |
+| --- | --- |
+| ![Restore Previous Session を表示した Project メニュー](images/session-restore-menu.png) | ![未保存変更を保護する New Scene 確認ダイアログ](images/new-scene-confirmation.png) |
+
 ## 対応 input と scene scope
 
 対象とする static-mesh scene input:

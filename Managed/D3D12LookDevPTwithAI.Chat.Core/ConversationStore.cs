@@ -29,6 +29,18 @@ public interface IConversationStore
         string title,
         CancellationToken cancellationToken = default);
 
+    Task<ConversationSummary> UpdateTitleAsync(
+        string projectContextKey,
+        Guid conversationId,
+        string title,
+        CancellationToken cancellationToken = default);
+
+    Task<ConversationSummary> ResetAsync(
+        string projectContextKey,
+        Guid conversationId,
+        string title,
+        CancellationToken cancellationToken = default);
+
     Task<IReadOnlyList<ConversationMessage>> GetMessagesAsync(
         string projectContextKey,
         Guid conversationId,

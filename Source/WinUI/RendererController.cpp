@@ -109,6 +109,11 @@ void RendererController::SetViewportFocused(bool focused)
     });
 }
 
+void RendererController::SetAssistantInferenceActive(bool active) noexcept
+{
+    m_assistantInferenceActive.store(active, std::memory_order_release);
+}
+
 EditorSnapshotPtr RendererController::LatestSnapshot() const noexcept
 {
     return m_snapshot.Latest();
@@ -207,8 +212,11 @@ void RendererController::RenderMain(std::stop_token stopToken) noexcept
         while (!stopToken.stop_requested() &&
                !renderer.IsBenchmarkFinished())
         {
+            const bool assistantInferenceActive =
+                m_assistantInferenceActive.load(std::memory_order_acquire);
             renderer.SetViewportFocused(
                 m_viewportFocused.load(std::memory_order_acquire));
+            renderer.SetAssistantInferenceActive(assistantInferenceActive);
             DrainCommands(renderer);
             renderer.OnUpdate();
             renderer.OnRender();
@@ -217,6 +225,12 @@ void RendererController::RenderMain(std::stop_token stopToken) noexcept
             {
                 Publish(renderer);
                 nextSnapshot = now + std::chrono::milliseconds(100);
+            }
+            if (assistantInferenceActive)
+            {
+                // Keep MCP commands and cached snapshots responsive without
+                // busy-spinning while expensive GPU frame submission is paused.
+                std::this_thread::sleep_for(std::chrono::milliseconds(16));
             }
         }
 

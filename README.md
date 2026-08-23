@@ -28,6 +28,18 @@ tool execution, and approval waits. The only window the user launches or
 operates is `D3D12LookDevPTwithAI.exe`; ChatHost and llama.cpp are owned hidden
 child processes.
 
+Final AI Assistant responses render as Markdown in a WinUI `RichTextBlock`.
+The bounded subset covers headings, emphasis, unordered and ordered lists,
+quotes, code, horizontal rules, and safe `http`, `https`, and `mailto` links;
+user messages and errors remain plain text.
+
+Conversation history is grouped by project context. The first user message
+provides a concise title without an extra inference request, and older
+`New chat` records are backfilled when they are loaded. The conversation
+selector can create a chat, reset only the selected chat after confirmation,
+or export its complete message history through the Windows save picker as a
+Markdown file.
+
 The product-default inference path now talks to a hidden `llama-server.exe`
 child over an authenticated loopback connection. A missing local
 `inference.json` is the normal first-run state: the Assistant reports
@@ -35,8 +47,10 @@ child over an authenticated loopback connection. A missing local
 runtime is reserved for the Debug end-to-end bridge test and is not a product
 fallback. The ChatHost history API uses SQLite sequence cursors and UTF-8
 byte-bounded pages so long histories cannot exceed the 4 MiB IPC frame limit.
-The native UI currently displays the latest page; browsing older pages is a
-subsequent UI milestone.
+The conversation selector can switch among stored chats, while the transcript
+currently displays the latest bounded page of the selected chat. Paging farther
+back inside one very long transcript remains a subsequent UI milestone;
+Markdown export reads the complete stored history rather than only that page.
 
 The private same-instance MCP transport and native one-time approval boundary
 are implemented. ChatHost accepts only the parent-owned
@@ -118,6 +132,8 @@ artifact provenance.
 
 ![PBRT BMW M6 in the integrated editor while Gemma 4 reports its loaded model and thinking state](docs/images/screenshot008.png)
 
+![The Markdown-capable AI Assistant presenting a Bistro Exterior scene review with headings, bold text, and bullet lists](docs/images/renderingmarkdown.png)
+
 | AI-approved LookDev mutation | In-app local model setup |
 |:---:|:---:|
 | ![A Gemma tool call waiting for one-time approval before changing exposure](docs/images/screenshot009.png) | ![Integrated AI Assistant with the Gemma 4 and llama.cpp setup flyout](docs/images/installllm.png) |
@@ -125,6 +141,14 @@ artifact provenance.
 | AI tool execution and live progress | Denoise backend controls |
 |:---:|:---:|
 | ![Gemma executing a color-management tool on a PBRT crown scene and reporting tool-result processing](docs/images/screenshot010.png) | ![Denoise Inspector showing the ready NRD REBLUR backend and temporal controls](docs/images/nvidiareblur.png) |
+
+| Scene-state analysis | Denoise recommendation |
+|:---:|:---:|
+| ![The integrated Assistant explaining the current PBRT BMW M6 renderer state from MCP data](docs/images/sceneanalyze.png) | ![The integrated Assistant reviewing the active NRD RELAX configuration and suggesting quality and performance adjustments](docs/images/mcpdenoise.png) |
+
+| Scene audit | Current-camera capture request |
+|:---:|:---:|
+| ![A Bistro Interior scene audit rendered as Markdown beside the viewport](docs/images/audit_scene.png) | ![A Bistro Interior conversation requesting a capture of the current camera view](docs/images/camera_capture.png) |
 
 | Material editing | Lighting editing |
 |:---:|:---:|
@@ -452,6 +476,11 @@ Assistant data is kept separately under the current user's local profile:
 %LOCALAPPDATA%\D3D12LookDevPTwithAI\AI\inference.json
 ```
 
+`chat-history.sqlite3` stores project-keyed conversation titles and visible
+user/final-assistant messages. Resetting a chat deletes only that conversation's
+messages in one transaction. Markdown export is written only to the path chosen
+in the save picker and does not copy MCP credentials or hidden Tool state.
+
 Project paths may be absolute or relative to `baseDirectory`. Bundle-internal
 v3 paths are resolved beneath `assetRoot`, and escaping absolute or `..` paths
 are rejected. `Scripts\LookDevBundle.ps1` creates and safely imports the
@@ -543,7 +572,8 @@ deterministic inference hook and omits the private MCP factory; ordinary app
 and ChatHost launches require the parent-owned MCP capability and use the
 configured llama.cpp path. The renderer command-queue tests cover command
 coalescing, FIFO barriers, indexed targets, and atomic immutable snapshot
-publication.
+publication. See the [Scripts guide](docs/scripts.md) for the complete script
+catalog, prerequisites, parameters, outputs, and the archived two-app tools.
 
 ## Third-party revisions
 
@@ -576,6 +606,7 @@ DXGI concern and does not add a UI shader pass.
 ## More documentation
 
 - [Asset setup](docs/assets.md)
+- [Scripts guide](docs/scripts.md)
 - [Rendering pipeline](docs/rendering-pipeline.md)
 - [MCP integration](docs/mcp.md)
 - [Integrated AI architecture](docs/integrated-ai-architecture.ja.md)

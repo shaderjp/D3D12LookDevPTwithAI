@@ -205,6 +205,9 @@
     <ClCompile Include="Source\WinUI\App.xaml.cpp">
       <Filter>Source Files\WinUI</Filter>
     </ClCompile>
+    <ClCompile Include="Source\WinUI\AssistantMarkdownRenderer.cpp">
+      <Filter>Source Files\WinUI</Filter>
+    </ClCompile>
     <ClCompile Include="Source\WinUI\MainWindow.xaml.cpp">
       <Filter>Source Files\WinUI</Filter>
     </ClCompile>
@@ -319,6 +322,9 @@
       <Filter>Header Files\WinUI</Filter>
     </ClInclude>
     <ClInclude Include="Source\WinUI\App.xaml.h">
+      <Filter>Header Files\WinUI</Filter>
+    </ClInclude>
+    <ClInclude Include="Source\WinUI\AssistantMarkdownRenderer.h">
       <Filter>Header Files\WinUI</Filter>
     </ClInclude>
     <ClInclude Include="Source\WinUI\MainWindow.xaml.h">

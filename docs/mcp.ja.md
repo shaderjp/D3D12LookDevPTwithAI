@@ -18,6 +18,15 @@ client 側では先に validation を通し、mutation tool を適用し、そ�
 
 ![MCP Server panelとrecent local requestを表示する統合application](images/screenshot004.png)
 
+統合Assistantも同じlive Tool contractを使用します。次の例は、read-onlyのscene auditを
+Markdown表示する経路と、現在camera viewをcaptureする会話requestの形です。どちらも
+2つ目のclient applicationを必要としません。captureの実行確認にはTool lifecycle cardと
+返却されたresource linkを使用し、assistantの完了文だけを実行済みの根拠にはしません。
+
+| MCP dataによるScene監査 | 現在cameraのcapture依頼 |
+|:---:|:---:|
+| ![統合Assistantでlookdevpt.audit_sceneを実行したBistro Interior監査](images/audit_scene.png) | ![Bistro Interiorの現在cameraに対するcapture_viewportを依頼した統合Assistant](images/camera_capture.png) |
+
 ## 利用条件とセキュリティ
 
 - Endpoint: `http://127.0.0.1:<port>/mcp`

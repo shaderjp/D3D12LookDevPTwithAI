@@ -32,6 +32,7 @@ public:
     void StopAndJoin() noexcept;
     void Enqueue(EditorCommand command);
     void SetViewportFocused(bool focused);
+    void SetAssistantInferenceActive(bool active) noexcept;
 
     [[nodiscard]] EditorSnapshotPtr LatestSnapshot() const noexcept;
     [[nodiscard]] bool AttachViewport(
@@ -55,6 +56,7 @@ private:
     std::jthread m_renderThread;
     std::atomic_bool m_started = false;
     std::atomic_bool m_viewportFocused = false;
+    std::atomic_bool m_assistantInferenceActive = false;
     bool m_renderLoopStopped = false;
     bool m_viewportDetached = true;
     bool m_threadFinished = false;

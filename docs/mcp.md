@@ -19,6 +19,16 @@ The client should validate settings first, apply mutation tools, then read state
 
 ![The integrated application showing the MCP Server panel and recent local requests](images/screenshot004.png)
 
+The integrated Assistant uses the same live tool contract. These examples show
+a read-only scene audit rendered as Markdown and the conversational request
+shape for a current-camera capture; neither requires a second client
+application. For a capture, the Tool lifecycle card and returned resource link
+confirm execution—assistant prose by itself does not.
+
+| Scene audit through MCP data | Current-camera capture request |
+|:---:|:---:|
+| ![A Bistro Interior audit returned by lookdevpt.audit_scene in the integrated Assistant](images/audit_scene.png) | ![The integrated Assistant conversation requesting capture_viewport for the current Bistro Interior camera](images/camera_capture.png) |
+
 ## Availability And Security
 
 - Endpoint: `http://127.0.0.1:<port>/mcp`

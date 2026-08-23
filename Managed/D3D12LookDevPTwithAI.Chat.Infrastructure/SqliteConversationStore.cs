@@ -129,6 +129,83 @@ public sealed class SqliteConversationStore(IAppPaths paths) : IConversationStor
         return conversation;
     }
 
+    public async Task<ConversationSummary> UpdateTitleAsync(
+        string projectContextKey,
+        Guid conversationId,
+        string title,
+        CancellationToken cancellationToken = default)
+    {
+        ValidateProjectContextKey(projectContextKey);
+        var normalizedTitle = ValidateTitle(title);
+        await InitializeAsync(cancellationToken).ConfigureAwait(false);
+        var conversation = await GetAsync(
+            projectContextKey,
+            conversationId,
+            cancellationToken).ConfigureAwait(false) ??
+            throw new KeyNotFoundException("The conversation does not exist.");
+
+        await using var connection = CreateConnection();
+        await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
+        var command = connection.CreateCommand();
+        command.CommandText = """
+            UPDATE conversations
+            SET title = $title
+            WHERE project_context_key = $context AND id = $id
+            """;
+        command.Parameters.AddWithValue("$title", normalizedTitle);
+        command.Parameters.AddWithValue("$context", projectContextKey);
+        command.Parameters.AddWithValue("$id", conversationId.ToString("D"));
+        if (await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false) != 1)
+            throw new KeyNotFoundException("The conversation does not exist.");
+        return conversation with { Title = normalizedTitle };
+    }
+
+    public async Task<ConversationSummary> ResetAsync(
+        string projectContextKey,
+        Guid conversationId,
+        string title,
+        CancellationToken cancellationToken = default)
+    {
+        ValidateProjectContextKey(projectContextKey);
+        var normalizedTitle = ValidateTitle(title);
+        await InitializeAsync(cancellationToken).ConfigureAwait(false);
+        var conversation = await GetAsync(
+            projectContextKey,
+            conversationId,
+            cancellationToken).ConfigureAwait(false) ??
+            throw new KeyNotFoundException("The conversation does not exist.");
+        var now = DateTimeOffset.UtcNow;
+
+        await using var connection = CreateConnection();
+        await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+        var delete = connection.CreateCommand();
+        delete.Transaction = (SqliteTransaction)transaction;
+        delete.CommandText = """
+            DELETE FROM messages
+            WHERE project_context_key = $context AND conversation_id = $conversation
+            """;
+        delete.Parameters.AddWithValue("$context", projectContextKey);
+        delete.Parameters.AddWithValue("$conversation", conversationId.ToString("D"));
+        await delete.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+
+        var update = connection.CreateCommand();
+        update.Transaction = (SqliteTransaction)transaction;
+        update.CommandText = """
+            UPDATE conversations
+            SET title = $title, updated_at = $updated
+            WHERE project_context_key = $context AND id = $conversation
+            """;
+        update.Parameters.AddWithValue("$title", normalizedTitle);
+        update.Parameters.AddWithValue("$updated", FormatTimestamp(now));
+        update.Parameters.AddWithValue("$context", projectContextKey);
+        update.Parameters.AddWithValue("$conversation", conversationId.ToString("D"));
+        if (await update.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false) != 1)
+            throw new KeyNotFoundException("The conversation does not exist.");
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        return conversation with { Title = normalizedTitle, UpdatedAt = now };
+    }
+
     public async Task<IReadOnlyList<ConversationMessage>> GetMessagesAsync(
         string projectContextKey,
         Guid conversationId,
@@ -376,6 +453,18 @@ public sealed class SqliteConversationStore(IAppPaths paths) : IConversationStor
 
     private static DateTimeOffset ParseTimestamp(string value) =>
         DateTimeOffset.Parse(value, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind);
+
+    private static string ValidateTitle(string title)
+    {
+        var normalized = string.IsNullOrWhiteSpace(title)
+            ? "新しいチャット"
+            : title.Trim();
+        if (normalized.Length > PipeProtocol.MaximumConversationTitleCharacters)
+            throw new ArgumentException(
+                $"Conversation title must not exceed {PipeProtocol.MaximumConversationTitleCharacters} characters.",
+                nameof(title));
+        return normalized;
+    }
 
     private static void ValidateProjectContextKey(string projectContextKey)
     {

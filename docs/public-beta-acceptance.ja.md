@@ -31,12 +31,23 @@
 5. Bistro または PBRT scene を開き、`Ctrl+Enter` で prompt を送る。入力欄が空になり、
    loaded model 名 / backend と青い思考中表示が更新され、Stop が有効になることを確認する。
 6. `Describe scene` または同等の read-only request で MCP Tool が自動実行され、最終回答が
-   同じ dock に表示されることを確認する。
-7. 露出などの変更を依頼し、canonical JSON 引数を含む一回承認 card が表示されることを
+   同じ dock にMarkdownとして表示されることを確認する。
+7. 現在cameraのcaptureを依頼し、`capture_viewport`のTool lifecycle cardと返却resource linkを
+   確認する。assistantの完了文だけを実行済みの根拠にしない。
+8. 露出などの変更を依頼し、canonical JSON 引数を含む一回承認 card が表示されることを
    確認する。Allow once / Deny の両経路を試し、許可時だけ renderer state が変わることを
    `get_state` または Inspector で確認する。
+9. 最初のpromptから会話タイトルが自動設定されること、新しい会話を作成して元の会話へ
+   戻れることを確認する。`Save .md`で全messageを保存し、見出し、日時、message数、user / AI
+   本文を確認する。
+10. 使い捨ての会話で`Reset`を選び、Cancelでは履歴が残り、確認して実行した場合だけ選択中
+   会話のmessageが消えて空の「新しいチャット」になることを確認する。他の会話は維持する。
 
 ![露出変更を一回承認して実行した統合AI Assistant](images/screenshot009.png)
+
+| Markdownによるscene監査 | 現在cameraのcapture依頼 |
+|:---:|:---:|
+| ![Bistro Interiorのscene auditと会話管理control](images/audit_scene.png) | ![現在camera viewのcaptureを依頼した会話](images/camera_capture.png) |
 
 ## 機能・安全性
 
@@ -47,6 +58,8 @@
 - model / runtime artifact の size と SHA-256、runtime tree の完全一致を検証し、不一致時は
   llama-server を起動しない。
 - app 終了後に `D3D12LookDevPTwithAI.ChatHost.exe` と `llama-server.exe` が残留しない。
+- 会話タイトル、reset、Markdown exportでproject contextを越えた履歴混在がなく、exportした
+  fileにMCP token、llama API key、未表示のTool引数が含まれない。
 - MCP の `read_only`、`confirm_mutations`、`allow_mutations` を確認し、公開ベータ既定は
   `confirm_mutations` とする。外部 MCP client 接続は追加機能であり、統合 Assistant の
   必須導入手順には含めない。

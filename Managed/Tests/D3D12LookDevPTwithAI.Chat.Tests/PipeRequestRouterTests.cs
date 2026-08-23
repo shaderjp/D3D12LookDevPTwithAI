@@ -114,6 +114,99 @@ public sealed class PipeRequestRouterTests
     }
 
     [Fact]
+    public async Task Initialize_backfills_default_titles_from_the_first_user_message()
+    {
+        await using var fixture = new RouterFixture();
+        var conversation = await fixture.Store.CreateAsync("project-1", "新しいチャット");
+        await fixture.Store.AppendMessageAsync(
+            "project-1",
+            new ConversationMessage(
+                Guid.NewGuid(),
+                conversation.Id,
+                "user",
+                "BMWのマテリアルを確認してください。続けて照明も確認してください。",
+                DateTimeOffset.UtcNow));
+
+        await fixture.Router.HandleAsync(
+            fixture.Request("initialize", new InitializeRequest("instance-1", "project-1")),
+            fixture.Peer);
+        var response = await fixture.Peer.ReadAsync();
+        var initialized = response.Payload.Deserialize<InitializeResult>(PipeJson.SerializerOptions)!;
+
+        Assert.Equal(
+            "BMWのマテリアルを確認してください",
+            Assert.Single(initialized.Conversations).Title);
+        Assert.Equal(
+            "BMWのマテリアルを確認してください",
+            (await fixture.Store.GetAsync("project-1", conversation.Id))!.Title);
+    }
+
+    [Fact]
+    public async Task Selected_conversation_exports_all_messages_to_markdown_and_can_be_reset()
+    {
+        await using var fixture = new RouterFixture();
+        var conversationId = await fixture.InitializeAsync();
+        await fixture.Store.AppendMessageAsync(
+            "project-1",
+            new ConversationMessage(
+                Guid.NewGuid(),
+                conversationId,
+                "user",
+                "BMWを診断して",
+                DateTimeOffset.UtcNow));
+        await fixture.Store.AppendMessageAsync(
+            "project-1",
+            new ConversationMessage(
+                Guid.NewGuid(),
+                conversationId,
+                "assistant",
+                "**診断結果**です。",
+                DateTimeOffset.UtcNow));
+        var exportDirectory = Path.Combine(
+            Path.GetTempPath(),
+            "D3D12LookDevPTwithAI.Chat.Export.Tests",
+            Guid.NewGuid().ToString("N"));
+        var exportPath = Path.Combine(exportDirectory, "bmw-chat.md");
+        Directory.CreateDirectory(exportDirectory);
+        try
+        {
+            await fixture.Router.HandleAsync(
+                fixture.Request(
+                    "conversation.exportMarkdown",
+                    new ConversationExportMarkdownRequest(conversationId, exportPath)),
+                fixture.Peer);
+            var exportedResponse = await fixture.Peer.ReadAsync();
+            var exported = exportedResponse.Payload.Deserialize<ConversationExportMarkdownResult>(
+                PipeJson.SerializerOptions)!;
+
+            Assert.Null(exportedResponse.Error);
+            Assert.Equal(2, exported.MessageCount);
+            var markdown = (await File.ReadAllTextAsync(exportPath))
+                .Replace("\r\n", "\n", StringComparison.Ordinal);
+            Assert.Contains("## You\n\nBMWを診断して", markdown, StringComparison.Ordinal);
+            Assert.Contains("## AI Assistant\n\n**診断結果**です。", markdown, StringComparison.Ordinal);
+
+            await fixture.Router.HandleAsync(
+                fixture.Request(
+                    "conversation.reset",
+                    new ConversationResetRequest(conversationId)),
+                fixture.Peer);
+            var resetResponse = await fixture.Peer.ReadAsync();
+            var reset = resetResponse.Payload.Deserialize<ConversationResetResult>(
+                PipeJson.SerializerOptions)!;
+
+            Assert.Null(resetResponse.Error);
+            Assert.Equal("新しいチャット", reset.Conversation.Title);
+            Assert.Empty(await fixture.Store.GetMessagesAsync("project-1", conversationId));
+        }
+        finally
+        {
+            if (Directory.Exists(exportDirectory))
+                Directory.Delete(exportDirectory, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task Model_setup_requires_explicit_license_acceptance()
     {
         await using var fixture = new RouterFixture();
@@ -208,6 +301,7 @@ public sealed class PipeRequestRouterTests
         string? backend = null;
         string? modelId = null;
         string? modelDisplayName = null;
+        string? conversationTitle = null;
         PipeEnvelope envelope;
         do
         {
@@ -222,6 +316,12 @@ public sealed class PipeRequestRouterTests
                     .GetProperty("modelDisplayName")
                     .GetString();
             }
+            if (envelope.Method == "conversationUpdated")
+            {
+                conversationTitle = envelope.Payload
+                    .Deserialize<ConversationUpdatedEvent>(PipeJson.SerializerOptions)!
+                    .Conversation.Title;
+            }
         }
         while (envelope.Method != "completed");
 
@@ -230,6 +330,10 @@ public sealed class PipeRequestRouterTests
         Assert.Equal(ScriptedInferenceRuntime.Id, backend);
         Assert.Equal(ScriptedInferenceRuntime.ModelId, modelId);
         Assert.Equal(ScriptedInferenceRuntime.ModelDisplayName, modelDisplayName);
+        Assert.Equal("use the runtime", conversationTitle);
+        Assert.Equal(
+            "use the runtime",
+            (await fixture.Store.GetAsync("project-1", conversationId))!.Title);
         var request = Assert.Single(runtime.Requests);
         Assert.Equal(conversationId, request.ConversationId);
         Assert.Equal("use the runtime", request.UserText);
@@ -313,6 +417,46 @@ public sealed class PipeRequestRouterTests
             ScriptedInferenceRuntime.SensitiveFailureMarker,
             failure.Payload.GetProperty("message").GetString(),
             StringComparison.Ordinal);
+        Assert.Equal("failed", envelope.Payload.GetProperty("status").GetString());
+    }
+
+    [Fact]
+    public async Task Inference_stream_timeout_crosses_the_pipe_as_a_specific_safe_error()
+    {
+        var runtime = new ScriptedInferenceRuntime
+        {
+            Failure = new ChatInferenceException(
+                "inference_stream_timeout",
+                ScriptedInferenceRuntime.SensitiveFailureMarker,
+                retryable: true),
+        };
+        await using var fixture = new RouterFixture(runtime);
+        var conversationId = await fixture.InitializeAsync();
+        await fixture.Router.HandleAsync(
+            fixture.Request(
+                "sendTurn",
+                new SendTurnRequest(Guid.NewGuid(), conversationId, "trigger timeout")),
+            fixture.Peer);
+
+        Assert.Null((await fixture.Peer.ReadAsync()).Error);
+        PipeEnvelope? failure = null;
+        PipeEnvelope envelope;
+        do
+        {
+            envelope = await fixture.Peer.ReadAsync(TimeSpan.FromSeconds(3));
+            if (envelope.Method == "error") failure = envelope;
+        }
+        while (envelope.Method != "completed");
+
+        Assert.NotNull(failure);
+        Assert.Equal(
+            "inference_stream_timeout",
+            failure.Payload.GetProperty("code").GetString());
+        Assert.DoesNotContain(
+            ScriptedInferenceRuntime.SensitiveFailureMarker,
+            failure.Payload.GetProperty("message").GetString(),
+            StringComparison.Ordinal);
+        Assert.Equal(1, failure.Payload.GetProperty("inferenceRounds").GetInt32());
         Assert.Equal("failed", envelope.Payload.GetProperty("status").GetString());
     }
 
@@ -1224,6 +1368,20 @@ public sealed class PipeRequestRouterTests
             CancellationToken cancellationToken = default) =>
             inner.CreateAsync(projectContextKey, title, cancellationToken);
 
+        public Task<ConversationSummary> UpdateTitleAsync(
+            string projectContextKey,
+            Guid conversationId,
+            string title,
+            CancellationToken cancellationToken = default) =>
+            inner.UpdateTitleAsync(projectContextKey, conversationId, title, cancellationToken);
+
+        public Task<ConversationSummary> ResetAsync(
+            string projectContextKey,
+            Guid conversationId,
+            string title,
+            CancellationToken cancellationToken = default) =>
+            inner.ResetAsync(projectContextKey, conversationId, title, cancellationToken);
+
         public Task<IReadOnlyList<ConversationMessage>> GetMessagesAsync(
             string projectContextKey,
             Guid conversationId,
@@ -1273,6 +1431,20 @@ public sealed class PipeRequestRouterTests
             string title,
             CancellationToken cancellationToken = default) =>
             inner.CreateAsync(projectContextKey, title, cancellationToken);
+
+        public Task<ConversationSummary> UpdateTitleAsync(
+            string projectContextKey,
+            Guid conversationId,
+            string title,
+            CancellationToken cancellationToken = default) =>
+            inner.UpdateTitleAsync(projectContextKey, conversationId, title, cancellationToken);
+
+        public Task<ConversationSummary> ResetAsync(
+            string projectContextKey,
+            Guid conversationId,
+            string title,
+            CancellationToken cancellationToken = default) =>
+            inner.ResetAsync(projectContextKey, conversationId, title, cancellationToken);
 
         public Task<IReadOnlyList<ConversationMessage>> GetMessagesAsync(
             string projectContextKey,

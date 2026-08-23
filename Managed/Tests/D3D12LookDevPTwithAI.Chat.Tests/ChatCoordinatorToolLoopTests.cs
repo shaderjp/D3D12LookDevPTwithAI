@@ -62,8 +62,16 @@ public sealed class ChatCoordinatorToolLoopTests
 
         var events = await fixture.Peer.ReadTurnEventsUntilCompletedAsync(sendRequest.RequestId);
         Assert.Equal(
-            ["messageAdded", "runtimeState", "toolStarted", "toolCompleted", "textDelta", "messageAdded", "completed"],
+            ["conversationUpdated", "messageAdded", "runtimeState", "toolStarted", "toolCompleted", "textDelta", "messageAdded", "completed"],
             events.Select(message => message.Method));
+        Assert.Equal(
+            "カメラを確認",
+            events[0].Payload.Deserialize<ConversationUpdatedEvent>(PipeJson.SerializerOptions)!
+                .Conversation.Title);
+        var completion = events[^1].Payload.Deserialize<TurnCompletedEvent>(
+            PipeJson.SerializerOptions)!;
+        Assert.Equal(2, completion.InferenceRounds);
+        Assert.Equal(1, completion.ToolCalls);
         Assert.DoesNotContain("private prelude", Serialize(events));
         Assert.Equal(
             "最終回答",
@@ -100,6 +108,80 @@ public sealed class ChatCoordinatorToolLoopTests
         Assert.Equal(["user", "assistant"], stored.Select(message => message.Role));
         Assert.Equal("最終回答", stored[^1].Content);
         Assert.DoesNotContain(stored, message => message.Content.Contains("private prelude", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task Explicit_diagnostics_command_runs_tool_before_first_inference()
+    {
+        var runtime = new ScriptedToolRuntime(TextRound("診断結果です"));
+        var mcp = new FakeMcpClient(Tool("lookdevpt.get_diagnostics", isReadOnly: true));
+        await using var fixture = new ToolLoopFixture(runtime, mcp);
+        var conversationId = await fixture.InitializeAsync();
+        var turnId = Guid.NewGuid();
+        var sendRequest = fixture.Request(
+            "sendTurn",
+            new SendTurnRequest(
+                turnId,
+                conversationId,
+                "lookdevpt.get_diagnostics()を実行して結果を日本語で回答して"));
+
+        await fixture.Router.HandleAsync(sendRequest, fixture.Peer);
+        _ = await fixture.Peer.ReadAsync();
+        var events = await fixture.Peer.ReadTurnEventsUntilCompletedAsync(sendRequest.RequestId);
+
+        Assert.Equal(
+            ["conversationUpdated", "messageAdded", "runtimeState", "toolStarted", "toolCompleted", "textDelta", "messageAdded", "completed"],
+            events.Select(message => message.Method));
+        var completion = events[^1].Payload.Deserialize<TurnCompletedEvent>(
+            PipeJson.SerializerOptions)!;
+        Assert.Equal(1, completion.InferenceRounds);
+        Assert.Equal(1, completion.ToolCalls);
+        Assert.Single(mcp.Calls);
+        Assert.Equal("lookdevpt.get_diagnostics", mcp.Calls[0].Tool);
+        Assert.Equal("{}", mcp.Calls[0].ArgumentsJson);
+        var inferenceRequest = Assert.Single(runtime.Requests);
+        Assert.False(inferenceRequest.AppendUserMessage);
+        Assert.False(inferenceRequest.AllowToolCalls);
+        Assert.Equal(string.Empty, inferenceRequest.UserText);
+        Assert.Collection(
+            inferenceRequest.History.TakeLast(3),
+            message => Assert.Equal(ChatInferenceRole.User, message.Role),
+            message =>
+            {
+                Assert.Equal(ChatInferenceRole.Assistant, message.Role);
+                var call = Assert.Single(message.ToolCalls!);
+                Assert.Equal("lookdevpt.get_diagnostics", call.Name);
+            },
+            message =>
+            {
+                Assert.Equal(ChatInferenceRole.Tool, message.Role);
+                Assert.Equal("lookdevpt.get_diagnostics", message.Name);
+                Assert.Equal("{\"ok\":true}", message.Content);
+            });
+    }
+
+    [Fact]
+    public async Task Diagnostics_explanation_does_not_trigger_direct_tool_call()
+    {
+        var runtime = new ScriptedToolRuntime(TextRound("診断ツールの説明です"));
+        var mcp = new FakeMcpClient(Tool("lookdevpt.get_diagnostics", isReadOnly: true));
+        await using var fixture = new ToolLoopFixture(runtime, mcp);
+        var conversationId = await fixture.InitializeAsync();
+        var sendRequest = fixture.Request(
+            "sendTurn",
+            new SendTurnRequest(
+                Guid.NewGuid(),
+                conversationId,
+                "lookdevpt.get_diagnostics()とは何ですか？"));
+
+        await fixture.Router.HandleAsync(sendRequest, fixture.Peer);
+        _ = await fixture.Peer.ReadAsync();
+        _ = await fixture.Peer.ReadTurnEventsUntilCompletedAsync(sendRequest.RequestId);
+
+        Assert.Empty(mcp.Calls);
+        var inferenceRequest = Assert.Single(runtime.Requests);
+        Assert.True(inferenceRequest.AppendUserMessage);
+        Assert.True(inferenceRequest.AllowToolCalls);
     }
 
     [Fact]
@@ -903,6 +985,42 @@ public sealed class ChatCoordinatorToolLoopTests
             {
                 var now = DateTimeOffset.UtcNow;
                 _conversation = new ConversationSummary(Guid.NewGuid(), title, now, now);
+                return Task.FromResult(_conversation);
+            }
+        }
+
+        public Task<ConversationSummary> UpdateTitleAsync(
+            string projectContextKey,
+            Guid conversationId,
+            string title,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            lock (_gate)
+            {
+                if (_conversation?.Id != conversationId) throw new KeyNotFoundException();
+                _conversation = _conversation with { Title = title };
+                return Task.FromResult(_conversation);
+            }
+        }
+
+        public Task<ConversationSummary> ResetAsync(
+            string projectContextKey,
+            Guid conversationId,
+            string title,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            lock (_gate)
+            {
+                if (_conversation?.Id != conversationId) throw new KeyNotFoundException();
+                _messages.RemoveAll(message => message.ConversationId == conversationId);
+                _sequence = 0;
+                _conversation = _conversation with
+                {
+                    Title = title,
+                    UpdatedAt = DateTimeOffset.UtcNow,
+                };
                 return Task.FromResult(_conversation);
             }
         }

@@ -41,14 +41,22 @@ Native UI ── process-local one-time approval broker
 - 新製品の初期モードは `AI Assistant`、推奨幅は 420 px とする。
 - `F9` で Assistant を開閉し、`F10` の render-only 動作は維持する。
 - Assistant は会話、読み込み済み model / backend、ストリーミング応答、取消、Tool 実行状態を表示・操作する。turn 中は model 起動、思考中、応答生成、Tool 実行、承認待ちを ProgressRing と status text で区別する。
+- 最終的な AI Assistant 応答だけを WinUI `RichTextBlock` へ Markdown としてrenderする。見出し、強調、取消線、inline / fenced code、箇条書き／番号付きlist、引用、horizontal rule、linkを扱い、link schemeは`http` / `https` / `mailto`だけを許可する。画像記法はremote画像を埋め込まず、安全なlabel付きlinkとして表示する。user message、error、Tool lifecycle cardは従来のplain text / native UI表示を維持する。
 - `Ctrl+Enter` は WinUI `KeyboardAccelerator` から送信し、`Enter` だけは複数行入力の改行として扱う。quick prompt は Describe scene、Review view、Frame camera、Suggest denoise、Compare、Benchmark を提供する。
 - 変更 Tool の一回承認カードには、実際の hash と一致する canonical JSON 引数を8 KiB上限で全文表示する。Tool 開始後に取消・切断された場合は、未実行と断定せず結果不明として LookDev 状態の確認を促す。
-- 過去履歴 page の閲覧 UI は後続 milestone とする。
+- 会話selectorはproject context内のchatを切り替え、最初のuser messageから追加推論なしで短いタイトルを生成する。旧default titleも読み込み時に補完し、`conversationUpdated` eventでUIへ反映する。
+- `Reset`は確認後に選択中chatのmessageだけをtransactionで削除し、空の「新しいチャット」として残す。`Save .md`はWindowsの保存pickerで選んだ絶対pathへ、そのchatの全messageをMarkdownで書き出す。非常に長い1会話の過去pageをUI内でさらに遡る操作は後続milestoneとする。
 - 変更操作を統合した後の承認は `今回のみ承認` と `拒否` の2択とし、永続許可は設けない。
 
 | model / turn status | Tool実行 lifecycle |
 |:---:|:---:|
 | ![読み込み済みGemma 4とturn中statusを表示するAI Assistant](images/screenshot008.png) | ![承認済みcolor management ToolとTool結果処理中statusを表示するAI Assistant](images/screenshot010.png) |
+
+![Bistro Exteriorのscene reviewを見出し、太字、箇条書きで表示するMarkdown対応AI Assistant](images/renderingmarkdown.png)
+
+| Scene監査 | 現在cameraのcapture依頼 |
+|:---:|:---:|
+| ![Bistro Interiorのscene audit結果と会話管理control](images/audit_scene.png) | ![現在camera viewのcaptureを依頼した会話](images/camera_capture.png) |
 
 ## IPC
 
@@ -67,6 +75,8 @@ C++ 側を Named Pipe server、Managed ChatHost を client とする。
 - `conversation.list`
 - `conversation.create`
 - `conversation.select`
+- `conversation.reset`
+- `conversation.exportMarkdown`
 - `sendTurn`
 - `cancelTurn`
 - `approval.respond`
@@ -77,6 +87,7 @@ C++ 側を Named Pipe server、Managed ChatHost を client とする。
 現在の chat 経路で使う event:
 
 - `runtimeState`
+- `conversationUpdated`
 - `messageAdded`
 - `textDelta`
 - `toolApprovalRequired`
@@ -177,6 +188,9 @@ read-only artifact root はアプリ内 setup で置き換えない。
 - llama.cpp runtime: artifact root の `Runtimes\...`
 - local inference 設定: artifact root の `inference.json`
 - 会話履歴: writable AI data root の `chat-history.sqlite3` 内で project context key ごとに分離
+- 会話タイトル: 同じSQLiteへ保存し、default titleは最初の有効なuser messageから遅延補完
+- 会話reset: 選択conversationのmessage削除とtitle初期化を単一transactionで実行
+- Markdown export: UIで選択した`.md`絶対pathへ全保存messageを書き出し、AI data rootには複製しない
 - MCP token: ChatHost へ初期化時だけ渡すメモリ内 secret。ChatHost は永続化しない。
 
 executable 隣に `integrated-portable-manifest.json` がある場合、ambient な
@@ -224,7 +238,7 @@ release milestoneの必須条件とする。
 ## 実装マイルストーン
 
 1. 完了: 製品改名と基盤移植
-2. 完了: Native / Managed IPC、右ドック、project 別 SQLite 履歴、bounded paging
+2. 完了: Native / Managed IPC、右ドック、project別SQLite履歴、bounded paging、自動タイトル、選択chat reset、全履歴Markdown export
 3. 完了: 手動設定した GGUF / llama.cpp による loopback 推論、全 runtime file manifest、artifact lease、process ownership
 4. 完了: 親所有の単一 loopback MCP 接続、`readOnlyHint` policy、一回承認 grant
 5. 完了: llama Tool-call loop、Tool event / result 統合、複数 round 上限

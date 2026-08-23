@@ -24,13 +24,23 @@ Tool 実行・承認待ちを示す進行表示を備えています。利用者
 `D3D12LookDevPTwithAI.exe` だけで、ChatHost と llama.cpp は所有関係を検証した非表示の
 子 process として動作します。
 
+AI Assistant の最終応答は WinUI の `RichTextBlock` 内で Markdown として表示します。
+見出し、強調、箇条書き／番号付きlist、引用、code、horizontal rule、`http` / `https` /
+`mailto` linkの安全なsubsetに対応し、user messageとerrorは従来どおりplain textで表示します。
+
+会話履歴はproject contextごとに分離します。追加推論を行わず最初のuser messageから短い
+タイトルを付け、既存の「新しいチャット」も読み込み時に補完します。会話selectorから
+新規作成、確認付きで選択中の会話だけをreset、Windowsの保存pickerで全messageを
+Markdownとして書き出せます。
+
 製品既定の推論経路は、認証付き loopback 接続で非表示の `llama-server.exe` 子プロセス
 を使用します。local の `inference.json` がない状態は正常な初回状態であり、Assistant
 は `not_ready` を表示して placeholder 応答へ fallback しません。deterministic runtime
 は Debug の end-to-end bridge test 専用で、製品 runtime の fallback ではありません。
 ChatHost の会話履歴 API は SQLite の連番 cursor による UTF-8 byte 制限付き page で
-取得するため、長期履歴でも 4 MiB の IPC frame 上限を超えません。Native UI が表示する
-のは現時点では最新 page で、過去 page の閲覧 UI は後続 milestone です。
+取得するため、長期履歴でも 4 MiB の IPC frame 上限を超えません。会話selectorでは保存済み
+chatを切り替えられますが、選択した非常に長い会話内で過去pageをさらに遡るUIは後続
+milestoneです。Markdown書き出しは表示中のpageだけでなく、保存済み全履歴を取得します。
 
 同一インスタンス専用 MCP transport と Native の一回承認境界は実装済みです。
 ChatHost は親 Native process が所有する `127.0.0.1` endpoint だけへ接続し、
@@ -103,6 +113,8 @@ Job Object で ChatHost を所有し、llama.cpp の子孫プロセスも同じ�
 
 ![PBRT BMW M6を表示し、Gemma 4のmodel名と思考中状態を示す統合editor](docs/images/screenshot008.png)
 
+![Bistro Exteriorのscene reviewを見出し、太字、箇条書きで表示するMarkdown対応AI Assistant](docs/images/renderingmarkdown.png)
+
 | AIによる変更の一回承認 | アプリ内local model setup |
 |:---:|:---:|
 | ![露出変更の前に一回承認を待つGemma Tool call](docs/images/screenshot009.png) | ![Gemma 4とllama.cppのsetup flyoutを開いた統合AI Assistant](docs/images/installllm.png) |
@@ -110,6 +122,14 @@ Job Object で ChatHost を所有し、llama.cpp の子孫プロセスも同じ�
 | AI Tool実行と進行status | Denoise backend設定 |
 |:---:|:---:|
 | ![PBRT crown sceneでcolor management Toolを実行し、Tool結果の処理中statusを示すGemma](docs/images/screenshot010.png) | ![readyなNRD REBLUR backendとtemporal設定を表示するDenoise Inspector](docs/images/nvidiareblur.png) |
+
+| Scene state解析 | Denoise提案 |
+|:---:|:---:|
+| ![MCP dataからPBRT BMW M6の現在のrenderer stateを説明する統合Assistant](docs/images/sceneanalyze.png) | ![有効なNRD RELAX設定を確認し、画質と性能の調整案を示す統合Assistant](docs/images/mcpdenoise.png) |
+
+| Scene監査 | 現在cameraのcapture依頼 |
+|:---:|:---:|
+| ![Bistro Interiorのscene auditをviewport横へMarkdown表示する統合Assistant](docs/images/audit_scene.png) | ![Bistro Interiorの現在camera viewをcaptureするよう依頼した会話](docs/images/camera_capture.png) |
 
 | Material編集 | Lighting編集 |
 |:---:|:---:|
@@ -415,6 +435,11 @@ Assistant data は current user の local profile 以下へ分離します。
 %LOCALAPPDATA%\D3D12LookDevPTwithAI\AI\inference.json
 ```
 
+`chat-history.sqlite3`にはproject別の会話タイトルと、表示対象のuser / 最終assistant
+messageを保存します。resetは選択conversationのmessageだけを単一transactionで削除します。
+Markdown exportは保存pickerで選んだpathだけへ書き、MCP credentialや非表示Tool stateを
+含めません。
+
 project path は absolute または `baseDirectory` 基準の relative path を
 使用できます。bundle内部のv3 pathは`assetRoot`以下で解決され、absolute pathや
 `..`による脱出を拒否します。`Scripts\LookDevBundle.ps1`はZIPベースの`thin` /
@@ -500,7 +525,9 @@ AOV artifactを取得できます。完了または中止後はcheckpointから�
 private MCP factory を省略する Debug E2E test です。通常の app / ChatHost 起動では
 親所有 MCP capability を必須とし、設定済みの llama.cpp 経路を使用します。
 renderer command queue の test は command coalescing、FIFO barrier、
-index 付き target、immutable snapshot の atomic publish を検証します。
+index 付き target、immutable snapshot の atomic publish を検証します。全scriptの用途、
+前提条件、主要parameter、出力、旧2アプリ用toolは[Scriptsガイド](docs/scripts.ja.md)に
+まとめています。
 
 ## ThirdParty revision
 
@@ -531,6 +558,7 @@ WinUI composition は DXGI 側で行い、UI 専用 shader pass は追加しま�
 ## 関連文書
 
 - [Asset setup](docs/assets.ja.md)
+- [Scriptsガイド](docs/scripts.ja.md)
 - [Rendering pipeline](docs/rendering-pipeline.ja.md)
 - [MCP integration](docs/mcp.ja.md)
 - [統合 AI アーキテクチャ](docs/integrated-ai-architecture.ja.md)

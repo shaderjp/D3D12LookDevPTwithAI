@@ -61,6 +61,24 @@ public sealed class PipeRequestRouter(
                             cancellationToken).ConfigureAwait(false),
                         cancellationToken: cancellationToken).ConfigureAwait(false);
                     return;
+                case "conversation.reset":
+                    RequireInitialized();
+                    await peer.SendResponseAsync(
+                        request,
+                        await coordinator.ResetConversationAsync(
+                            Deserialize<ConversationResetRequest>(request),
+                            cancellationToken).ConfigureAwait(false),
+                        cancellationToken: cancellationToken).ConfigureAwait(false);
+                    return;
+                case "conversation.exportMarkdown":
+                    RequireInitialized();
+                    await peer.SendResponseAsync(
+                        request,
+                        await coordinator.ExportConversationMarkdownAsync(
+                            Deserialize<ConversationExportMarkdownRequest>(request),
+                            cancellationToken).ConfigureAwait(false),
+                        cancellationToken: cancellationToken).ConfigureAwait(false);
+                    return;
                 case "conversation.select":
                     RequireInitialized();
                     await peer.SendResponseAsync(

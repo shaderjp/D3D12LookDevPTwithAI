@@ -231,6 +231,7 @@
     <ClCompile Include="Source\WinUI\App.xaml.cpp">
       <DependentUpon>App.xaml</DependentUpon>
     </ClCompile>
+    <ClCompile Include="Source\WinUI\AssistantMarkdownRenderer.cpp" />
     <ClCompile Include="Source\WinUI\EditorViewModel.cpp" />
     <ClCompile Include="Source\WinUI\MainWindow.xaml.cpp">
       <DependentUpon>MainWindow.xaml</DependentUpon>
@@ -290,6 +291,7 @@
     <ClInclude Include="Source\WinUI\App.xaml.h">
       <DependentUpon>App.xaml</DependentUpon>
     </ClInclude>
+    <ClInclude Include="Source\WinUI\AssistantMarkdownRenderer.h" />
     <ClInclude Include="Source\WinUI\EditorViewModel.h" />
     <ClInclude Include="Source\WinUI\MainWindow.xaml.h">
       <DependentUpon>MainWindow.xaml</DependentUpon>

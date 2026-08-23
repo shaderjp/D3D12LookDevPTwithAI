@@ -139,6 +139,12 @@ struct MainWindow : MainWindowT<MainWindow>
     void OnAiNewConversationClick(
         Windows::Foundation::IInspectable const&,
         Microsoft::UI::Xaml::RoutedEventArgs const&);
+    void OnAiResetConversationClick(
+        Windows::Foundation::IInspectable const&,
+        Microsoft::UI::Xaml::RoutedEventArgs const&);
+    void OnAiSaveConversationClick(
+        Windows::Foundation::IInspectable const&,
+        Microsoft::UI::Xaml::RoutedEventArgs const&);
     void OnAiSetupClick(
         Windows::Foundation::IInspectable const&,
         Microsoft::UI::Xaml::RoutedEventArgs const&);
@@ -220,6 +226,8 @@ private:
     void SendAssistantTurn(
         std::wstring text,
         std::wstring promptId = {});
+    Windows::Foundation::IAsyncAction ConfirmResetAssistantConversation();
+    Windows::Foundation::IAsyncAction SaveAssistantConversationMarkdown();
     void ApplyPanelVisibility();
     void ApplyTheme(EditorThemeMode mode);
     void UpdateTitleBarTheme();

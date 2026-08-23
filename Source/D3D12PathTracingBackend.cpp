@@ -11045,11 +11045,12 @@ void D3D12PathTracingBackend::OnUpdate()
     }
 
     const auto now = std::chrono::steady_clock::now();
-    if (m_minimized)
+    if (m_minimized || m_assistantInferenceActive)
     {
-        // OnRender has no submission while minimized. Do not advance temporal
-        // parity, jitter, previous matrices, or sample blocks without a GPU
-        // frame that actually writes the corresponding current histories.
+        // OnRender has no submission while minimized or while the local model
+        // needs the GPU. Do not advance temporal parity, jitter, previous
+        // matrices, or sample blocks without a submitted GPU frame. MCP command
+        // processing and cached snapshot publication above remain active.
         m_lastUpdate = now;
         const auto mcpSnapshotStart = std::chrono::steady_clock::now();
         ProcessMcpReview();
@@ -11401,7 +11402,7 @@ void D3D12PathTracingBackend::UpdateConstantBuffer(float)
 
 void D3D12PathTracingBackend::OnRender()
 {
-    if (m_minimized)
+    if (m_minimized || m_assistantInferenceActive)
     {
         return;
     }

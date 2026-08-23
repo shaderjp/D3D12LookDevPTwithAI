@@ -60,6 +60,10 @@ public:
     ComPtr<IDXGISwapChain3> GetCompositionSwapChain() const noexcept { return m_swapChain; }
     bool IsBenchmarkFinished() const noexcept { return m_benchmarkFinished; }
     void SetViewportFocused(bool focused) noexcept;
+    void SetAssistantInferenceActive(bool active) noexcept
+    {
+        m_assistantInferenceActive = active;
+    }
     void ApplyEditorCommand(const lookdevpt::winui::EditorCommand& command);
     lookdevpt::winui::EditorSnapshot CaptureEditorSnapshot() const;
     void AddEditorCpuTime(double milliseconds) noexcept;
@@ -1121,6 +1125,7 @@ private:
     PendingGpuResourceRefresh m_pendingGpuResourceRefresh = PendingGpuResourceRefresh::None;
     bool m_resizePending = false;
     bool m_minimized = false;
+    bool m_assistantInferenceActive = false;
     bool m_projectDirty = false;
     std::wstring m_adapterDescription = L"Unknown";
     DlssBackend m_dlssBackendRuntime;

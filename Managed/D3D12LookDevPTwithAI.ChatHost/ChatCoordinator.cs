@@ -1,4 +1,6 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
+using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using D3D12LookDevPTwithAI.Chat.Core;
@@ -27,6 +29,9 @@ public sealed class ChatCoordinator(
     private const int MaximumToolResultsPerTurnBytes = 96 * 1024;
     private const int MaximumToolRoundTextCharacters = 32 * 1024;
     private const int MaximumToolRoundTextPerTurnCharacters = 64 * 1024;
+    private const int MaximumAutomaticTitleCharacters = 48;
+    private const string DefaultConversationTitle = "新しいチャット";
+    private const string DirectDiagnosticsToolName = "lookdevpt.get_diagnostics";
     private static readonly TimeSpan CancelledPartialPersistenceTimeout =
         TimeSpan.FromMilliseconds(250);
     private static readonly TimeSpan TerminalEventWriteTimeout =
@@ -112,9 +117,16 @@ public sealed class ChatCoordinator(
             {
                 var created = await conversationStore.CreateAsync(
                     request.ProjectContextKey,
-                    "新しいチャット",
+                    DefaultConversationTitle,
                     cancellationToken).ConfigureAwait(false);
                 conversations = [created];
+            }
+            else
+            {
+                conversations = await EnsureConversationTitlesAsync(
+                    request.ProjectContextKey,
+                    conversations,
+                    cancellationToken).ConfigureAwait(false);
             }
 
             lock (_gate)
@@ -151,6 +163,10 @@ public sealed class ChatCoordinator(
     {
         var (projectContextKey, activeConversationId) = GetInitializedState();
         var conversations = await conversationStore.ListAsync(projectContextKey, cancellationToken).ConfigureAwait(false);
+        conversations = await EnsureConversationTitlesAsync(
+            projectContextKey,
+            conversations,
+            cancellationToken).ConfigureAwait(false);
         return new ConversationListResult(activeConversationId, conversations);
     }
 
@@ -159,7 +175,7 @@ public sealed class ChatCoordinator(
         CancellationToken cancellationToken = default)
     {
         var (projectContextKey, _) = GetInitializedState();
-        var title = string.IsNullOrWhiteSpace(request.Title) ? "新しいチャット" : request.Title.Trim();
+        var title = string.IsNullOrWhiteSpace(request.Title) ? DefaultConversationTitle : request.Title.Trim();
         if (title.Length > PipeProtocol.MaximumConversationTitleCharacters)
             throw new ChatRequestException(
                 "invalid_title",
@@ -171,6 +187,107 @@ public sealed class ChatCoordinator(
             cancellationToken).ConfigureAwait(false);
         lock (_gate) _activeConversationId = conversation.Id;
         return new ConversationCreateResult(conversation);
+    }
+
+    public async Task<ConversationResetResult> ResetConversationAsync(
+        ConversationResetRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        if (request.ConversationId == Guid.Empty)
+            throw new ChatRequestException("invalid_conversation", "conversationId is required.");
+        var (projectContextKey, activeConversationId) = GetInitializedState();
+        if (activeConversationId != request.ConversationId)
+            throw new ChatRequestException("conversation_not_selected", "Select the conversation before resetting it.");
+        lock (_gate)
+        {
+            if (_activeTurn is not null)
+                throw new ChatRequestException("turn_busy", "The active turn must finish before resetting history.", retryable: true);
+        }
+
+        try
+        {
+            var conversation = await conversationStore.ResetAsync(
+                projectContextKey,
+                request.ConversationId,
+                DefaultConversationTitle,
+                cancellationToken).ConfigureAwait(false);
+            return new ConversationResetResult(conversation);
+        }
+        catch (KeyNotFoundException)
+        {
+            throw new ChatRequestException("conversation_not_found", "The requested conversation does not exist.");
+        }
+    }
+
+    public async Task<ConversationExportMarkdownResult> ExportConversationMarkdownAsync(
+        ConversationExportMarkdownRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        if (request.ConversationId == Guid.Empty)
+            throw new ChatRequestException("invalid_conversation", "conversationId is required.");
+        var (projectContextKey, activeConversationId) = GetInitializedState();
+        if (activeConversationId != request.ConversationId)
+            throw new ChatRequestException("conversation_not_selected", "Select the conversation before exporting it.");
+        lock (_gate)
+        {
+            if (_activeTurn is not null)
+                throw new ChatRequestException("turn_busy", "The active turn must finish before exporting history.", retryable: true);
+        }
+
+        string fullPath;
+        try
+        {
+            if (string.IsNullOrWhiteSpace(request.Path) ||
+                request.Path.Length > short.MaxValue ||
+                !Path.IsPathFullyQualified(request.Path))
+            {
+                throw new ArgumentException();
+            }
+            fullPath = Path.GetFullPath(request.Path);
+            if (!string.Equals(Path.GetExtension(fullPath), ".md", StringComparison.OrdinalIgnoreCase) ||
+                string.IsNullOrWhiteSpace(Path.GetDirectoryName(fullPath)))
+            {
+                throw new ArgumentException();
+            }
+        }
+        catch (Exception exception) when (
+            exception is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            throw new ChatRequestException("invalid_export_path", "Choose a valid absolute Markdown file path.");
+        }
+
+        var conversation = await conversationStore.GetAsync(
+            projectContextKey,
+            request.ConversationId,
+            cancellationToken).ConfigureAwait(false);
+        if (conversation is null)
+            throw new ChatRequestException("conversation_not_found", "The requested conversation does not exist.");
+        var messages = await conversationStore.GetMessagesAsync(
+            projectContextKey,
+            request.ConversationId,
+            cancellationToken).ConfigureAwait(false);
+        var markdown = BuildConversationMarkdown(conversation, messages);
+        try
+        {
+            await File.WriteAllTextAsync(
+                fullPath,
+                markdown,
+                new UTF8Encoding(encoderShouldEmitUTF8Identifier: false),
+                cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception) when (
+            exception is IOException or UnauthorizedAccessException or NotSupportedException)
+        {
+            throw new ChatRequestException(
+                "conversation_export_failed",
+                "The Markdown file could not be saved.",
+                retryable: true);
+        }
+        return new ConversationExportMarkdownResult(request.ConversationId, messages.Count);
     }
 
     public async Task<ConversationSelectResult> SelectConversationAsync(
@@ -257,6 +374,7 @@ public sealed class ChatCoordinator(
                 cancellation,
                 turnCancellationToken => RunInferenceTurnAsync(
                     projectContextKey,
+                    conversation,
                     request,
                     requestId,
                     peer,
@@ -379,6 +497,7 @@ public sealed class ChatCoordinator(
 
     private async Task RunInferenceTurnAsync(
         string projectContextKey,
+        ConversationSummary conversation,
         SendTurnRequest request,
         Guid requestId,
         IPipePeer peer,
@@ -388,6 +507,7 @@ public sealed class ChatCoordinator(
         CancellationToken cancellationToken)
     {
         await Task.Yield();
+        var timings = new TurnTimingTracker();
         var assistantMessageId = Guid.NewGuid();
         var visibleResponse = new StringBuilder();
         var assistantStored = false;
@@ -427,13 +547,53 @@ public sealed class ChatCoordinator(
                 projectContextKey,
                 userMessage,
                 cancellationToken).ConfigureAwait(false);
+            if (IsDefaultConversationTitle(conversation.Title) &&
+                !persistedHistory.Any(message =>
+                    string.Equals(message.Message.Role, "user", StringComparison.Ordinal)))
+            {
+                ConversationSummary? titledConversation = null;
+                try
+                {
+                    titledConversation = await conversationStore.UpdateTitleAsync(
+                        projectContextKey,
+                        request.ConversationId,
+                        BuildAutomaticConversationTitle(userText),
+                        cancellationToken).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    throw;
+                }
+                catch (Exception)
+                {
+                    // Title generation is a convenience; a failed metadata
+                    // update must not discard an otherwise valid chat turn.
+                }
+                if (titledConversation is not null)
+                {
+                    await peer.SendEventAsync(
+                        requestId,
+                        "conversationUpdated",
+                        new ConversationUpdatedEvent(request.TurnId, titledConversation),
+                        cancellationToken).ConfigureAwait(false);
+                }
+            }
             await peer.SendEventAsync(
                 requestId,
                 "messageAdded",
                 new MessageAddedEvent(request.TurnId, userMessage),
                 cancellationToken).ConfigureAwait(false);
-            var runtimeStatus = await inferenceRuntime.GetStatusAsync(
-                cancellationToken).ConfigureAwait(false);
+            ChatInferenceRuntimeStatus runtimeStatus;
+            var runtimeSetupTimer = Stopwatch.StartNew();
+            try
+            {
+                runtimeStatus = await inferenceRuntime.GetStatusAsync(
+                    cancellationToken).ConfigureAwait(false);
+            }
+            finally
+            {
+                timings.AddRuntimeSetup(runtimeSetupTimer.ElapsedMilliseconds);
+            }
             if (!IsSafeRuntimeToken(
                     runtimeStatus.RuntimeId,
                     ChatInferenceLimits.MaximumRuntimeIdentifierCharacters) ||
@@ -477,20 +637,85 @@ public sealed class ChatCoordinator(
             var removableHistoryMessages = continuationHistory.Count;
             continuationHistory.Add(new ChatInferenceMessage(ChatInferenceRole.User, userText));
             var toolState = new ToolTurnState();
-            var inferenceRequest = new ChatInferenceRequest(
-                request.ConversationId,
-                projectContextKey,
-                inferenceHistory,
-                userText,
-                offeredTools,
-                AllowToolCalls: allowToolCalls);
+            ChatInferenceRequest inferenceRequest;
+            if (toolsAvailable &&
+                mcpClient is not null &&
+                mcpTools.TryGetValue(DirectDiagnosticsToolName, out var diagnosticsTool) &&
+                diagnosticsTool.IsReadOnly &&
+                RequestsExplicitDiagnosticsInvocation(userText))
+            {
+                var directCall = new ChatInferenceToolCall(
+                    $"direct-{Guid.NewGuid():N}",
+                    DirectDiagnosticsToolName,
+                    "{}");
+                var preparedCall = PrepareToolBatch([directCall], mcpTools, toolState).Single();
+                toolState.ToolRounds = 1;
+                toolState.ToolCalls = 1;
+                continuationHistory.Add(new ChatInferenceMessage(
+                    ChatInferenceRole.Assistant,
+                    string.Empty,
+                    ToolCalls: [directCall]));
+
+                ChatInferenceMessage toolResult;
+                var toolTimer = Stopwatch.StartNew();
+                try
+                {
+                    toolResult = await ExecuteToolCallAsync(
+                        request.TurnId,
+                        requestId,
+                        peer,
+                        mcpClient,
+                        preparedCall,
+                        toolState,
+                        cancellationToken).ConfigureAwait(false);
+                }
+                finally
+                {
+                    timings.AddTool(toolTimer.ElapsedMilliseconds);
+                }
+                continuationHistory.Add(toolResult);
+                removableHistoryMessages = TrimContinuationHistory(
+                    continuationHistory,
+                    removableHistoryMessages);
+                allowToolCalls = false;
+                inferenceRequest = new ChatInferenceRequest(
+                    request.ConversationId,
+                    projectContextKey,
+                    continuationHistory.ToArray(),
+                    string.Empty,
+                    offeredTools,
+                    AppendUserMessage: false,
+                    AllowToolCalls: false);
+            }
+            else
+            {
+                inferenceRequest = new ChatInferenceRequest(
+                    request.ConversationId,
+                    projectContextKey,
+                    inferenceHistory,
+                    userText,
+                    offeredTools,
+                    AllowToolCalls: allowToolCalls);
+            }
 
             while (true)
             {
-                var round = await ReadInferenceRoundAsync(
-                    inferenceRequest,
-                    !allowToolCalls ? EmitVisibleTextAsync : null,
-                    cancellationToken).ConfigureAwait(false);
+                InferenceRound round;
+                var initialInference = toolState.ToolCalls == 0 && timings.InferenceRounds == 0;
+                var inferenceTimer = Stopwatch.StartNew();
+                try
+                {
+                    round = await ReadInferenceRoundAsync(
+                        inferenceRequest,
+                        !allowToolCalls ? EmitVisibleTextAsync : null,
+                        cancellationToken).ConfigureAwait(false);
+                }
+                finally
+                {
+                    timings.AddInference(
+                        initialInference,
+                        inferenceTimer.ElapsedMilliseconds);
+                }
                 if (round.ToolCalls is null)
                 {
                     if (round.TextChunks.Count == 0)
@@ -540,14 +765,23 @@ public sealed class ChatCoordinator(
 
                 foreach (var preparedCall in preparedCalls)
                 {
-                    var toolResult = await ExecuteToolCallAsync(
-                        request.TurnId,
-                        requestId,
-                        peer,
-                        mcpClient,
-                        preparedCall,
-                        toolState,
-                        cancellationToken).ConfigureAwait(false);
+                    ChatInferenceMessage toolResult;
+                    var toolTimer = Stopwatch.StartNew();
+                    try
+                    {
+                        toolResult = await ExecuteToolCallAsync(
+                            request.TurnId,
+                            requestId,
+                            peer,
+                            mcpClient,
+                            preparedCall,
+                            toolState,
+                            cancellationToken).ConfigureAwait(false);
+                    }
+                    finally
+                    {
+                        timings.AddTool(toolTimer.ElapsedMilliseconds);
+                    }
                     continuationHistory.Add(toolResult);
                 }
 
@@ -586,7 +820,7 @@ public sealed class ChatCoordinator(
             await peer.SendEventAsync(
                 requestId,
                 "completed",
-                new TurnCompletedEvent(request.TurnId, "completed"),
+                timings.Completion(request.TurnId, "completed"),
                 cancellationToken).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -620,7 +854,7 @@ public sealed class ChatCoordinator(
                 peer,
                 requestId,
                 "completed",
-                new TurnCompletedEvent(request.TurnId, "cancelled")).ConfigureAwait(false);
+                timings.Completion(request.TurnId, "cancelled")).ConfigureAwait(false);
         }
         catch (ChatInferenceException exception)
         {
@@ -628,12 +862,12 @@ public sealed class ChatCoordinator(
                 peer,
                 requestId,
                 "error",
-                BuildPublicInferenceError(request.TurnId, exception)).ConfigureAwait(false);
+                BuildPublicInferenceError(request.TurnId, exception, timings)).ConfigureAwait(false);
             await SendWithoutTurnCancellationAsync(
                 peer,
                 requestId,
                 "completed",
-                new TurnCompletedEvent(request.TurnId, "failed")).ConfigureAwait(false);
+                timings.Completion(request.TurnId, "failed")).ConfigureAwait(false);
         }
         catch (Exception)
         {
@@ -641,12 +875,15 @@ public sealed class ChatCoordinator(
                 peer,
                 requestId,
                 "error",
-                new ErrorEvent(request.TurnId, "turn_failed", "The local chat turn failed.")).ConfigureAwait(false);
+                timings.Error(
+                    request.TurnId,
+                    "turn_failed",
+                    "The local chat turn failed.")).ConfigureAwait(false);
             await SendWithoutTurnCancellationAsync(
                 peer,
                 requestId,
                 "completed",
-                new TurnCompletedEvent(request.TurnId, "failed")).ConfigureAwait(false);
+                timings.Completion(request.TurnId, "failed")).ConfigureAwait(false);
         }
     }
 
@@ -1218,6 +1455,47 @@ public sealed class ChatCoordinator(
         value.Length <= maximumCharacters &&
         !value.Any(char.IsControl);
 
+    private static bool RequestsExplicitDiagnosticsInvocation(string userText)
+    {
+        if (string.IsNullOrWhiteSpace(userText)) return false;
+
+        var trimmed = userText.TrimStart();
+        if (!trimmed.StartsWith(DirectDiagnosticsToolName, StringComparison.Ordinal))
+            return false;
+        if (trimmed.Length > DirectDiagnosticsToolName.Length)
+        {
+            var next = trimmed[DirectDiagnosticsToolName.Length];
+            if ((next >= 'a' && next <= 'z') ||
+                (next >= 'A' && next <= 'Z') ||
+                (next >= '0' && next <= '9') ||
+                next is '_' or '.')
+            {
+                return false;
+            }
+        }
+
+        var lower = trimmed.ToLowerInvariant();
+        if (trimmed.Contains("実行しない", StringComparison.Ordinal) ||
+            trimmed.Contains("実行せず", StringComparison.Ordinal) ||
+            trimmed.Contains("呼び出さない", StringComparison.Ordinal) ||
+            trimmed.Contains("取得しない", StringComparison.Ordinal) ||
+            lower.Contains("do not ", StringComparison.Ordinal) ||
+            lower.Contains("don't ", StringComparison.Ordinal) ||
+            lower.Contains("without running", StringComparison.Ordinal) ||
+            lower.Contains("without calling", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        return trimmed.Contains("実行", StringComparison.Ordinal) ||
+            trimmed.Contains("呼び出", StringComparison.Ordinal) ||
+            trimmed.Contains("取得", StringComparison.Ordinal) ||
+            lower.Contains("run", StringComparison.Ordinal) ||
+            lower.Contains("execute", StringComparison.Ordinal) ||
+            lower.Contains("call", StringComparison.Ordinal) ||
+            lower.Contains("invoke", StringComparison.Ordinal);
+    }
+
     private static bool IsApprovalSessionExpired(string? code) =>
         string.Equals(code, "approval_session_expired", StringComparison.Ordinal) ||
         string.Equals(code, "session_expired", StringComparison.Ordinal);
@@ -1228,7 +1506,10 @@ public sealed class ChatCoordinator(
 
     private static ErrorEvent BuildPublicInferenceError(
         Guid turnId,
-        ChatInferenceException exception) => exception.Code switch
+        ChatInferenceException exception,
+        TurnTimingTracker timings)
+    {
+        var publicError = exception.Code switch
         {
             "invalid_inference_status" => new ErrorEvent(
                 turnId,
@@ -1266,11 +1547,37 @@ public sealed class ChatCoordinator(
                 turnId,
                 "tool_context_too_large",
                 "The local tool context exceeded the supported size."),
+            "inference_stream_timeout" => new ErrorEvent(
+                turnId,
+                "inference_stream_timeout",
+                "The local model did not produce stream output before the timeout."),
+            "inference_http_error" => new ErrorEvent(
+                turnId,
+                "inference_http_error",
+                "The local inference server rejected the request."),
+            "inference_transport_failed" => new ErrorEvent(
+                turnId,
+                "inference_transport_failed",
+                "The local inference server could not be reached."),
+            "inference_stream_failed" => new ErrorEvent(
+                turnId,
+                "inference_stream_failed",
+                "The local inference response stream failed."),
+            "inference_stream_truncated" => new ErrorEvent(
+                turnId,
+                "inference_stream_truncated",
+                "The local inference response ended before completion."),
+            "inference_session_failed" => new ErrorEvent(
+                turnId,
+                "inference_session_failed",
+                "The local inference session is unavailable."),
             _ => new ErrorEvent(
                 turnId,
                 "inference_runtime_failed",
                 "The local inference runtime failed."),
         };
+        return timings.WithTiming(publicError);
+    }
 
     private static bool IsSafeRuntimeToken(string? value, int maximumCharacters)
     {
@@ -1378,6 +1685,146 @@ public sealed class ChatCoordinator(
             foreach (var item in value.EnumerateArray())
                 EnsureNoDuplicateJsonProperties(item);
         }
+    }
+
+    private async Task<IReadOnlyList<ConversationSummary>> EnsureConversationTitlesAsync(
+        string projectContextKey,
+        IReadOnlyList<ConversationSummary> conversations,
+        CancellationToken cancellationToken)
+    {
+        var result = conversations.ToArray();
+        for (var index = 0; index < result.Length; index++)
+        {
+            if (!IsDefaultConversationTitle(result[index].Title)) continue;
+            try
+            {
+                var messages = await conversationStore.GetMessagesAsync(
+                    projectContextKey,
+                    result[index].Id,
+                    cancellationToken).ConfigureAwait(false);
+                var firstUserMessage = messages.FirstOrDefault(message =>
+                    !message.IsError &&
+                    string.Equals(message.Role, "user", StringComparison.Ordinal) &&
+                    !string.IsNullOrWhiteSpace(message.Content));
+                if (firstUserMessage is null) continue;
+                result[index] = await conversationStore.UpdateTitleAsync(
+                    projectContextKey,
+                    result[index].Id,
+                    BuildAutomaticConversationTitle(firstUserMessage.Content),
+                    cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception)
+            {
+                // Old histories remain usable even if a best-effort title
+                // backfill cannot update their metadata.
+            }
+        }
+        return result;
+    }
+
+    private static bool IsDefaultConversationTitle(string? title) =>
+        string.IsNullOrWhiteSpace(title) ||
+        string.Equals(title.Trim(), DefaultConversationTitle, StringComparison.Ordinal) ||
+        string.Equals(title.Trim(), "New chat", StringComparison.OrdinalIgnoreCase);
+
+    private static string BuildAutomaticConversationTitle(string text)
+    {
+        var normalized = new StringBuilder(Math.Min(text.Length, MaximumAutomaticTitleCharacters * 2));
+        var pendingSpace = false;
+        foreach (var character in text.Trim())
+        {
+            if (char.IsWhiteSpace(character))
+            {
+                pendingSpace = normalized.Length != 0;
+                continue;
+            }
+            if (character is '。' or '！' or '？' or '!' or '?') break;
+            if (pendingSpace)
+            {
+                normalized.Append(' ');
+                pendingSpace = false;
+            }
+            normalized.Append(character);
+        }
+
+        var title = normalized.ToString().Trim(' ', '#', '-', '*', '`', '"', '\'');
+        if (string.IsNullOrWhiteSpace(title)) return DefaultConversationTitle;
+        if (title.Length <= MaximumAutomaticTitleCharacters) return title;
+
+        var length = MaximumAutomaticTitleCharacters - 1;
+        if (length > 0 && char.IsHighSurrogate(title[length - 1])) length--;
+        var shortened = title[..length].TrimEnd();
+        var lastSpace = shortened.LastIndexOf(' ');
+        if (lastSpace >= MaximumAutomaticTitleCharacters / 2)
+            shortened = shortened[..lastSpace].TrimEnd();
+        return shortened + "…";
+    }
+
+    private static string BuildConversationMarkdown(
+        ConversationSummary conversation,
+        IReadOnlyList<ConversationMessage> messages)
+    {
+        var markdown = new StringBuilder();
+        markdown.Append("# ").AppendLine(CollapseMarkdownHeading(conversation.Title));
+        markdown.AppendLine();
+        markdown.Append("- Created: ").AppendLine(
+            conversation.CreatedAt.ToString("yyyy-MM-dd HH:mm:ss zzz", CultureInfo.InvariantCulture));
+        markdown.Append("- Updated: ").AppendLine(
+            conversation.UpdatedAt.ToString("yyyy-MM-dd HH:mm:ss zzz", CultureInfo.InvariantCulture));
+        markdown.Append("- Messages: ").AppendLine(
+            messages.Count.ToString(CultureInfo.InvariantCulture));
+        markdown.AppendLine();
+        markdown.AppendLine("---");
+        markdown.AppendLine();
+        foreach (var message in messages)
+        {
+            var role = message.IsError
+                ? "Error"
+                : message.Role switch
+                {
+                    "user" => "You",
+                    "assistant" => "AI Assistant",
+                    "system" => "System",
+                    _ => "Message",
+                };
+            markdown.Append("## ").AppendLine(role);
+            markdown.AppendLine();
+            var content = message.Content
+                .Replace("\r\n", "\n", StringComparison.Ordinal)
+                .Replace('\r', '\n')
+                .Trim();
+            markdown.AppendLine(string.IsNullOrEmpty(content) ? "_Empty message_" : content);
+            markdown.AppendLine();
+            markdown.AppendLine("---");
+            markdown.AppendLine();
+        }
+        return markdown.ToString();
+    }
+
+    private static string CollapseMarkdownHeading(string title)
+    {
+        var normalized = new StringBuilder(title.Length);
+        var pendingSpace = false;
+        foreach (var character in title)
+        {
+            if (char.IsWhiteSpace(character))
+            {
+                pendingSpace = normalized.Length != 0;
+                continue;
+            }
+            if (pendingSpace)
+            {
+                normalized.Append(' ');
+                pendingSpace = false;
+            }
+            if (character is '#' or '\\') normalized.Append('\\');
+            normalized.Append(character);
+        }
+        return normalized.Length == 0 ? DefaultConversationTitle : normalized.ToString();
     }
 
     private static IReadOnlyList<ChatInferenceMessage> BuildInferenceHistory(
@@ -1657,6 +2104,70 @@ public sealed class ChatCoordinator(
         IReadOnlyList<string> TextChunks,
         IReadOnlyList<ChatInferenceToolCall>? ToolCalls,
         bool TextWasEmitted);
+
+    private sealed class TurnTimingTracker
+    {
+        private readonly Stopwatch _total = Stopwatch.StartNew();
+
+        public long RuntimeSetupMilliseconds { get; private set; }
+        public long InitialInferenceMilliseconds { get; private set; }
+        public long ContinuationInferenceMilliseconds { get; private set; }
+        public long ToolMilliseconds { get; private set; }
+        public int InferenceRounds { get; private set; }
+        public int ToolCalls { get; private set; }
+
+        public void AddRuntimeSetup(long elapsedMilliseconds) =>
+            RuntimeSetupMilliseconds += elapsedMilliseconds;
+
+        public void AddInference(bool initial, long elapsedMilliseconds)
+        {
+            if (initial)
+                InitialInferenceMilliseconds += elapsedMilliseconds;
+            else
+                ContinuationInferenceMilliseconds += elapsedMilliseconds;
+            InferenceRounds++;
+        }
+
+        public void AddTool(long elapsedMilliseconds)
+        {
+            ToolMilliseconds += elapsedMilliseconds;
+            ToolCalls++;
+        }
+
+        public TurnCompletedEvent Completion(Guid turnId, string status) => new(
+            turnId,
+            status,
+            _total.ElapsedMilliseconds,
+            RuntimeSetupMilliseconds,
+            InitialInferenceMilliseconds,
+            ContinuationInferenceMilliseconds,
+            ToolMilliseconds,
+            InferenceRounds,
+            ToolCalls);
+
+        public ErrorEvent Error(Guid? turnId, string code, string message) => new(
+            turnId,
+            code,
+            message,
+            _total.ElapsedMilliseconds,
+            RuntimeSetupMilliseconds,
+            InitialInferenceMilliseconds,
+            ContinuationInferenceMilliseconds,
+            ToolMilliseconds,
+            InferenceRounds,
+            ToolCalls);
+
+        public ErrorEvent WithTiming(ErrorEvent error) => error with
+        {
+            TotalMilliseconds = _total.ElapsedMilliseconds,
+            RuntimeSetupMilliseconds = RuntimeSetupMilliseconds,
+            InitialInferenceMilliseconds = InitialInferenceMilliseconds,
+            ContinuationInferenceMilliseconds = ContinuationInferenceMilliseconds,
+            ToolMilliseconds = ToolMilliseconds,
+            InferenceRounds = InferenceRounds,
+            ToolCalls = ToolCalls,
+        };
+    }
 
     private sealed record PreparedToolCall(
         ChatInferenceToolCall Call,

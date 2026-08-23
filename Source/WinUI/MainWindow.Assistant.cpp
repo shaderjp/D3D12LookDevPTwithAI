@@ -1,9 +1,12 @@
 #include "pch.h"
 #include "MainWindow.xaml.h"
+#include "AssistantMarkdownRenderer.h"
 
 #include "Services/AssistantHostBridge.h"
 #include "McpServer.h"
 #include "SimpleJson.h"
+
+#include <shobjidl.h>
 
 #include <cwctype>
 #include <filesystem>
@@ -12,6 +15,8 @@
 
 using namespace winrt;
 using namespace winrt::Windows::Foundation;
+using namespace winrt::Windows::Storage;
+using namespace winrt::Windows::Storage::Pickers;
 using namespace winrt::Windows::System;
 using namespace winrt::Windows::UI;
 using namespace winrt::Microsoft::UI::Xaml;
@@ -85,6 +90,31 @@ std::wstring Utf8ToWide(std::string_view value)
         return L"Invalid text received from the local assistant.";
     }
     return result;
+}
+
+std::wstring AssistantMarkdownFileName(std::wstring title)
+{
+    constexpr std::wstring_view Invalid = L"<>:\"/\\|?*";
+    for (wchar_t& character : title)
+    {
+        if (std::iswcntrl(character) || Invalid.find(character) != std::wstring_view::npos)
+        {
+            character = L'_';
+        }
+    }
+    while (!title.empty() && (std::iswspace(title.back()) || title.back() == L'.'))
+    {
+        title.pop_back();
+    }
+    if (title.size() > 80)
+    {
+        title.resize(80);
+        if (!title.empty() && IS_HIGH_SURROGATE(title.back()))
+        {
+            title.pop_back();
+        }
+    }
+    return title.empty() ? L"lookdev-chat" : title;
 }
 
 std::wstring Trim(std::wstring value)
@@ -390,7 +420,53 @@ std::wstring DisplayRole(std::string const& role, bool isError)
     return L"AI Assistant";
 }
 
-TextBlock AddTranscriptCard(
+struct AssistantTranscriptBody
+{
+    Border card{ nullptr };
+    RichTextBlock body{ nullptr };
+    std::wstring content;
+    bool renderMarkdown = false;
+    bool renderPending = false;
+    std::chrono::steady_clock::time_point lastRender{};
+};
+
+void RenderTranscriptContent(AssistantTranscriptBody& entry)
+{
+    if (entry.renderMarkdown)
+    {
+        lookdevpt::ui::RenderAssistantMarkdown(entry.body, entry.content);
+    }
+    else
+    {
+        lookdevpt::ui::RenderAssistantPlainText(entry.body, entry.content);
+    }
+    entry.renderPending = false;
+    entry.lastRender = std::chrono::steady_clock::now();
+}
+
+void SetTranscriptContent(
+    AssistantTranscriptBody& entry,
+    std::wstring const& content)
+{
+    entry.content = content;
+    RenderTranscriptContent(entry);
+}
+
+void AppendTranscriptContent(
+    AssistantTranscriptBody& entry,
+    std::wstring_view delta)
+{
+    entry.content.append(delta);
+    entry.renderPending = true;
+    constexpr auto MinimumRenderInterval = std::chrono::milliseconds(33);
+    if (std::chrono::steady_clock::now() - entry.lastRender >=
+        MinimumRenderInterval)
+    {
+        RenderTranscriptContent(entry);
+    }
+}
+
+std::shared_ptr<AssistantTranscriptBody> AddTranscriptCard(
     ListView const& transcript,
     std::wstring const& role,
     std::wstring const& content,
@@ -413,16 +489,21 @@ TextBlock AddTranscriptCard(
     TextBlock heading;
     heading.Text(role);
     heading.Opacity(0.72);
-    TextBlock body;
-    body.Text(content);
+    RichTextBlock body;
     body.TextWrapping(TextWrapping::Wrap);
     body.IsTextSelectionEnabled(true);
+    body.HorizontalAlignment(HorizontalAlignment::Stretch);
     panel.Children().Append(heading);
     panel.Children().Append(body);
     card.Child(panel);
     transcript.Items().Append(card);
     transcript.ScrollIntoView(card);
-    return body;
+    auto entry = std::make_shared<AssistantTranscriptBody>();
+    entry->card = card;
+    entry->body = body;
+    entry->renderMarkdown = !isError && role == L"AI Assistant";
+    SetTranscriptContent(*entry, content);
+    return entry;
 }
 
 std::wstring QuickPrompt(std::wstring const& identifier)
@@ -500,10 +581,14 @@ struct AssistantUiState
     std::string pendingCreateRequestId;
     std::string pendingConversationId;
     std::string pendingConversationRequestId;
+    std::string pendingResetRequestId;
+    std::string pendingExportRequestId;
     std::string modelSetupRequestId;
     std::string activeTurnId;
     std::vector<std::string> conversationIds;
-    std::unordered_map<std::string, TextBlock> messageBodies;
+    std::unordered_map<
+        std::string,
+        std::shared_ptr<AssistantTranscriptBody>> messageBodies;
     std::unordered_map<
         std::string,
         std::shared_ptr<AssistantApprovalUiEntry>> approvals;
@@ -621,9 +706,14 @@ void MarkAssistantCancellationRequested(AssistantUiState& state) noexcept
 
 void FinishAssistantTurnUi(
     AssistantUiState& state,
+    lookdevpt::winui::RendererController* controller,
     std::wstring const& approvalStatus,
     std::wstring const& interruptedStatus) noexcept
 {
+    if (controller)
+    {
+        controller->SetAssistantInferenceActive(false);
+    }
     CloseAssistantApprovals(state, approvalStatus, true);
     for (auto const& [toolCallId, entry] : state.toolCards)
     {
@@ -645,6 +735,56 @@ void FinishAssistantTurnUi(
     state.approvalByToolCallId.clear();
     state.toolCards.clear();
     state.cancelRequested = false;
+}
+
+std::wstring FormatAssistantDuration(double milliseconds)
+{
+    std::wostringstream text;
+    if (milliseconds >= 1000.0)
+    {
+        text << std::fixed << std::setprecision(1)
+             << milliseconds / 1000.0 << L" s";
+    }
+    else
+    {
+        text << static_cast<unsigned long long>(
+            (std::max)(milliseconds, 0.0) + 0.5) << L" ms";
+    }
+    return text.str();
+}
+
+std::wstring FormatAssistantTurnTiming(const cld::JsonValue& payload)
+{
+    const double total = cld::JsonNumberOr(
+        payload, "totalMilliseconds", 0.0);
+    if (total <= 0.0)
+    {
+        return {};
+    }
+
+    const double runtime = cld::JsonNumberOr(
+        payload, "runtimeSetupMilliseconds", 0.0);
+    const double initial = cld::JsonNumberOr(
+        payload, "initialInferenceMilliseconds", 0.0);
+    const double continuation = cld::JsonNumberOr(
+        payload, "continuationInferenceMilliseconds", 0.0);
+    const double tools = cld::JsonNumberOr(
+        payload, "toolMilliseconds", 0.0);
+
+    std::wstring summary = L"Last AI turn: " +
+        FormatAssistantDuration(total) + L" total · runtime " +
+        FormatAssistantDuration(runtime) + L" · model " +
+        FormatAssistantDuration(initial + continuation);
+    if (continuation > 0.0)
+    {
+        summary += L" (initial " + FormatAssistantDuration(initial) +
+            L" + after tools " + FormatAssistantDuration(continuation) + L")";
+    }
+    if (tools > 0.0)
+    {
+        summary += L" · tools " + FormatAssistantDuration(tools);
+    }
+    return summary;
 }
 
 std::shared_ptr<AssistantToolUiEntry> EnsureAssistantToolCard(
@@ -749,7 +889,9 @@ void MainWindow::UpdateAssistantInteractionState()
     const bool ready = state && state->connected && state->initialized;
     const bool requestPending = state &&
         (!state->pendingCreateRequestId.empty() ||
-         !state->pendingConversationRequestId.empty());
+         !state->pendingConversationRequestId.empty() ||
+         !state->pendingResetRequestId.empty() ||
+         !state->pendingExportRequestId.empty());
     const bool setupActive = state && state->modelSetupActive;
     const bool turnActive = state && state->turnActive;
     const bool idle = ready && !state->turnActive && !requestPending &&
@@ -757,6 +899,8 @@ void MainWindow::UpdateAssistantInteractionState()
     const bool canSend = idle && !state->activeConversationId.empty();
     AiConversationCombo().IsEnabled(idle);
     AiNewConversationButton().IsEnabled(idle);
+    AiResetConversationButton().IsEnabled(canSend);
+    AiSaveConversationButton().IsEnabled(canSend);
     AiSendButton().IsEnabled(canSend);
     AiModelCombo().IsEnabled(idle);
     AiBackendCombo().IsEnabled(idle);
@@ -932,6 +1076,7 @@ void MainWindow::StopAssistant() noexcept
     }
     FinishAssistantTurnUi(
         *state,
+        m_controller.get(),
         L"Assistant stopped · approval closed.",
         L"Assistant stopped before the tool outcome was received.");
     if (state->initialized && state->connected && state->bridge)
@@ -1075,6 +1220,7 @@ void MainWindow::HandleAssistantHostState(
     case State::Failed:
         FinishAssistantTurnUi(
             *m_assistant,
+            m_controller.get(),
             L"Assistant disconnected · approval closed.",
             L"Assistant disconnected before the tool outcome was received.");
         m_assistant->connected = false;
@@ -1085,6 +1231,8 @@ void MainWindow::HandleAssistantHostState(
         m_assistant->pendingCreateRequestId.clear();
         m_assistant->pendingConversationId.clear();
         m_assistant->pendingConversationRequestId.clear();
+        m_assistant->pendingResetRequestId.clear();
+        m_assistant->pendingExportRequestId.clear();
         m_assistant->modelSetupRequestId.clear();
         m_assistant->modelSetupActive = false;
         AiSetupProgress().Visibility(Visibility::Collapsed);
@@ -1100,6 +1248,7 @@ void MainWindow::HandleAssistantHostState(
     case State::Stopped:
         FinishAssistantTurnUi(
             *m_assistant,
+            m_controller.get(),
             L"Assistant stopped · approval closed.",
             L"Assistant stopped before the tool outcome was received.");
         m_assistant->connected = false;
@@ -1110,6 +1259,8 @@ void MainWindow::HandleAssistantHostState(
         m_assistant->pendingCreateRequestId.clear();
         m_assistant->pendingConversationId.clear();
         m_assistant->pendingConversationRequestId.clear();
+        m_assistant->pendingResetRequestId.clear();
+        m_assistant->pendingExportRequestId.clear();
         m_assistant->modelSetupRequestId.clear();
         m_assistant->modelSetupActive = false;
         AiSetupProgress().Visibility(Visibility::Collapsed);
@@ -1258,6 +1409,18 @@ void MainWindow::HandleAssistantEvent(
             // during initialization. Do not paint that stale response.
             return;
         }
+        if (method == "conversation.reset" &&
+            (state->pendingResetRequestId.empty() ||
+             event.requestId != state->pendingResetRequestId))
+        {
+            return;
+        }
+        if (method == "conversation.exportMarkdown" &&
+            (state->pendingExportRequestId.empty() ||
+             event.requestId != state->pendingExportRequestId))
+        {
+            return;
+        }
         if (method == "modelSetup.start" &&
             (state->modelSetupRequestId.empty() ||
              event.requestId != state->modelSetupRequestId))
@@ -1284,6 +1447,7 @@ void MainWindow::HandleAssistantEvent(
             {
                 FinishAssistantTurnUi(
                     *state,
+                    m_controller.get(),
                     L"Turn rejected · approval closed.",
                     L"The turn was rejected before the tool outcome was received.");
                 state->turnActive = false;
@@ -1300,6 +1464,16 @@ void MainWindow::HandleAssistantEvent(
             if (method == "conversation.create")
             {
                 state->pendingCreateRequestId.clear();
+            }
+            if (method == "conversation.reset")
+            {
+                state->pendingResetRequestId.clear();
+                AiRuntimeStatusText().Text(L"Chat history could not be reset.");
+            }
+            if (method == "conversation.exportMarkdown")
+            {
+                state->pendingExportRequestId.clear();
+                AiRuntimeStatusText().Text(L"The Markdown chat could not be saved.");
             }
             if (method == "modelSetup.start")
             {
@@ -1483,6 +1657,58 @@ void MainWindow::HandleAssistantEvent(
             return;
         }
 
+        if (method == "conversation.reset")
+        {
+            state->pendingResetRequestId.clear();
+            const cld::JsonValue* conversation =
+                ObjectMember(*payload, "conversation");
+            const std::string id = conversation
+                ? cld::JsonStringOr(*conversation, "id")
+                : std::string{};
+            if (id.empty() || id != state->activeConversationId)
+            {
+                AddTranscriptCard(
+                    AiTranscriptList(),
+                    L"Error",
+                    L"The reset conversation response was invalid.",
+                    true);
+                UpdateAssistantInteractionState();
+                return;
+            }
+            const auto found = std::find(
+                state->conversationIds.begin(),
+                state->conversationIds.end(),
+                id);
+            if (found != state->conversationIds.end())
+            {
+                const auto index = static_cast<std::uint32_t>(
+                    std::distance(state->conversationIds.begin(), found));
+                AiConversationCombo().Items().SetAt(
+                    index,
+                    box_value(to_hstring(cld::JsonStringOr(
+                        *conversation, "title", "New chat"))));
+            }
+            AiTranscriptList().Items().Clear();
+            state->messageBodies.clear();
+            AiRuntimeStatusText().Text(L"Selected chat history was reset.");
+            UpdateAssistantInteractionState();
+            return;
+        }
+
+        if (method == "conversation.exportMarkdown")
+        {
+            state->pendingExportRequestId.clear();
+            const auto messageCount = static_cast<unsigned long long>(
+                (std::max)(0.0, cld::JsonNumberOr(
+                    *payload, "messageCount", 0.0)));
+            std::wostringstream status;
+            status << L"Saved " << messageCount
+                   << L" chat messages as Markdown.";
+            AiRuntimeStatusText().Text(status.str());
+            UpdateAssistantInteractionState();
+            return;
+        }
+
         if (method == "conversation.select")
         {
             std::string selectedConversationId;
@@ -1533,7 +1759,7 @@ void MainWindow::HandleAssistantEvent(
                         cld::JsonStringOr(message, "role", "assistant");
                     const bool isError =
                         cld::JsonBoolOr(message, "isError", false);
-                    TextBlock body = AddTranscriptCard(
+                    auto body = AddTranscriptCard(
                         AiTranscriptList(),
                         DisplayRole(role, isError),
                         Utf8ToWide(cld::JsonStringOr(
@@ -1568,6 +1794,37 @@ void MainWindow::HandleAssistantEvent(
 
     if (kind != "event")
     {
+        return;
+    }
+    if (method == "conversationUpdated")
+    {
+        const std::string turnId = cld::JsonStringOr(*payload, "turnId");
+        const cld::JsonValue* conversation =
+            ObjectMember(*payload, "conversation");
+        if (!conversation ||
+            state->activeTurnId.empty() ||
+            turnId != state->activeTurnId)
+        {
+            return;
+        }
+        const std::string id = cld::JsonStringOr(*conversation, "id");
+        if (id.empty() || id != state->activeConversationId)
+        {
+            return;
+        }
+        const auto found = std::find(
+            state->conversationIds.begin(),
+            state->conversationIds.end(),
+            id);
+        if (found != state->conversationIds.end())
+        {
+            const auto index = static_cast<std::uint32_t>(
+                std::distance(state->conversationIds.begin(), found));
+            AiConversationCombo().Items().SetAt(
+                index,
+                box_value(to_hstring(cld::JsonStringOr(
+                    *conversation, "title", "New chat"))));
+        }
         return;
     }
     if (method == "modelSetupProgress")
@@ -1707,11 +1964,11 @@ void MainWindow::HandleAssistantEvent(
         auto found = state->messageBodies.find(id);
         if (found != state->messageBodies.end())
         {
-            found->second.Text(content);
+            SetTranscriptContent(*found->second, content);
         }
         else
         {
-            TextBlock body = AddTranscriptCard(
+            auto body = AddTranscriptCard(
                 AiTranscriptList(),
                 DisplayRole(role, isError),
                 content,
@@ -1740,7 +1997,7 @@ void MainWindow::HandleAssistantEvent(
         auto found = state->messageBodies.find(id);
         if (found == state->messageBodies.end())
         {
-            TextBlock body = AddTranscriptCard(
+            auto body = AddTranscriptCard(
                 AiTranscriptList(), L"AI Assistant", delta);
             if (!id.empty())
             {
@@ -1749,11 +2006,8 @@ void MainWindow::HandleAssistantEvent(
         }
         else
         {
-            found->second.Text(found->second.Text() + delta);
-            if (auto parent = found->second.Parent())
-            {
-                AiTranscriptList().ScrollIntoView(parent);
-            }
+            AppendTranscriptContent(*found->second, delta);
+            AiTranscriptList().ScrollIntoView(found->second->card);
         }
         return;
     }
@@ -1974,10 +2228,24 @@ void MainWindow::HandleAssistantEvent(
         if (!state->activeTurnId.empty() &&
             turnId == state->activeTurnId)
         {
+            for (auto const& [messageId, body] : state->messageBodies)
+            {
+                (void)messageId;
+                if (body && body->renderPending)
+                {
+                    RenderTranscriptContent(*body);
+                }
+            }
             const std::string turnStatus =
                 cld::JsonStringOr(*payload, "status", "completed");
+            const std::wstring timing = FormatAssistantTurnTiming(*payload);
+            if (!timing.empty())
+            {
+                AiRuntimeStatusText().Text(timing);
+            }
             FinishAssistantTurnUi(
                 *state,
+                m_controller.get(),
                 turnStatus == "cancelled"
                     ? L"Turn cancelled · approval closed."
                     : L"Turn ended · approval closed.",
@@ -2008,8 +2276,14 @@ void MainWindow::HandleAssistantEvent(
         AddTranscriptCard(
             AiTranscriptList(), L"Error",
             code + L": " + message, true);
+        const std::wstring timing = FormatAssistantTurnTiming(*payload);
+        if (!timing.empty())
+        {
+            AiRuntimeStatusText().Text(L"AI turn failed · " + timing);
+        }
         FinishAssistantTurnUi(
             *state,
+            m_controller.get(),
             L"Turn failed · approval closed.",
             L"The turn failed before the tool outcome was received.");
         state->turnActive = false;
@@ -2321,6 +2595,10 @@ void MainWindow::SendAssistantTurn(
     state->activeTurnId = turnId;
     state->turnActive = true;
     state->cancelRequested = false;
+    if (m_controller)
+    {
+        m_controller->SetAssistantInferenceActive(true);
+    }
     AiThinkingStatusText().Text(L"Starting the local model\u2026");
     AiPromptBox().Text(L"");
     UpdateAssistantInteractionState();
@@ -2441,6 +2719,118 @@ void MainWindow::OnAiNewConversationClick(
             state->pendingCreateRequestId = std::move(requestId);
             UpdateAssistantInteractionState();
         }
+    }
+}
+
+void MainWindow::OnAiResetConversationClick(
+    IInspectable const&,
+    RoutedEventArgs const&)
+{
+    ConfirmResetAssistantConversation();
+}
+
+void MainWindow::OnAiSaveConversationClick(
+    IInspectable const&,
+    RoutedEventArgs const&)
+{
+    SaveAssistantConversationMarkdown();
+}
+
+IAsyncAction MainWindow::ConfirmResetAssistantConversation()
+{
+    auto lifetime = get_strong();
+    auto state = m_assistant;
+    if (!state || !state->initialized || state->turnActive ||
+        state->activeConversationId.empty() ||
+        !state->pendingResetRequestId.empty() ||
+        !state->pendingExportRequestId.empty())
+    {
+        co_return;
+    }
+    const std::string conversationId = state->activeConversationId;
+
+    ContentDialog dialog;
+    dialog.XamlRoot(EditorRoot().XamlRoot());
+    dialog.Title(box_value(L"Reset this chat history?"));
+    dialog.Content(box_value(
+        L"All messages in the selected chat will be permanently deleted. "
+        L"The chat itself will remain available as a new empty chat."));
+    dialog.PrimaryButtonText(L"Reset History");
+    dialog.CloseButtonText(L"Cancel");
+    dialog.DefaultButton(ContentDialogButton::Close);
+    if (co_await dialog.ShowAsync() != ContentDialogResult::Primary)
+    {
+        co_return;
+    }
+    if (m_closing || m_assistant != state || state->turnActive ||
+        state->activeConversationId != conversationId)
+    {
+        co_return;
+    }
+
+    std::string requestId;
+    if (PostAssistantRequest(
+            "conversation.reset",
+            "{\"conversationId\":\"" +
+                cld::EscapeJson(conversationId) + "\"}",
+            &requestId))
+    {
+        state->pendingResetRequestId = std::move(requestId);
+        AiRuntimeStatusText().Text(L"Resetting the selected chat history…");
+        UpdateAssistantInteractionState();
+    }
+}
+
+IAsyncAction MainWindow::SaveAssistantConversationMarkdown()
+{
+    auto lifetime = get_strong();
+    auto state = m_assistant;
+    if (!state || !state->initialized || state->turnActive ||
+        state->activeConversationId.empty() ||
+        !state->pendingResetRequestId.empty() ||
+        !state->pendingExportRequestId.empty())
+    {
+        co_return;
+    }
+    const std::string conversationId = state->activeConversationId;
+    const hstring selectedTitle = unbox_value_or<hstring>(
+        AiConversationCombo().SelectedItem(), L"lookdev-chat");
+
+    FileSavePicker picker;
+    check_hresult(
+        picker.as<::IInitializeWithWindow>()->Initialize(
+            WindowHandle()));
+    picker.SuggestedStartLocation(PickerLocationId::DocumentsLibrary);
+    picker.FileTypeChoices().Insert(
+        L"Markdown",
+        single_threaded_vector<hstring>({ L".md" }));
+    picker.DefaultFileExtension(L".md");
+    picker.SuggestedFileName(
+        AssistantMarkdownFileName(selectedTitle.c_str()));
+    StorageFile file = co_await picker.PickSaveFileAsync();
+    if (!file || m_closing || m_assistant != state || state->turnActive ||
+        state->activeConversationId != conversationId)
+    {
+        co_return;
+    }
+    const std::string path = WideToUtf8(file.Path().c_str());
+    if (path.empty())
+    {
+        AiRuntimeStatusText().Text(L"The selected Markdown path is unavailable.");
+        co_return;
+    }
+
+    std::string requestId;
+    if (PostAssistantRequest(
+            "conversation.exportMarkdown",
+            "{\"conversationId\":\"" +
+                cld::EscapeJson(conversationId) +
+                "\",\"path\":\"" + cld::EscapeJson(path) + "\"}",
+            &requestId))
+    {
+        state->pendingExportRequestId = std::move(requestId);
+        AiRuntimeStatusText().Text(L"Saving the selected chat as Markdown…");
+        UpdateAssistantInteractionState();
     }
 }
 

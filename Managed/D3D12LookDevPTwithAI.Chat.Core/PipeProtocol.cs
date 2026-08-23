@@ -197,6 +197,14 @@ public sealed record ConversationListResult(
 
 public sealed record ConversationCreateRequest(string? Title = null);
 public sealed record ConversationCreateResult(ConversationSummary Conversation);
+public sealed record ConversationResetRequest(Guid ConversationId);
+public sealed record ConversationResetResult(ConversationSummary Conversation);
+public sealed record ConversationExportMarkdownRequest(
+    Guid ConversationId,
+    string Path);
+public sealed record ConversationExportMarkdownResult(
+    Guid ConversationId,
+    int MessageCount);
 public sealed record ConversationSelectRequest(
     Guid ConversationId,
     long? BeforeMessageSequence = null,
@@ -226,6 +234,9 @@ public sealed record RuntimeStateEvent(
     string ModelId = "",
     string ModelDisplayName = "");
 public sealed record MessageAddedEvent(Guid TurnId, ConversationMessage Message);
+public sealed record ConversationUpdatedEvent(
+    Guid TurnId,
+    ConversationSummary Conversation);
 public sealed record TextDeltaEvent(Guid TurnId, Guid MessageId, string Delta);
 public sealed record ToolApprovalRequiredEvent(
     Guid ApprovalId,
@@ -244,5 +255,24 @@ public sealed record ToolCompletedEvent(
     string Status,
     bool IsError,
     string? Code = null);
-public sealed record TurnCompletedEvent(Guid TurnId, string Status);
-public sealed record ErrorEvent(Guid? TurnId, string Code, string Message);
+public sealed record TurnCompletedEvent(
+    Guid TurnId,
+    string Status,
+    long TotalMilliseconds = 0,
+    long RuntimeSetupMilliseconds = 0,
+    long InitialInferenceMilliseconds = 0,
+    long ContinuationInferenceMilliseconds = 0,
+    long ToolMilliseconds = 0,
+    int InferenceRounds = 0,
+    int ToolCalls = 0);
+public sealed record ErrorEvent(
+    Guid? TurnId,
+    string Code,
+    string Message,
+    long TotalMilliseconds = 0,
+    long RuntimeSetupMilliseconds = 0,
+    long InitialInferenceMilliseconds = 0,
+    long ContinuationInferenceMilliseconds = 0,
+    long ToolMilliseconds = 0,
+    int InferenceRounds = 0,
+    int ToolCalls = 0);

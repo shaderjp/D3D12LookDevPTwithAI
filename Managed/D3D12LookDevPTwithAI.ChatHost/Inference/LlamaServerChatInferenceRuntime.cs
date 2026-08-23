@@ -79,7 +79,7 @@ public sealed class LlamaServerChatInferenceRuntime : IChatInferenceRuntime, IDi
     private const int MaximumMaxTokens = 32 * 1024;
     private const int MaximumSseLines = 100_000;
     private const long MaximumSseCharacters = 4L * 1024 * 1024;
-    private static readonly TimeSpan DefaultStreamIdleTimeout = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan DefaultStreamIdleTimeout = TimeSpan.FromSeconds(120);
     private static readonly Encoding StrictUtf8 = new UTF8Encoding(
         encoderShouldEmitUTF8Identifier: false,
         throwOnInvalidBytes: true);

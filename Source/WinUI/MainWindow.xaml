@@ -955,6 +955,8 @@
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*" />
                             <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
                         <ComboBox x:Name="AiConversationCombo"
                                   Grid.Column="0"
@@ -965,6 +967,16 @@
                                 Grid.Column="1"
                                 Content="New"
                                 Click="OnAiNewConversationClick" />
+                        <Button x:Name="AiResetConversationButton"
+                                Grid.Column="2"
+                                Content="Reset"
+                                ToolTipService.ToolTip="Delete all messages in the selected chat"
+                                Click="OnAiResetConversationClick" />
+                        <Button x:Name="AiSaveConversationButton"
+                                Grid.Column="3"
+                                Content="Save .md"
+                                ToolTipService.ToolTip="Save the selected chat as Markdown"
+                                Click="OnAiSaveConversationClick" />
                     </Grid>
 
                     <ScrollViewer Grid.Row="2"

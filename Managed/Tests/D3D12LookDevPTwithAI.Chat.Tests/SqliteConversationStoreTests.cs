@@ -48,6 +48,57 @@ public sealed class SqliteConversationStoreTests
     }
 
     [Fact]
+    public async Task Conversation_title_update_persists_without_changing_history()
+    {
+        await using var database = new TemporaryDatabase();
+        var store = database.CreateStore();
+        var conversation = await store.CreateAsync("lookdev-project", "新しいチャット");
+        await store.AppendMessageAsync(
+            "lookdev-project",
+            Message(conversation.Id, "BMWの診断", DateTimeOffset.UtcNow));
+
+        var updated = await store.UpdateTitleAsync(
+            "lookdev-project",
+            conversation.Id,
+            "BMWの診断");
+        var reopened = database.CreateStore();
+
+        Assert.Equal("BMWの診断", updated.Title);
+        Assert.Equal(
+            "BMWの診断",
+            Assert.Single(await reopened.ListAsync("lookdev-project")).Title);
+        Assert.Equal(
+            "BMWの診断",
+            Assert.Single(await reopened.GetMessagesAsync("lookdev-project", conversation.Id)).Content);
+    }
+
+    [Fact]
+    public async Task Reset_deletes_only_selected_conversation_messages_and_restores_default_title()
+    {
+        await using var database = new TemporaryDatabase();
+        var store = database.CreateStore();
+        var selected = await store.CreateAsync("lookdev-project", "Selected");
+        var retained = await store.CreateAsync("lookdev-project", "Retained");
+        await store.AppendMessageAsync(
+            "lookdev-project",
+            Message(selected.Id, "delete me", DateTimeOffset.UtcNow));
+        await store.AppendMessageAsync(
+            "lookdev-project",
+            Message(retained.Id, "keep me", DateTimeOffset.UtcNow));
+
+        var reset = await store.ResetAsync(
+            "lookdev-project",
+            selected.Id,
+            "新しいチャット");
+
+        Assert.Equal("新しいチャット", reset.Title);
+        Assert.Empty(await store.GetMessagesAsync("lookdev-project", selected.Id));
+        Assert.Equal(
+            "keep me",
+            Assert.Single(await store.GetMessagesAsync("lookdev-project", retained.Id)).Content);
+    }
+
+    [Fact]
     public async Task Messages_with_equal_timestamps_keep_append_order()
     {
         await using var database = new TemporaryDatabase();

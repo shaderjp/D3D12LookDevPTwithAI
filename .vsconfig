@@ -1,0 +1,10 @@
+{
+  "version": "1.0",
+  "components": [
+    "Microsoft.VisualStudio.Workload.NativeDesktop",
+    "Microsoft.VisualStudio.Workload.ManagedDesktop",
+    "Microsoft.VisualStudio.ComponentGroup.WindowsAppSDK.Cpp",
+    "Microsoft.VisualStudio.Component.VC.v145.x86.x64",
+    "Microsoft.VisualStudio.Component.Windows11SDK.26100"
+  ]
+}

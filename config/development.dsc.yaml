@@ -1,0 +1,32 @@
+# yaml-language-server: $schema=https://aka.ms/configuration-dsc-schema/0.2
+properties:
+  configurationVersion: 0.2.0
+  resources:
+    - resource: Microsoft.WinGet.DSC/WinGetPackage
+      id: Git
+      directives:
+        description: Git for Windows
+      settings:
+        id: Git.Git
+        source: winget
+    - resource: Microsoft.WinGet.DSC/WinGetPackage
+      id: PowerShell
+      directives:
+        description: PowerShell 7
+      settings:
+        id: Microsoft.PowerShell
+        source: winget
+    - resource: Microsoft.WinGet.DSC/WinGetPackage
+      id: DotNetSdk
+      directives:
+        description: .NET 10 SDK
+      settings:
+        id: Microsoft.DotNet.SDK.10
+        source: winget
+    - resource: Microsoft.WinGet.DSC/WinGetPackage
+      id: VisualStudio
+      directives:
+        description: Visual Studio Community 2026; apply .vsconfig after installation
+      settings:
+        id: Microsoft.VisualStudio.2026.Community
+        source: winget

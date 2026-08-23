@@ -1,0 +1,8 @@
+namespace D3D12LookDevPTwithAI
+{
+    [default_interface]
+    runtimeclass MainWindow : Microsoft.UI.Xaml.Window
+    {
+        MainWindow();
+    }
+}

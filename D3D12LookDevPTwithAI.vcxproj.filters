@@ -1,0 +1,508 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <Filter Include="Source Files">
+      <UniqueIdentifier>{FF6C4131-6B92-44B5-903E-47C16BC6DDDA}</UniqueIdentifier>
+      <Extensions>cpp;c;cxx;cc;def;odl;idl;hpj;bat;asm;asmx</Extensions>
+    </Filter>
+    <Filter Include="Source Files\Core">
+      <UniqueIdentifier>{8FC8D14B-450D-47FD-B8F1-507BA5675C23}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source Files\Rendering">
+      <UniqueIdentifier>{DC5424C8-5F43-4F95-9858-92C22B167793}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source Files\Services">
+      <UniqueIdentifier>{DD775FDD-131B-433C-8F7B-3056766A3131}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source Files\WinUI">
+      <UniqueIdentifier>{6E2C5E4A-318F-4557-AF45-E93DF219B133}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source Files\WinUI\View Models">
+      <UniqueIdentifier>{9A8BA763-4F15-48DD-A445-A4629E8639B8}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source Files\WinUI\Rendering">
+      <UniqueIdentifier>{BBF75E95-9B89-4384-A9F2-6986597E4BEB}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Header Files">
+      <UniqueIdentifier>{2CFE7289-6CC7-4AFA-994E-228C2D5CFC87}</UniqueIdentifier>
+      <Extensions>h;hh;hpp;hxx;hm;inl;inc;ipp;xsd</Extensions>
+    </Filter>
+    <Filter Include="Header Files\Core">
+      <UniqueIdentifier>{5B6C2C13-F4AE-4BA7-8293-637BA35BDC4D}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Header Files\Rendering">
+      <UniqueIdentifier>{9EAF993F-154C-4571-B707-6D15B2D5FC85}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Header Files\Services">
+      <UniqueIdentifier>{70F99CF8-F941-4B6D-90F2-BD730EB01F41}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Header Files\WinUI">
+      <UniqueIdentifier>{34D766F0-0722-4ED1-9AC1-C247F6540F2E}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Header Files\WinUI\View Models">
+      <UniqueIdentifier>{7C3CD87A-5528-4891-9D10-15916298D85D}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Header Files\WinUI\Rendering">
+      <UniqueIdentifier>{E3F554CD-C7CF-4845-ADCE-111136445D28}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="WinUI Resources">
+      <UniqueIdentifier>{6E6F9B31-3E47-4CEE-AB15-1B1725B5EADD}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="WinUI Resources\XAML">
+      <UniqueIdentifier>{E555466A-F994-4668-A8F8-E3466726419E}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="WinUI Resources\IDL">
+      <UniqueIdentifier>{0B87376E-BFFB-4597-A614-DBA9782ACF7B}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Shaders">
+      <UniqueIdentifier>{4CA5EE91-2B9E-4C5C-882D-43E8C2C8861A}</UniqueIdentifier>
+      <Extensions>hlsl;hlsli</Extensions>
+    </Filter>
+    <Filter Include="Shaders\Shared">
+      <UniqueIdentifier>{EEC31215-D88F-4E9F-B8D1-C98A021AF8EB}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Shaders\Path Tracing">
+      <UniqueIdentifier>{96A668C6-B9B7-43BB-AC1B-6598ED9D7C78}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Shaders\ReSTIR">
+      <UniqueIdentifier>{B9929C8C-BEE8-4B41-83EB-DAB135528A05}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Shaders\Denoising">
+      <UniqueIdentifier>{EA65F60B-4C7A-41E5-98AE-BFCF33C7AB33}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Generated Files">
+      <UniqueIdentifier>{2C67D3E4-5C04-47C4-98D3-5968D541C633}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Build Scripts">
+      <UniqueIdentifier>{2653591D-51D5-4804-870B-62FD905EDE09}</UniqueIdentifier>
+      <Extensions>ps1;cmd;bat</Extensions>
+    </Filter>
+    <Filter Include="Package">
+      <UniqueIdentifier>{EB824C87-FC05-46F3-A40C-9B5188310F7F}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="Source\BenchmarkHarness.cpp">
+      <Filter>Source Files\Core</Filter>
+    </ClCompile>
+    <ClCompile Include="Source\DXSample.cpp">
+      <Filter>Source Files\Core</Filter>
+    </ClCompile>
+    <ClCompile Include="Source\FpsCamera.cpp">
+      <Filter>Source Files\Core</Filter>
+    </ClCompile>
+    <ClCompile Include="Source\BasisKtx2Loader.cpp">
+      <Filter>Source Files\Rendering</Filter>
+    </ClCompile>
+    <ClCompile Include="Source\GltfSceneImporter.cpp">
+      <Filter>Source Files\Rendering</Filter>
+    </ClCompile>
+    <ClCompile Include="Source\stdafx.cpp">
+      <Filter>Source Files\Core</Filter>
+    </ClCompile>
+    <ClCompile Include="Source\D3D12PathTracingBackend.cpp">
+      <Filter>Source Files\Rendering</Filter>
+    </ClCompile>
+    <ClCompile Include="Source\D3D12PathTracingBackend.WinUI.cpp">
+      <Filter>Source Files\Rendering</Filter>
+    </ClCompile>
+    <ClCompile Include="Source\DlssBackend.cpp">
+      <Filter>Source Files\Rendering</Filter>
+    </ClCompile>
+    <ClCompile Include="Source\NrdBackend.cpp">
+      <Filter>Source Files\Rendering</Filter>
+    </ClCompile>
+    <ClCompile Include="Source\PathTracingScene.cpp">
+      <Filter>Source Files\Rendering</Filter>
+    </ClCompile>
+    <ClCompile Include="Source\PbrtSceneImporter.cpp">
+      <Filter>Source Files\Rendering</Filter>
+    </ClCompile>
+    <ClCompile Include="Source\RtxdiBackend.cpp">
+      <Filter>Source Files\Rendering</Filter>
+    </ClCompile>
+    <ClCompile Include="Source\SceneImporter.cpp">
+      <Filter>Source Files\Rendering</Filter>
+    </ClCompile>
+    <ClCompile Include="Source\TextureLoader.cpp">
+      <Filter>Source Files\Rendering</Filter>
+    </ClCompile>
+    <ClCompile Include="Source\TinyExrLoader.cpp">
+      <Filter>Source Files\Rendering</Filter>
+    </ClCompile>
+    <ClCompile Include="ThirdParty\tinyexr\deps\zstd\tinyexr_zstd.c"><Filter>Source Files\Rendering</Filter></ClCompile>
+    <ClCompile Include="ThirdParty\basis_universal\transcoder\basisu_transcoder.cpp"><Filter>Source Files\Rendering</Filter></ClCompile>
+    <ClCompile Include="ThirdParty\basis_universal\zstd\zstd.c"><Filter>Source Files\Rendering</Filter></ClCompile>
+    <ClCompile Include="ThirdParty\tinyexr\src\exr_attr.c"><Filter>Source Files\Rendering</Filter></ClCompile>
+    <ClCompile Include="ThirdParty\tinyexr\src\exr_b44.c"><Filter>Source Files\Rendering</Filter></ClCompile>
+    <ClCompile Include="ThirdParty\tinyexr\src\exr_codec.c"><Filter>Source Files\Rendering</Filter></ClCompile>
+    <ClCompile Include="ThirdParty\tinyexr\src\exr_color.c"><Filter>Source Files\Rendering</Filter></ClCompile>
+    <ClCompile Include="ThirdParty\tinyexr\src\exr_convert.c"><Filter>Source Files\Rendering</Filter></ClCompile>
+    <ClCompile Include="ThirdParty\tinyexr\src\exr_core.c"><Filter>Source Files\Rendering</Filter></ClCompile>
+    <ClCompile Include="ThirdParty\tinyexr\src\exr_cpu.c"><Filter>Source Files\Rendering</Filter></ClCompile>
+    <ClCompile Include="ThirdParty\tinyexr\src\exr_deep.c"><Filter>Source Files\Rendering</Filter></ClCompile>
+    <ClCompile Include="ThirdParty\tinyexr\src\exr_deflate.c"><Filter>Source Files\Rendering</Filter></ClCompile>
+    <ClCompile Include="ThirdParty\tinyexr\src\exr_fpnge.c"><Filter>Source Files\Rendering</Filter></ClCompile>
+    <ClCompile Include="ThirdParty\tinyexr\src\exr_half.c"><Filter>Source Files\Rendering</Filter></ClCompile>
+    <ClCompile Include="ThirdParty\tinyexr\src\exr_jph.c"><Filter>Source Files\Rendering</Filter></ClCompile>
+    <ClCompile Include="ThirdParty\tinyexr\src\exr_jph_simd.c"><Filter>Source Files\Rendering</Filter></ClCompile>
+    <ClCompile Include="ThirdParty\tinyexr\src\exr_jph_simd_neon.c"><Filter>Source Files\Rendering</Filter></ClCompile>
+    <ClCompile Include="ThirdParty\tinyexr\src\exr_libdeflate.c"><Filter>Source Files\Rendering</Filter></ClCompile>
+    <ClCompile Include="ThirdParty\tinyexr\src\exr_mip.c"><Filter>Source Files\Rendering</Filter></ClCompile>
+    <ClCompile Include="ThirdParty\tinyexr\src\exr_piz.c"><Filter>Source Files\Rendering</Filter></ClCompile>
+    <ClCompile Include="ThirdParty\tinyexr\src\exr_pxr24.c"><Filter>Source Files\Rendering</Filter></ClCompile>
+    <ClCompile Include="ThirdParty\tinyexr\src\exr_reader.c"><Filter>Source Files\Rendering</Filter></ClCompile>
+    <ClCompile Include="ThirdParty\tinyexr\src\exr_resize.c"><Filter>Source Files\Rendering</Filter></ClCompile>
+    <ClCompile Include="ThirdParty\tinyexr\src\exr_rle.c"><Filter>Source Files\Rendering</Filter></ClCompile>
+    <ClCompile Include="ThirdParty\tinyexr\src\exr_simd_neon.c"><Filter>Source Files\Rendering</Filter></ClCompile>
+    <ClCompile Include="ThirdParty\tinyexr\src\exr_simd_x86.c"><Filter>Source Files\Rendering</Filter></ClCompile>
+    <ClCompile Include="ThirdParty\tinyexr\src\exr_thread.c"><Filter>Source Files\Rendering</Filter></ClCompile>
+    <ClCompile Include="ThirdParty\tinyexr\src\exr_tonemap.c"><Filter>Source Files\Rendering</Filter></ClCompile>
+    <ClCompile Include="ThirdParty\tinyexr\src\exr_util_simd_neon.c"><Filter>Source Files\Rendering</Filter></ClCompile>
+    <ClCompile Include="ThirdParty\tinyexr\src\exr_util_simd_x86.c"><Filter>Source Files\Rendering</Filter></ClCompile>
+    <ClCompile Include="ThirdParty\tinyexr\src\exr_writer.c"><Filter>Source Files\Rendering</Filter></ClCompile>
+    <ClCompile Include="ThirdParty\tinyexr\src\exr_zip.c"><Filter>Source Files\Rendering</Filter></ClCompile>
+    <ClCompile Include="ThirdParty\tinyexr\src\exr_zstd.c"><Filter>Source Files\Rendering</Filter></ClCompile>
+    <ClCompile Include="Source\McpDispatcher.cpp">
+      <Filter>Source Files\Services</Filter>
+    </ClCompile>
+    <ClCompile Include="Source\McpReviewAnalysis.cpp">
+      <Filter>Source Files\Services</Filter>
+    </ClCompile>
+    <ClCompile Include="Source\McpServer.cpp">
+      <Filter>Source Files\Services</Filter>
+    </ClCompile>
+    <ClCompile Include="Tests\McpServerHttpTests.cpp">
+      <Filter>Source Files\Services</Filter>
+    </ClCompile>
+    <ClCompile Include="Tests\McpReviewAnalysisTests.cpp">
+      <Filter>Source Files\Services</Filter>
+    </ClCompile>
+    <ClCompile Include="Tests\GltfSceneImporterTests.cpp">
+      <Filter>Source Files\Rendering</Filter>
+    </ClCompile>
+    <ClCompile Include="Source\QualitySettingsJson.cpp">
+      <Filter>Source Files\Services</Filter>
+    </ClCompile>
+    <ClCompile Include="Source\Services\AssistantHostBridge.cpp">
+      <Filter>Source Files\Services</Filter>
+    </ClCompile>
+    <ClCompile Include="Source\Services\AssistantProtocol.cpp">
+      <Filter>Source Files\Services</Filter>
+    </ClCompile>
+    <ClCompile Include="Source\SimpleJson.cpp">
+      <Filter>Source Files\Services</Filter>
+    </ClCompile>
+    <ClCompile Include="Tests\AssistantProtocolTests.cpp">
+      <Filter>Source Files\Services</Filter>
+    </ClCompile>
+    <ClCompile Include="Tests\AssistantHostBridgeTests.cpp">
+      <Filter>Source Files\Services</Filter>
+    </ClCompile>
+    <ClCompile Include="Source\WinUI\pch.cpp">
+      <Filter>Source Files\WinUI</Filter>
+    </ClCompile>
+    <ClCompile Include="Source\WinUI\App.xaml.cpp">
+      <Filter>Source Files\WinUI</Filter>
+    </ClCompile>
+    <ClCompile Include="Source\WinUI\MainWindow.xaml.cpp">
+      <Filter>Source Files\WinUI</Filter>
+    </ClCompile>
+    <ClCompile Include="Source\WinUI\MainWindow.Assistant.cpp">
+      <Filter>Source Files\WinUI</Filter>
+    </ClCompile>
+    <ClCompile Include="Source\WinUI\main.cpp">
+      <Filter>Source Files\WinUI</Filter>
+    </ClCompile>
+    <ClCompile Include="Source\WinUI\EditorViewModel.cpp">
+      <Filter>Source Files\WinUI\View Models</Filter>
+    </ClCompile>
+    <ClCompile Include="Source\WinUI\RendererController.cpp">
+      <Filter>Source Files\WinUI\Rendering</Filter>
+    </ClCompile>
+    <ClCompile Include="$(GeneratedFilesDir)module.g.cpp">
+      <Filter>Generated Files</Filter>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="Source\BenchmarkHarness.h">
+      <Filter>Header Files\Core</Filter>
+    </ClInclude>
+    <ClInclude Include="Source\DXSample.h">
+      <Filter>Header Files\Core</Filter>
+    </ClInclude>
+    <ClInclude Include="Source\DXSampleHelper.h">
+      <Filter>Header Files\Core</Filter>
+    </ClInclude>
+    <ClInclude Include="Source\EditorTypes.h">
+      <Filter>Header Files\Core</Filter>
+    </ClInclude>
+    <ClInclude Include="Source\FpsCamera.h">
+      <Filter>Header Files\Core</Filter>
+    </ClInclude>
+    <ClInclude Include="Source\ProjectPath.h">
+      <Filter>Header Files\Core</Filter>
+    </ClInclude>
+    <ClInclude Include="Source\stdafx.h">
+      <Filter>Header Files\Core</Filter>
+    </ClInclude>
+    <ClInclude Include="Source\D3D12PathTracingBackend.h">
+      <Filter>Header Files\Rendering</Filter>
+    </ClInclude>
+    <ClInclude Include="Source\DlssBackend.h">
+      <Filter>Header Files\Rendering</Filter>
+    </ClInclude>
+    <ClInclude Include="Source\DenoiseSettingsJson.h">
+      <Filter>Header Files\Rendering</Filter>
+    </ClInclude>
+    <ClInclude Include="Source\NrdBackend.h">
+      <Filter>Header Files\Rendering</Filter>
+    </ClInclude>
+    <ClInclude Include="Source\BasisKtx2Loader.h">
+      <Filter>Header Files\Rendering</Filter>
+    </ClInclude>
+    <ClInclude Include="Source\GltfSceneImporter.h">
+      <Filter>Header Files\Rendering</Filter>
+    </ClInclude>
+    <ClInclude Include="Source\PathTracingScene.h">
+      <Filter>Header Files\Rendering</Filter>
+    </ClInclude>
+    <ClInclude Include="Source\PbrtSceneImporter.h">
+      <Filter>Header Files\Rendering</Filter>
+    </ClInclude>
+    <ClInclude Include="Source\QualitySettings.h">
+      <Filter>Header Files\Rendering</Filter>
+    </ClInclude>
+    <ClInclude Include="Source\RenderStabilityTypes.h">
+      <Filter>Header Files\Rendering</Filter>
+    </ClInclude>
+    <ClInclude Include="Source\RtxdiBackend.h">
+      <Filter>Header Files\Rendering</Filter>
+    </ClInclude>
+    <ClInclude Include="Source\SceneImporter.h">
+      <Filter>Header Files\Rendering</Filter>
+    </ClInclude>
+    <ClInclude Include="Source\SceneTypes.h">
+      <Filter>Header Files\Rendering</Filter>
+    </ClInclude>
+    <ClInclude Include="Source\TextureLoader.h">
+      <Filter>Header Files\Rendering</Filter>
+    </ClInclude>
+    <ClInclude Include="Source\TinyExrLoader.h">
+      <Filter>Header Files\Rendering</Filter>
+    </ClInclude>
+    <ClInclude Include="Source\TransientResourceAllocator.h">
+      <Filter>Header Files\Rendering</Filter>
+    </ClInclude>
+    <ClInclude Include="Source\McpDispatcher.h">
+      <Filter>Header Files\Services</Filter>
+    </ClInclude>
+    <ClInclude Include="Source\McpReviewAnalysis.h">
+      <Filter>Header Files\Services</Filter>
+    </ClInclude>
+    <ClInclude Include="Source\McpServer.h">
+      <Filter>Header Files\Services</Filter>
+    </ClInclude>
+    <ClInclude Include="Source\QualitySettingsJson.h">
+      <Filter>Header Files\Services</Filter>
+    </ClInclude>
+    <ClInclude Include="Source\Services\AssistantHostBridge.h">
+      <Filter>Header Files\Services</Filter>
+    </ClInclude>
+    <ClInclude Include="Source\Services\AssistantProtocol.h">
+      <Filter>Header Files\Services</Filter>
+    </ClInclude>
+    <ClInclude Include="Source\SimpleJson.h">
+      <Filter>Header Files\Services</Filter>
+    </ClInclude>
+    <ClInclude Include="Source\WinUI\pch.h">
+      <Filter>Header Files\WinUI</Filter>
+    </ClInclude>
+    <ClInclude Include="Source\WinUI\App.xaml.h">
+      <Filter>Header Files\WinUI</Filter>
+    </ClInclude>
+    <ClInclude Include="Source\WinUI\MainWindow.xaml.h">
+      <Filter>Header Files\WinUI</Filter>
+    </ClInclude>
+    <ClInclude Include="Source\WinUI\WinUIEditor.h">
+      <Filter>Header Files\WinUI</Filter>
+    </ClInclude>
+    <ClInclude Include="Source\WinUI\EditorViewModel.h">
+      <Filter>Header Files\WinUI\View Models</Filter>
+    </ClInclude>
+    <ClInclude Include="Source\WinUI\RendererController.h">
+      <Filter>Header Files\WinUI\Rendering</Filter>
+    </ClInclude>
+    <ClInclude Include="Source\WinUI\RendererCommandQueue.h">
+      <Filter>Header Files\WinUI\Rendering</Filter>
+    </ClInclude>
+    <ClInclude Include="Source\WinUI\RendererSnapshotMailbox.h">
+      <Filter>Header Files\WinUI\Rendering</Filter>
+    </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <ApplicationDefinition Include="Source\WinUI\App.xaml">
+      <Filter>WinUI Resources\XAML</Filter>
+    </ApplicationDefinition>
+    <Page Include="Source\WinUI\MainWindow.xaml">
+      <Filter>WinUI Resources\XAML</Filter>
+    </Page>
+    <Midl Include="Source\WinUI\App.idl">
+      <Filter>WinUI Resources\IDL</Filter>
+    </Midl>
+    <Midl Include="Source\WinUI\MainWindow.idl">
+      <Filter>WinUI Resources\IDL</Filter>
+    </Midl>
+  </ItemGroup>
+  <ItemGroup>
+    <None Include=".vsconfig">
+      <Filter>Build Scripts</Filter>
+    </None>
+    <None Include="suite.lock.json">
+      <Filter>Build Scripts</Filter>
+    </None>
+    <None Include=".github\workflows\release-portable.yml">
+      <Filter>Build Scripts</Filter>
+    </None>
+    <None Include="config\development.dsc.yaml">
+      <Filter>Build Scripts</Filter>
+    </None>
+    <None Include="Scripts\BootstrapSuite.ps1">
+      <Filter>Build Scripts</Filter>
+    </None>
+    <None Include="Scripts\BuildPortableSuite.ps1">
+      <Filter>Build Scripts</Filter>
+    </None>
+    <None Include="Scripts\BuildIntegratedPortable.ps1">
+      <Filter>Build Scripts</Filter>
+    </None>
+    <None Include="Scripts\BuildOfflinePack.ps1">
+      <Filter>Build Scripts</Filter>
+    </None>
+    <None Include="Scripts\InstallOfflinePack.ps1">
+      <Filter>Build Scripts</Filter>
+    </None>
+    <None Include="Scripts\InstallPortableSuite.ps1">
+      <Filter>Build Scripts</Filter>
+    </None>
+    <None Include="Scripts\InstallWindowsAppRuntime.ps1">
+      <Filter>Build Scripts</Filter>
+    </None>
+    <None Include="Scripts\LookDevBundle.ps1">
+      <Filter>Build Scripts</Filter>
+    </None>
+    <None Include="Scripts\TestLookDevBundle.ps1">
+      <Filter>Build Scripts</Filter>
+    </None>
+    <None Include="Scripts\TestOfflinePack.ps1">
+      <Filter>Build Scripts</Filter>
+    </None>
+    <None Include="Scripts\TestIntegratedPortable.ps1">
+      <Filter>Build Scripts</Filter>
+    </None>
+    <None Include="Scripts\TestPortablePrerequisites.ps1">
+      <Filter>Build Scripts</Filter>
+    </None>
+    <None Include="Scripts\TestSuiteLicenseCompliance.ps1">
+      <Filter>Build Scripts</Filter>
+    </None>
+    <None Include="Scripts\UninstallPortableSuite.ps1">
+      <Filter>Build Scripts</Filter>
+    </None>
+    <None Include="Shaders\PathTracingABI.hlsli">
+      <Filter>Shaders\Shared</Filter>
+    </None>
+    <None Include="Shaders\PathTracingDebugViews.hlsli">
+      <Filter>Shaders\Shared</Filter>
+    </None>
+    <None Include="Shaders\PathTracingSampling.hlsli">
+      <Filter>Shaders\Shared</Filter>
+    </None>
+    <None Include="Shaders\PathTracingSceneConstants.hlsli">
+      <Filter>Shaders\Shared</Filter>
+    </None>
+    <None Include="Shaders\PathTracingQualityCounters.hlsli">
+      <Filter>Shaders\Shared</Filter>
+    </None>
+    <None Include="Shaders\PathTracing.hlsl">
+      <Filter>Shaders\Path Tracing</Filter>
+    </None>
+    <None Include="Shaders\PathTracingQualityCounters.hlsl">
+      <Filter>Shaders\Path Tracing</Filter>
+    </None>
+    <None Include="Shaders\PathTracingTaa.hlsl">
+      <Filter>Shaders\Path Tracing</Filter>
+    </None>
+    <None Include="Shaders\PathTracingReSTIR.hlsl">
+      <Filter>Shaders\ReSTIR</Filter>
+    </None>
+    <None Include="Shaders\PathTracingReSTIRDI.hlsl">
+      <Filter>Shaders\ReSTIR</Filter>
+    </None>
+    <None Include="Shaders\PathTracingReSTIRCombined.hlsl">
+      <Filter>Shaders\ReSTIR</Filter>
+    </None>
+    <None Include="Shaders\PathTracingReSTIRPT.hlsl">
+      <Filter>Shaders\ReSTIR</Filter>
+    </None>
+    <None Include="Shaders\PathTracingReSTIRPTCombined.hlsl">
+      <Filter>Shaders\ReSTIR</Filter>
+    </None>
+    <None Include="Shaders\ReSTIRResolve.hlsl">
+      <Filter>Shaders\ReSTIR</Filter>
+    </None>
+    <None Include="Shaders\PathTracingDenoise.hlsl">
+      <Filter>Shaders\Denoising</Filter>
+    </None>
+    <None Include="Shaders\PathTracingDlss.hlsl">
+      <Filter>Shaders\Denoising</Filter>
+    </None>
+    <None Include="Shaders\PathTracingNrd.hlsl">
+      <Filter>Shaders\Denoising</Filter>
+    </None>
+    <None Include="Shaders\PathTracingSecondaryWork.hlsl">
+      <Filter>Shaders\Path Tracing</Filter>
+    </None>
+    <None Include="BuildThirdParty.ps1">
+      <Filter>Build Scripts</Filter>
+    </None>
+    <None Include="CMake\RtxdiRuntime\CMakeLists.txt">
+      <Filter>Build Scripts</Filter>
+    </None>
+    <None Include="config\LocalMCPChatClient.mcp.json">
+      <Filter>Build Scripts</Filter>
+    </None>
+    <None Include="Scripts\ConfigureLocalInference.ps1">
+      <Filter>Build Scripts</Filter>
+    </None>
+    <None Include="Scripts\TestAssistantHostBridge.ps1">
+      <Filter>Build Scripts</Filter>
+    </None>
+    <None Include="Scripts\TestAssistantProtocol.ps1">
+      <Filter>Build Scripts</Filter>
+    </None>
+    <None Include="Scripts\TestConfigureLocalInference.ps1">
+      <Filter>Build Scripts</Filter>
+    </None>
+    <None Include="Scripts\TestLocalMcpChatClientIntegration.ps1">
+      <Filter>Build Scripts</Filter>
+    </None>
+    <None Include="Scripts\TestMcpServerHttp.ps1">
+      <Filter>Build Scripts</Filter>
+    </None>
+    <None Include="Scripts\TestMcpReviewAnalysis.ps1">
+      <Filter>Build Scripts</Filter>
+    </None>
+    <None Include="Scripts\TestGltfSceneImporter.ps1">
+      <Filter>Build Scripts</Filter>
+    </None>
+    <None Include="Package\Licenses\OpenJPH-BSD-2-Clause.txt">
+      <Filter>Package</Filter>
+    </None>
+  </ItemGroup>
+  <ItemGroup>
+    <Manifest Include="Package\D3D12LookDevPTwithAI.manifest">
+      <Filter>Package</Filter>
+    </Manifest>
+  </ItemGroup>
+</Project>

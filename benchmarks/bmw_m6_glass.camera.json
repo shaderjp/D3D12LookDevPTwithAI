@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "keyframes": [
+    {
+      "frame": 0,
+      "position": [-11.0, 0.8, 5.0],
+      "yaw": 2.077895,
+      "pitch": -0.125716,
+      "cut": true
+    },
+    {
+      "frame": 15,
+      "position": [-11.0, 0.8, 5.0],
+      "yaw": 2.077895,
+      "pitch": -0.125716,
+      "cut": false
+    }
+  ]
+}

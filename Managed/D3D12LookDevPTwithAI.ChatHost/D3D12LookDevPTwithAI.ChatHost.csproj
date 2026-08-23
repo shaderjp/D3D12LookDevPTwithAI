@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\D3D12LookDevPTwithAI.Chat.Core\D3D12LookDevPTwithAI.Chat.Core.csproj" />
+    <ProjectReference Include="..\D3D12LookDevPTwithAI.Chat.Infrastructure\D3D12LookDevPTwithAI.Chat.Infrastructure.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.10" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="D3D12LookDevPTwithAI.Chat.Tests" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <AssemblyName>D3D12LookDevPTwithAI.ChatHost</AssemblyName>
+    <TargetFramework>net9.0-windows</TargetFramework>
+    <Platforms>x64</Platforms>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>true</SelfContained>
+    <PlatformTarget>x64</PlatformTarget>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <AppendRuntimeIdentifierToOutputPath>false</AppendRuntimeIdentifierToOutputPath>
+    <OutputPath>..\..\Bin\x64\$(Configuration)\</OutputPath>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+</Project>

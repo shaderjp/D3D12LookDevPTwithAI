@@ -122,6 +122,10 @@ artifact provenance.
 |:---:|:---:|
 | ![A Gemma tool call waiting for one-time approval before changing exposure](docs/images/screenshot009.png) | ![Integrated AI Assistant with the Gemma 4 and llama.cpp setup flyout](docs/images/installllm.png) |
 
+| AI tool execution and live progress | Denoise backend controls |
+|:---:|:---:|
+| ![Gemma executing a color-management tool on a PBRT crown scene and reporting tool-result processing](docs/images/screenshot010.png) | ![Denoise Inspector showing the ready NRD REBLUR backend and temporal controls](docs/images/nvidiareblur.png) |
+
 | Material editing | Lighting editing |
 |:---:|:---:|
 | ![Bistro Interior with the WinUI material editor](docs/images/material.png) | ![Bistro Interior with the WinUI lighting editor](docs/images/lighting001.png) |
@@ -144,8 +148,10 @@ assets that are intentionally not stored in this repository.
   .NET runtime installation is not required to run a complete build output
 - Git with submodule support
 
-Debug and Release builds are unpackaged and Windows App SDK framework-dependent;
-Release uses the Hybrid CRT. VS 2022 / `v143`, MSIX, and ARM64 are not supported.
+Ordinary Debug and Release builds are unpackaged and Windows App SDK
+framework-dependent; Release uses the Hybrid CRT. The explicit NVIDIA Release
+builder overrides the native build to app-local Windows App SDK deployment.
+VS 2022 / `v143`, MSIX, and ARM64 are not supported.
 
 The Visual Studio project pins these NuGet packages:
 
@@ -159,12 +165,35 @@ The Visual Studio project pins these NuGet packages:
 Run the setup checker before the first build:
 
 ```powershell
-.\Scripts\CheckSetup.ps1 -CheckDLSS -CheckNRD
+.\Scripts\CheckSetup.ps1 -CheckNRD
 ```
 
 The checker reports a clear failure if Windows App Runtime 2.4 x64 or a
 required build component is missing. Install the matching Windows App Runtime
 redistributable before running the unpackaged executable.
+
+For a full NVIDIA development environment, use the manifest-driven setup. It
+checks the GPU/driver, pinned Streamline, DLSS, NRD and RTXDI revisions,
+headers, licenses and generated libraries in one pass, and supports SDK roots
+outside the repository:
+
+```powershell
+$env:D3D12LOOKDEVPT_NGX_APPLICATION_ID = '<NVIDIA-issued decimal ID>'
+.\Scripts\SetupNvidiaEnvironment.ps1 -Profile LocalNvidia -InitializeSubmodules
+.\Scripts\SetupNvidiaEnvironment.ps1 -Profile LocalNvidia -Configuration Debug -Build
+```
+
+An explicit NVIDIA release builder enables all three renderer backends, stages
+required runtime DLLs and licenses, and creates a SHA-256 inventory without
+recording the NGX application ID. Target machines still require the current
+Microsoft Visual C++ x64 Redistributable compatible with the v145 toolset:
+
+```powershell
+.\Scripts\BuildNvidiaRelease.ps1 -AcceptNvidiaLicense
+```
+
+Review the [NVIDIA setup and redistribution boundary](docs/nvidia-setup.md)
+before publishing a payload.
 
 ## Clone and build
 
@@ -205,8 +234,8 @@ Assimp, DirectXTex, NRD, and RTXDI are built on demand by
 ```
 
 Build output is written to `Bin\x64\<Configuration>`. The project copies the
-Agility SDK, DXC-produced shaders, and available Streamline / DLSS runtimes
-beside the executable.
+Agility SDK and DXC-produced shaders beside the executable. A DLSS-enabled
+build also copies available Streamline / DLSS runtimes.
 
 Run and copy the complete output directory. Copying only
 `D3D12LookDevPTwithAI.exe` is unsupported because the sibling ChatHost, its
@@ -222,6 +251,9 @@ Windows App SDK, Agility SDK, DXC, app-local VC runtime, licenses, file-level
 license map, SPDX SBOM, and integrity manifests are placed beside it. It does
 not contain `LocalMCPChatClient`, the old two-process launcher, credentials,
 approval state, user settings, or conversation history.
+This vendor-neutral exhibition path deliberately builds renderer backends as
+`DLSS=false`, `NRD=false`, and `RTXDI=false`. Use the separately reviewed
+NVIDIA Release workflow when those SDKs/runtimes must be distributed.
 
 PowerShell 7.4 or later is required. An exhibition build includes AI by default
 and requires an already prepared `AI` directory, its exact `inference.json`, and
@@ -384,10 +416,32 @@ WinUI-specific user data is isolated from the original application:
 ```text
 %APPDATA%\D3D12LookDevPTwithAI\settings.json
 %APPDATA%\D3D12LookDevPTwithAI\startup.json
+%APPDATA%\D3D12LookDevPTwithAI\session.json
+%APPDATA%\D3D12LookDevPTwithAI\last-session.lookdevpt.json
 %APPDATA%\D3D12LookDevPTwithAI\materials\
 %APPDATA%\D3D12LookDevPTwithAI\ui.json
 %TEMP%\D3D12LookDevPTwithAI.log
 ```
+
+`Project > Restore Previous Session` is an opt-in mode. Enabling it captures
+the current project state immediately, updates the snapshot during orderly
+shutdown, and restores it at the next launch. `Project > New Scene` replaces
+that snapshot with the built-in preview scene after confirming unsaved
+changes. Explicit `--project` or `--scene` command-line arguments take
+precedence for that launch.
+
+| Previous-session restore | Safe new-scene reset |
+| --- | --- |
+| ![Project menu with Restore Previous Session](docs/images/session-restore-menu.png) | ![New Scene confirmation protecting unsaved changes](docs/images/new-scene-confirmation.png) |
+
+The snapshot and preference file are replaced atomically. A missing required
+scene or environment, malformed snapshot, or interruption during restore does
+not make startup fatal: the restore candidate is isolated as
+`last-session.lookdevpt.json.failed`, the preview scene is retained, and the
+bad candidate is not retried on every launch. An unavailable optional texture
+override falls back to the imported material and remains visible in renderer
+diagnostics. This automatic mode is separate from `startup.json`, which
+remains the fixed manual startup configuration.
 
 Assistant data is kept separately under the current user's local profile:
 
@@ -526,6 +580,8 @@ DXGI concern and does not add a UI shader pass.
 - [MCP integration](docs/mcp.md)
 - [Integrated AI architecture](docs/integrated-ai-architecture.ja.md)
 - [Integrated public-beta acceptance checklist](docs/public-beta-acceptance.ja.md)
+- [NVIDIA development and release setup](docs/nvidia-setup.md)
+- [Denoise UI and fallback gallery](docs/denoise-ui.md)
 - [DLSS integration](docs/dlss.md)
 - [NRD integration](docs/nrd.md)
 - [RTXDI integration](docs/rtxdi.md)
@@ -539,3 +595,6 @@ license/NOTICE (including its Zstandard license) and maps every shipped file in
 the generated license allowlist and SPDX 2.3 SBOM. The implementation was
 designed with reference to `nvpro-samples/vk_gltf_renderer`; no Vulkan,
 `nvpro_core`, or UI source is included.
+The separate NVIDIA Release builder copies each enabled NVIDIA component's
+license into `Licenses/NVIDIA`; its acknowledgement switch does not itself
+grant redistribution rights.

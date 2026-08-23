@@ -334,6 +334,14 @@ NRDがcompileされていない、SDK evaluationが利用できない、また�
 
 NRDとfallbackの詳細は [NRD backend](nrd.ja.md) を参照してください。
 
+| Denoise Off | Internal temporal / A-Trous |
+|:---:|:---:|
+| ![Denoise BackendをOffにしたBistro Interior](images/denoisenone.png) | ![Internal denoiserを選択したBistro Interior](images/internal.png) |
+
+`Off` はcurrent Monte Carlo varianceをそのまま表示し、`Internal` はnativeのsplit-signal
+temporal / A-Trous pathを選択します。独立したDLSS availability設定を含む全backend比較は
+[Denoise UIとfallback比較](denoise-ui.ja.md)を参照してください。
+
 ## 10. Final HDR TAA、sharpen、tone mapping
 
 denoiserは主にsurface lightingを安定化しますが、silhouette、sky、alpha coverage、最終合成にも時間的な揺れが残ります。そのためdenoise後、tone mapping前のHDRに1:1 Final TAAを適用します。
@@ -351,6 +359,14 @@ denoiserは主にsurface lightingを安定化しますが、silhouette、sky、a
 静止時の長いhistory windowはnoiseを抑えますが、早くlockしすぎるとdenoiserの初期blurまで固定します。現在はREBLURのmaturity期間中に最大32 frame程度の更新apertureを残し、その後に長い安定windowへ移行します。sharpenは設定された強度を上限とし、平坦部、極端なedge、motion中には弱めます。難しいsceneで残留Monte Carlo分散を増幅しないようopt-in（既定値 `0`）です。
 
 tone mapperは `None`、Reinhard、ACES fitted curveを選択できます。ここでのACESは完全なACES色管理pipelineではありません。どれもpath estimatorを変える処理ではなく、HDR値をdisplay可能な範囲へ写像する表示変換です。
+
+| None | Reinhard | ACES fitted curve |
+|:---:|:---:|:---:|
+| ![Tone MapperをNoneにしたBistro Interior](images/tonemapnone.png) | ![Tone MapperをReinhardにしたBistro Interior](images/tonemapreinhard.png) | ![Tone MapperをACESにしたBistro Interior](images/tonemapaces.png) |
+
+どちらも同じBistro viewとexposureを使っています。Inspectorからdisplay transformを直接
+変更でき、application screenshotで示すようにAI Assistantからも
+`lookdevpt.set_color_management` で同じ設定へ到達できます。
 
 ## 11. Adaptive sampling とray budget
 
@@ -434,6 +450,21 @@ Beautyだけを見ると、問題がsampling、guide、denoiser、TAAのどこ�
 5. `History Length`、`History Confidence`、`TAA History Acceptance`を確認
 6. FinalとReference Stillを同じcameraで比較
 
+| Base Color | World Normal |
+|:---:|:---:|
+| ![Bistro InteriorのBase Color debug view](images/basecolor.png) | ![Bistro InteriorのWorld Normal debug view](images/worldnormal.png) |
+
+`Base Color` はimportしたmaterial colorをlightingから分離し、`World Normal` はorientationの
+不連続やnormal-map conventionの問題がdenoise / temporal reuseへ入る前に可視化します。
+
+| Hit Distance | Indirect lighting |
+|:---:|:---:|
+| ![Bistro InteriorのHit Distance debug view](images/hitdistance.png) | ![Bistro InteriorのIndirect debug view](images/indirect.png) |
+
+`Hit Distance` はreconstruction filterが扱うgeometry scaleを可視化します。`Indirect` は
+multi-bounce transportを分離し、direct-light samplingとindirect-light noiseを個別に調査
+できます。
+
 おすすめの小実験:
 
 - roughness sweepをpanし、specular highlightとray-cone mipの変化を見る
@@ -499,6 +530,7 @@ shader counter は primary、secondary、shadow、DI/GI/PT visibility、AnyHit i
 
 ## 関連ドキュメント
 
+- [NVIDIA開発・Release setup](nvidia-setup.ja.md)
 - [Optional NVIDIA NRD Backend](nrd.ja.md)
 - [Optional NVIDIA RTXDI ReSTIR DI](rtxdi.ja.md)
 - [Optional DLSS Ray Reconstruction](dlss.ja.md)

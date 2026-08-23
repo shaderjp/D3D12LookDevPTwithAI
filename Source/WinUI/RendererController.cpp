@@ -220,6 +220,12 @@ void RendererController::RenderMain(std::stop_token stopToken) noexcept
             }
         }
 
+        // Session persistence belongs to the renderer thread because the
+        // backend owns the authoritative scene and project state.  Saving
+        // here also guarantees it completes before D3D resources are torn
+        // down and before the UI thread joins this worker.
+        renderer.SaveSessionOnExit();
+
         const bool benchmarkFinished =
             renderer.IsBenchmarkFinished();
         auto terminal = std::make_shared<EditorSnapshot>(

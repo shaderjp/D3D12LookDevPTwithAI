@@ -585,6 +585,19 @@ void MainWindow::OnProjectMenuClick(
     {
         SaveProjectAs();
     }
+    else if (action == L"newScene")
+    {
+        ConfirmNewScene();
+    }
+    else if (action == L"restorePreviousSession")
+    {
+        const auto item = sender.try_as<ToggleMenuFlyoutItem>();
+        Submit({
+            .type = lookdevpt::winui::EditorCommandType::Action,
+            .property = L"session.restore.set",
+            .value = item && item.IsChecked(),
+        });
+    }
     else
     {
         PickFile(action);
@@ -1063,6 +1076,13 @@ void MainWindow::RefreshSnapshot()
     SaveStartupMenu().IsEnabled(
         !snapshot->projectName.empty() ||
         snapshot->sceneName != L"Preview cube");
+    NewSceneMenu().IsEnabled(!sceneLoading);
+    bool restorePreviousSession = false;
+    TryBool(
+        *snapshot,
+        L"session.restoreEnabled",
+        restorePreviousSession);
+    RestorePreviousSessionMenu().IsChecked(restorePreviousSession);
     MaterialEditorTabs().IsEnabled(!snapshot->materials.empty());
     ApplyVariantButton().IsEnabled(m_selectedVariant >= 0);
     DeleteVariantButton().IsEnabled(m_selectedVariant >= 0);
@@ -1923,6 +1943,33 @@ IAsyncAction MainWindow::SaveProjectAs()
             .path = file.Path().c_str(),
         });
     }
+}
+
+IAsyncAction MainWindow::ConfirmNewScene()
+{
+    auto lifetime = get_strong();
+    auto snapshot = m_viewModel ? m_viewModel->Snapshot() : nullptr;
+    if (snapshot && snapshot->projectDirty)
+    {
+        ContentDialog dialog;
+        dialog.XamlRoot(EditorRoot().XamlRoot());
+        dialog.Title(box_value(L"Create a new scene?"));
+        dialog.Content(box_value(
+            L"Unsaved changes in the current scene will be discarded. "
+            L"The previous-session snapshot will also be replaced."));
+        dialog.PrimaryButtonText(L"Create New Scene");
+        dialog.CloseButtonText(L"Cancel");
+        dialog.DefaultButton(ContentDialogButton::Close);
+        if (co_await dialog.ShowAsync() != ContentDialogResult::Primary)
+        {
+            co_return;
+        }
+    }
+
+    Submit({
+        .type = lookdevpt::winui::EditorCommandType::Action,
+        .property = L"project.new",
+    });
 }
 
 IAsyncAction MainWindow::ExportMcpSettings()

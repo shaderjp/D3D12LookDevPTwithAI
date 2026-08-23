@@ -63,6 +63,7 @@ public:
     void ApplyEditorCommand(const lookdevpt::winui::EditorCommand& command);
     lookdevpt::winui::EditorSnapshot CaptureEditorSnapshot() const;
     void AddEditorCpuTime(double milliseconds) noexcept;
+    void SaveSessionOnExit() noexcept;
 
     enum class NoisePreset
     {
@@ -873,12 +874,20 @@ private:
     void PollAsyncSceneLoad();
     void CancelAsyncSceneLoad();
     bool LoadEnvironmentPath(const std::wstring& path, std::string& diagnostics);
-    bool SaveProjectToDisk(const std::wstring& path);
+    bool SaveProjectToDisk(const std::wstring& path, bool adoptAsProject = true);
     bool LoadProjectFromDisk(const std::wstring& path, std::string& diagnostics);
     void LoadStartupSettings();
-    void ApplyStartupSettings();
+    void ApplyStartupSettings(bool skipProjectAndScene = false);
     bool SaveStartupSettingsToDisk();
     bool DeleteStartupSettings();
+    void LoadSessionSettings();
+    bool TryRestorePreviousSession();
+    bool SaveSessionSnapshotToDisk();
+    bool SaveSessionSettingsToDisk();
+    bool SetSessionRestoreEnabled(bool enabled);
+    bool CreateNewScene();
+    bool ResetToPreviewScene(std::string& diagnostics);
+    void ClearSessionSnapshotFiles();
     bool ApplyAction(const std::string& method, const cld::JsonValue& params, std::string& diagnostics, bool validateOnly);
     mcp::ToolResult CallMcpTool(
         const std::string& name,
@@ -1067,6 +1076,9 @@ private:
     std::wstring m_startupProjectPath;
     std::wstring m_startupScenePath;
     std::wstring m_startupEnvironmentPath;
+    std::wstring m_sessionSettingsPath;
+    std::wstring m_sessionSnapshotPath;
+    std::wstring m_sessionProjectPath;
     std::string m_startupMcpToken;
     UINT m_startupMcpPort = 0;
     mcp::AuthenticationMode m_startupMcpAuthenticationMode =
@@ -1080,6 +1092,8 @@ private:
     bool m_hasCommandLineEnvironmentPath = false;
     bool m_hasStartupMcpAuthenticationMode = false;
     bool m_hasStartupMcpAccessMode = false;
+    bool m_sessionRestoreEnabled = false;
+    bool m_sessionProjectDirty = false;
     std::wstring m_pendingProjectPath;
     std::wstring m_pendingScenePath;
     std::wstring m_queuedSceneLoadPath;
@@ -1087,6 +1101,7 @@ private:
     std::string m_sceneDiagnostics = "Using built-in preview scene.";
     std::string m_projectDiagnostics;
     std::string m_startupDiagnostics;
+    std::string m_sessionDiagnostics = "Previous-session restore is off.";
     PendingFileDialog m_pendingFileDialog = PendingFileDialog::None;
     std::future<rb::SceneImportResult> m_sceneLoadFuture;
     std::optional<rb::SceneImportResult> m_sceneLoadCpuResult;

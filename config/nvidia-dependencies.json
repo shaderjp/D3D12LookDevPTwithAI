@@ -1,0 +1,98 @@
+{
+  "schemaVersion": 1,
+  "ngxApplicationIdEnvironmentVariable": "D3D12LOOKDEVPT_NGX_APPLICATION_ID",
+  "profiles": {
+    "LocalNvidia": {
+      "dlss": true,
+      "nrd": true,
+      "rtxdi": true,
+      "requireGpu": true,
+      "requireNgxApplicationId": true,
+      "requireLicenseAcceptance": false,
+      "windowsAppSdkSelfContained": false
+    },
+    "Release": {
+      "dlss": true,
+      "nrd": true,
+      "rtxdi": true,
+      "requireGpu": false,
+      "requireNgxApplicationId": true,
+      "requireLicenseAcceptance": true,
+      "windowsAppSdkSelfContained": true
+    },
+    "RepositoryDefault": {
+      "dlss": false,
+      "nrd": true,
+      "rtxdi": false,
+      "requireGpu": false,
+      "requireNgxApplicationId": false,
+      "requireLicenseAcceptance": false,
+      "windowsAppSdkSelfContained": false
+    }
+  },
+  "components": [
+    {
+      "id": "streamline",
+      "displayName": "NVIDIA Streamline",
+      "enableWhen": "dlss",
+      "rootProperty": "StreamlineRoot",
+      "defaultRoot": "ThirdParty/Streamline",
+      "submodulePath": "ThirdParty/Streamline",
+      "revision": "e8aaa6eaac968711fb62473d4ae8256dde20919b",
+      "developmentFiles": ["include/sl.h"],
+      "buildOutputs": [],
+      "runtimeFiles": [
+        { "path": "bin/x64/sl.interposer.dll", "destination": "Streamline/sl.interposer.dll", "required": false },
+        { "path": "bin/x64/sl.common.dll", "destination": "Streamline/sl.common.dll", "required": false },
+        { "path": "bin/x64/sl.dlss.dll", "destination": "Streamline/sl.dlss.dll", "required": false },
+        { "path": "bin/x64/sl.dlss_d.dll", "destination": "Streamline/sl.dlss_d.dll", "required": false }
+      ],
+      "licenseFiles": ["license.txt"]
+    },
+    {
+      "id": "dlss",
+      "displayName": "NVIDIA DLSS SDK",
+      "enableWhen": "dlss",
+      "rootProperty": "DlssRoot",
+      "defaultRoot": "ThirdParty/DLSS",
+      "submodulePath": "ThirdParty/DLSS",
+      "revision": "a291cc7d2cc642a51566f3dfd5376f635cd1b284",
+      "developmentFiles": ["include/nvsdk_ngx.h"],
+      "buildOutputs": [],
+      "runtimeFiles": [
+        { "path": "lib/Windows_x86_64/rel/nvngx_dlss.dll", "destination": "Streamline/nvngx_dlss.dll", "required": true },
+        { "path": "lib/Windows_x86_64/rel/nvngx_dlssd.dll", "destination": "Streamline/nvngx_dlssd.dll", "required": true }
+      ],
+      "licenseFiles": ["LICENSE.txt"]
+    },
+    {
+      "id": "nrd",
+      "displayName": "NVIDIA Real-time Denoisers (NRD)",
+      "enableWhen": "nrd",
+      "rootProperty": "NrdRoot",
+      "defaultRoot": "ThirdParty/NRD",
+      "submodulePath": "ThirdParty/NRD",
+      "revision": "792eff196afdd350fd9c3f862119017ccb438a0e",
+      "developmentFiles": ["Include/NRD.h"],
+      "buildOutputs": ["Build/v145/x64/{configuration}/Lib/NRD.lib"],
+      "runtimeFiles": [],
+      "licenseFiles": ["LICENSE.txt"]
+    },
+    {
+      "id": "rtxdi",
+      "displayName": "NVIDIA RTXDI",
+      "enableWhen": "rtxdi",
+      "rootProperty": "RtxdiRoot",
+      "defaultRoot": "ThirdParty/RTXDI",
+      "submodulePath": "ThirdParty/RTXDI",
+      "revision": "274141af082050c9d0ad6e01a2e591d0d66b7955",
+      "developmentFiles": [
+        "Libraries/Rtxdi/Include/Rtxdi/RtxdiParameters.h",
+        "Libraries/Rtxdi/Source/ReSTIRDI.cpp"
+      ],
+      "buildOutputs": ["Build/v145/x64/{configuration}/Lib/Rtxdi.lib"],
+      "runtimeFiles": [],
+      "licenseFiles": ["Libraries/Rtxdi/LICENSE.txt"]
+    }
+  ]
+}

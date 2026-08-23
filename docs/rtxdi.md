@@ -26,6 +26,17 @@ The last two commands must print the commits listed above. Run the strict check 
 .\Scripts\CheckSetup.ps1 -CheckRTXDI
 ```
 
+The coordinated full-NVIDIA workflow validates the same top-level and nested
+revisions, licenses, GPU/application identity, and generated library:
+
+```powershell
+$env:D3D12LOOKDEVPT_NGX_APPLICATION_ID = '<NVIDIA-issued decimal ID>'
+.\Scripts\SetupNvidiaEnvironment.ps1 -Profile LocalNvidia -Configuration Release -Build
+```
+
+See [NVIDIA development and release setup](nvidia-setup.md) for safe submodule
+initialization, external SDK roots, and Release staging.
+
 ## Build Switch And Matrix
 
 RTXDI is disabled at compile time by default:
@@ -44,7 +55,9 @@ When enabled and present, `BuildThirdParty.ps1` builds only `ThirdParty/RTXDI/Li
 
 If `EnableRTXDI=true` is requested without the pinned headers and sources, MSBuild emits a warning and compiles `D3D12LOOKDEVPT_WITH_RTXDI=0`. No SDK include or library link is added, and every ReSTIR mode remains a Baseline PT fallback.
 
-The repository build matrix covers all backend combinations and leaves the target configuration (`NRD=true`, `RTXDI=true`, `DLSS=false`) as its final build:
+The repository build matrix covers all backend combinations and leaves the
+manifest-defined target configuration (`NRD=true`, `RTXDI=false`, `DLSS=false`)
+as its final build:
 
 ```powershell
 .\Scripts\BuildBackendMatrix.ps1 -Configuration Release
@@ -116,4 +129,11 @@ The UI and MCP expose requested versus effective state, SDK/runtime revisions, `
 
 Validate ReSTIR DI with fixed seed/camera paths, alpha foliage, small emissive lights, high dynamic range, camera cuts, and motion. Performance benchmarks omit full-screen quality counters; quality/combined runs retain them. Compare mean energy and temporal error against a high-SPP Baseline reference rather than judging only a single still frame.
 
-The independent Primary Visibility/compact secondary-task graph is available for eligible DXR 1.1 Interactive Baseline/DI frames. It is intentionally not used for GI/PT or the formal GI+DI gate, and its secondary tasks currently retrace the camera sample instead of continuing from the stored primary intersection. The remaining large items are full SDK-equivalent hybrid-shift path replay beyond the current reconnection target shift, feature-active DLSS-RR certification with an NVIDIA-issued NGX application ID, and final cross-scene temporal/reference quality gates.
+The independent Primary Visibility/compact secondary-task graph is available
+for eligible DXR 1.1 Interactive Baseline/DI frames. It is intentionally not
+used for GI/PT or the formal GI+DI gate, and its secondary tasks currently
+retrace the camera sample instead of continuing from the stored primary
+intersection. The remaining large items are full SDK-equivalent hybrid-shift
+path replay beyond the current reconnection target shift and final cross-scene
+temporal/reference quality gates. DLSS-RR certification is a separate backend
+validation boundary documented in [DLSS](dlss.md).

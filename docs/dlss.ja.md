@@ -13,11 +13,16 @@ DLSS-RR は RTX 4070 / 1080p60 の ReSTIR GI+DI gate とは独立です。binary
 - `ThirdParty/Streamline`: NVIDIA Streamline SDK `v2.12.0`
 - `ThirdParty/DLSS`: NVIDIA DLSS SDK `v310.7.0`
 
-初期化:
+checked-in NVIDIA manifestを使う統合setupで初期化・検証します。
 
 ```powershell
-git submodule update --init --recursive ThirdParty/Streamline ThirdParty/DLSS
+$env:D3D12LOOKDEVPT_NGX_APPLICATION_ID = '<NVIDIAから発行された10進ID>'
+.\Scripts\SetupNvidiaEnvironment.ps1 -Profile LocalNvidia -InitializeSubmodules
 ```
+
+初期化は明示指定時だけ行い、trackedなlocal変更を持つsubmoduleの更新を拒否します。
+外部SDK root、JSON report、Release stagingは
+[NVIDIA開発・Release setup](nvidia-setup.ja.md)を参照してください。
 
 DLSS SDK は `nvngx_dlss.dll` と `nvngx_dlssd.dll` を提供します。source-only の Streamline checkout には prebuilt runtime / feature DLL がすべて含まれない場合があります。存在する file は `Bin/x64/<Config>/Streamline/` へ copy します。
 
@@ -38,18 +43,22 @@ $env:D3D12LOOKDEVPT_NGX_APPLICATION_ID = "<NVIDIA 発行の10進数 ID>"
 
 renderer は temporary ID や架空の ID を代用しません。変数がない場合は `applicationIdentityConfigured=false`、failure stage `applicationIdentity` を報告し、native reconstruction を使用します。
 
-strict setup check は runtime DLL 不足を failure にします。
+従来のcomponent単位checkerは簡易file checkとして利用できます。
 
 ```powershell
 .\Scripts\CheckSetup.ps1 -CheckDLSS
 ```
 
+manifest駆動setupはこれに加え、GPU / driver、application identity、固定・nested revision、
+license、build後の出力も検証します。
+
 ## Build switch と matrix
 
-DLSS header support は default で有効です。
+repository既定ではDLSSは無効です。明示的に有効化するか、`LocalNvidia` / `Release`
+profileを使用します。
 
 ```powershell
-msbuild .\D3D12LookDevPTwithAI.sln /m /p:Configuration=Release /p:Platform=x64
+msbuild .\D3D12LookDevPTwithAI.sln /m /p:Configuration=Release /p:Platform=x64 /p:EnableDLSS=true
 ```
 
 dependency-free path を検証する場合は無効化します。
@@ -65,6 +74,9 @@ backend matrix は all-enabled、no-NRD、no-RTXDI、no-DLSS、all-disabled、re
 ```powershell
 .\Scripts\BuildBackendMatrix.ps1 -Configuration Release
 ```
+
+最後のrepository targetは`config/nvidia-dependencies.json`から読み、現在は
+`DLSS=false`、`NRD=true`、`RTXDI=false`です。
 
 ## Frame evaluation
 
@@ -120,4 +132,17 @@ Denoise panel または MCP から選択できます。
 
 `lookdevpt.get_state` / `lookdevpt.get_stats` の `denoise.dlss` / `denoiser.dlss` は compile/load/init/device/application-identity/support/evaluation 状態、推奨・active 解像度、成功/失敗回数、last result code/failure stage、runtime path、error、fallback reason を公開します。benchmark にも同じ activation/failure evidence を出力します。
 
-この checkout の local 環境には NVIDIA 発行 NGX application ID がないため、DLSS-RR active evaluation の認証は未完了です。identity 不足時の fallback は確認済みですが、feature-active 検証には発行済み ID、対応 GPU/driver、production runtime DLL が必要です。
+| DLSS availability設定オン | DLSS availability設定オフ |
+|:---:|:---:|
+| ![DLSS Enabled When AvailableをオンにしてDLSS Ray Reconstructionを選択](images/nvidiadlssreyareconstruct.png) | ![DLSS Enabled When AvailableをオフにしてDLSS Ray Reconstructionを選択](images/dlssrayreconstructwithoutdlss.png) |
+
+これらは意図的にnegative runtime stateを示します。DLSS Ray Reconstructionはrequested
+backendのままですが、status blockはbuild時に無効だったこととnative reconstructionへの
+fallbackを明示しています。`DLSS Enabled When Available`はbackend selectorと独立して保存
+されるため、requested / active backendはstatus / state fieldで判定します。production-ready
+の記録ではinitializeとevaluationの成功evidenceが必要です。全比較は
+[Denoise UIとfallback比較](denoise-ui.ja.md)を参照してください。
+
+compile成功だけをfeature-active認証と解釈しないでください。発行済みNGX ID、対応
+GPU / driver、承認済みproduction runtime DLLを使い、`LocalNvidia` profileとapplication
+固有の品質・failure matrixを実行してください。

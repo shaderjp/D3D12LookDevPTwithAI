@@ -13,11 +13,17 @@ Pinned submodules:
 - `ThirdParty/Streamline`: NVIDIA Streamline SDK `v2.12.0`
 - `ThirdParty/DLSS`: NVIDIA DLSS SDK `v310.7.0`
 
-Initialize them with:
+The supported coordinated setup initializes and validates them from the
+checked-in NVIDIA manifest:
 
 ```powershell
-git submodule update --init --recursive ThirdParty/Streamline ThirdParty/DLSS
+$env:D3D12LOOKDEVPT_NGX_APPLICATION_ID = '<NVIDIA-issued decimal ID>'
+.\Scripts\SetupNvidiaEnvironment.ps1 -Profile LocalNvidia -InitializeSubmodules
 ```
+
+Initialization is opt-in and refuses to update a submodule with tracked local
+changes. See [NVIDIA development and release setup](nvidia-setup.md) for
+external SDK roots, machine-readable reports, and release staging.
 
 The DLSS SDK supplies `nvngx_dlss.dll` and `nvngx_dlssd.dll`. A source-only Streamline checkout may not include all prebuilt runtime and feature DLLs. When present, the build copies these files to `Bin/x64/<Config>/Streamline/`:
 
@@ -38,18 +44,22 @@ $env:D3D12LOOKDEVPT_NGX_APPLICATION_ID = "<NVIDIA-issued decimal ID>"
 
 The renderer does not substitute a temporary or invented application ID. Without this variable it reports `applicationIdentityConfigured=false`, identifies `applicationIdentity` as the failure stage, and uses native reconstruction.
 
-The setup checker validates files; strict DLSS validation treats missing runtime DLLs as a failure:
+The older component-specific checker remains available for a quick file check:
 
 ```powershell
 .\Scripts\CheckSetup.ps1 -CheckDLSS
 ```
 
+The manifest-driven setup additionally validates the GPU/driver, application
+identity, pinned and nested revisions, licenses, and post-build outputs.
+
 ## Build Switch And Matrix
 
-DLSS header support is enabled by default:
+DLSS is disabled in the repository default. Enable it explicitly or use the
+`LocalNvidia` / `Release` profile:
 
 ```powershell
-msbuild .\D3D12LookDevPTwithAI.sln /m /p:Configuration=Release /p:Platform=x64
+msbuild .\D3D12LookDevPTwithAI.sln /m /p:Configuration=Release /p:Platform=x64 /p:EnableDLSS=true
 ```
 
 Disable it when validating the dependency-free path:
@@ -65,6 +75,9 @@ The backend matrix covers all-enabled, no-NRD, no-RTXDI, no-DLSS, all-disabled, 
 ```powershell
 .\Scripts\BuildBackendMatrix.ps1 -Configuration Release
 ```
+
+The final repository target is read from `config/nvidia-dependencies.json` and
+currently leaves `DLSS=false`, `NRD=true`, and `RTXDI=false`.
 
 ## Frame Evaluation
 
@@ -120,4 +133,19 @@ Select DLSS-RR through the Denoise panel or MCP:
 
 Read `denoise.dlss` / `denoiser.dlss` from `lookdevpt.get_state` or `lookdevpt.get_stats`. Status includes compile/load/init/device/application-identity/support/evaluation state, recommended and active dimensions, successful/failed evaluation counts, last result code and failure stage, runtime path, error, and fallback reason. Benchmark output exposes the same activation and failure evidence.
 
-Active DLSS-RR evaluation has not been certified in this checkout because the local environment does not contain an NVIDIA-issued NGX application ID. The missing-identity fallback has been exercised; feature-active validation still requires the issued ID, compatible GPU/driver, and production runtime DLLs.
+| DLSS availability preference enabled | DLSS availability preference disabled |
+|:---:|:---:|
+| ![DLSS Ray Reconstruction selected with DLSS Enabled When Available switched on](images/nvidiadlssreyareconstruct.png) | ![DLSS Ray Reconstruction selected with DLSS Enabled When Available switched off](images/dlssrayreconstructwithoutdlss.png) |
+
+These captures intentionally demonstrate a negative runtime state: DLSS Ray
+Reconstruction remains the requested backend, but the status block says it was
+disabled at build time and that native reconstruction is active. The
+`DLSS Enabled When Available` preference is stored independently from the
+backend selector; requested and active backend must therefore be read from the
+status/state fields. A production-ready capture must instead show successful
+initialization and evaluation evidence. See the complete
+[Denoise UI and fallback gallery](denoise-ui.md).
+
+Do not infer feature-active certification from a successful compile. Run the
+`LocalNvidia` profile and an application-specific quality/failure matrix with
+the issued NGX ID, compatible GPU/driver, and approved production runtime DLLs.

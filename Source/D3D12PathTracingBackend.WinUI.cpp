@@ -293,6 +293,14 @@ void D3D12PathTracingBackend::ApplyEditorCommand(
         {
             DeleteStartupSettings();
         }
+        else if (action == L"session.restore.set")
+        {
+            SetSessionRestoreEnabled(Boolean(command.value));
+        }
+        else if (action == L"project.new")
+        {
+            CreateNewScene();
+        }
         else if (action == L"history.reset")
         {
             ResetRenderingHistory();
@@ -1496,7 +1504,8 @@ D3D12PathTracingBackend::CaptureEditorSnapshot() const
     snapshot.diagnostics =
         Widen(m_sceneDiagnostics + "\n" +
               m_projectDiagnostics + "\n" +
-              m_startupDiagnostics);
+              m_startupDiagnostics + "\n" +
+              m_sessionDiagnostics);
 
     std::wostringstream stats;
     NrdStatus const& nrdStatus = m_nrdBackendRuntime.Status();
@@ -1831,6 +1840,8 @@ D3D12PathTracingBackend::CaptureEditorSnapshot() const
     values[L"restir.maxAge"] =
         static_cast<std::int64_t>(m_reservoirMaxAge);
     values[L"scene.loading"] = sceneLoading;
+    values[L"session.restoreEnabled"] =
+        m_sessionRestoreEnabled;
     values[L"scene.loadStage"] =
         static_cast<std::int64_t>(sceneLoadStage);
     const std::uint64_t sceneLoadCompleted =

@@ -25,6 +25,16 @@ NRD を実行する machine では strict setup check を使います。
 .\Scripts\CheckSetup.ps1 -CheckNRD
 ```
 
+repositoryでサポートする統合check / buildではmanifest駆動profileを使用します。固定revisionと
+生成library pathも検証します。
+
+```powershell
+.\Scripts\SetupNvidiaEnvironment.ps1 -Profile RepositoryDefault -Configuration Release -Build
+```
+
+DLSS / RTXDIと同時に有効化する場合やcheckout外のSDK rootを使う場合は
+[NVIDIA開発・Release setup](nvidia-setup.ja.md)を参照してください。
+
 ## Build switch と matrix
 
 NRD は compile 時に default で有効です。依存を持たない backend build では無効化できます。
@@ -35,7 +45,8 @@ msbuild .\D3D12LookDevPTwithAI.sln /m /p:Configuration=Release /p:Platform=x64 /
 
 `EnableNRD=false` は SDK header / library を除外し、全 shader 構成を build 可能なまま維持し、`compiled=false` を公開して NRD 選択を internal backend へ route します。RTXDI と DLSS は独立した switch です。
 
-repository には all-enabled、各 backend を 1 つずつ無効化、all-disabled、現在の target 構成（`NRD=true`、`RTXDI=true`、`DLSS=false`）を build / launch する matrix があります。
+repositoryにはall-enabled、各backendを1つずつ無効化、all-disabled、現在のmanifest定義
+target構成（`NRD=true`、`RTXDI=false`、`DLSS=false`）をbuild / launchするmatrixがあります。
 
 ```powershell
 .\Scripts\BuildBackendMatrix.ps1 -Configuration Release
@@ -86,8 +97,18 @@ Denoise panel と `lookdevpt.set_denoise` は次を受け付けます。
 - `internal`: Diffuse / Specular を分離した temporal history と hit-distance-aware A-Trous
 - `nrd_reblur`: `REBLUR_DIFFUSE_SPECULAR`
 - `nrd_relax`: `RELAX_DIFFUSE_SPECULAR`
-- `dlss_rr`: 別系統の、現時点では evaluate しない DLSS-RR probe path
+- `dlss_rr`: 別系統のDLSS-RR evaluation path。readyでない場合はnative reconstructionへfallback
 - `off`: real-time denoiser なし
+
+| NRD REBLUR | NRD RELAX |
+|:---:|:---:|
+| ![NRD REBLUR backendを使うBistro Interior](images/nvidiareblur.png) | ![NRD RELAX backendを使うBistro Interior](images/nvdiarelax.png) |
+
+Denoise Inspectorは要求したbackendを表示し、上部status blockがNRDのcompile / ready状態を
+報告します。REBLURはinteractiveの既定、RELAXはsharp preview向けの選択です。
+
+[Denoise UIとfallback比較](denoise-ui.ja.md)では、DLSS availability設定を明示したまま、
+これらとInternal、DLSS Ray Reconstruction、Offを比較できます。
 
 例:
 
@@ -106,6 +127,10 @@ bridge は選択した NRD instance、permanent / transient pool、compute pipel
 SDK、method、resource format、pipeline、evaluation のいずれかが利用できない場合、UI は要求された NRD 選択を表示したまま、実効 backend `internal` と正確な fallback 理由を公開します。実行中の evaluation failure では backend resource rebuild を queue してから internal fallback を使います。同一 frame で一部だけ書かれた NRD resource を internal history として再解釈しません。
 
 状態は `lookdevpt.get_state` または `lookdevpt.get_stats` の `denoise.nrd` / `denoiser.nrd` で取得できます。主な field は `compiled`、`evaluationReady`、SDK version、selected denoiser、resource resolution、pool count、encoding 名、`lastError`、`fallbackReason` です。
+
+status行は、compile済みでreadyなbackend、現在選択中のbackend、実効fallbackを区別します。
+checked-in galleryではNRDはreadyですが、DLSS Ray Reconstructionはbuildで利用できず、
+rendererがfallback理由を明示しています。
 
 ## History と resource の挙動
 

@@ -364,6 +364,9 @@
     <None Include=".github\workflows\release-portable.yml">
       <Filter>Build Scripts</Filter>
     </None>
+    <None Include=".github\workflows\release-nvidia.yml">
+      <Filter>Build Scripts</Filter>
+    </None>
     <None Include="config\development.dsc.yaml">
       <Filter>Build Scripts</Filter>
     </None>
@@ -470,6 +473,21 @@
       <Filter>Build Scripts</Filter>
     </None>
     <None Include="config\LocalMCPChatClient.mcp.json">
+      <Filter>Build Scripts</Filter>
+    </None>
+    <None Include="config\nvidia-dependencies.json">
+      <Filter>Build Scripts</Filter>
+    </None>
+    <None Include="Scripts\NvidiaDependencyTools.psm1">
+      <Filter>Build Scripts</Filter>
+    </None>
+    <None Include="Scripts\SetupNvidiaEnvironment.ps1">
+      <Filter>Build Scripts</Filter>
+    </None>
+    <None Include="Scripts\BuildNvidiaRelease.ps1">
+      <Filter>Build Scripts</Filter>
+    </None>
+    <None Include="Scripts\TestNvidiaDependencyTools.ps1">
       <Filter>Build Scripts</Filter>
     </None>
     <None Include="Scripts\ConfigureLocalInference.ps1">

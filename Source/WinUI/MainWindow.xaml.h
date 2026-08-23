@@ -230,6 +230,7 @@ private:
     Windows::Foundation::IAsyncAction PickTexture(
         std::int32_t slot);
     Windows::Foundation::IAsyncAction SaveProjectAs();
+    Windows::Foundation::IAsyncAction ConfirmNewScene();
     Windows::Foundation::IAsyncAction ExportMcpSettings();
     HWND WindowHandle();
     static LRESULT CALLBACK WindowSubclassProc(

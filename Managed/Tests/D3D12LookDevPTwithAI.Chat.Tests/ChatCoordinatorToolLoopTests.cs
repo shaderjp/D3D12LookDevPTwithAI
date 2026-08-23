@@ -461,7 +461,9 @@ public sealed class ChatCoordinatorToolLoopTests
 
         var store = new MemoryConversationStore();
         var coordinator = new ChatCoordinator(store, new ScriptedToolRuntime(TextRound("unused")));
-        var router = new PipeRequestRouter(coordinator, new TestLifetime());
+        await using var modelSetup = new LocalModelSetupCoordinator(
+            new NoopModelSetupService());
+        var router = new PipeRequestRouter(coordinator, modelSetup, new TestLifetime());
         await using var peer = new FramedStreamPeer(client);
         long requestSequence = 0;
         PipeEnvelope Request<T>(string method, T payload) => new()
@@ -556,6 +558,7 @@ public sealed class ChatCoordinatorToolLoopTests
     private sealed class ToolLoopFixture : IAsyncDisposable
     {
         private long _requestSequence;
+        private readonly LocalModelSetupCoordinator _modelSetup;
 
         public ToolLoopFixture(ScriptedToolRuntime runtime, FakeMcpClient mcp)
         {
@@ -566,7 +569,12 @@ public sealed class ChatCoordinatorToolLoopTests
                 Store,
                 Runtime,
                 new FakeMcpClientFactory(Mcp));
-            Router = new PipeRequestRouter(Coordinator, new TestLifetime());
+            _modelSetup = new LocalModelSetupCoordinator(
+                new NoopModelSetupService());
+            Router = new PipeRequestRouter(
+                Coordinator,
+                _modelSetup,
+                new TestLifetime());
         }
 
         public ScriptedToolRuntime Runtime { get; }
@@ -602,7 +610,11 @@ public sealed class ChatCoordinatorToolLoopTests
                 .ActiveConversationId;
         }
 
-        public async ValueTask DisposeAsync() => await Coordinator.StopAsync();
+        public async ValueTask DisposeAsync()
+        {
+            await _modelSetup.DisposeAsync();
+            await Coordinator.StopAsync();
+        }
     }
 
     private sealed class ScriptedToolRuntime(
@@ -954,5 +966,18 @@ public sealed class ChatCoordinatorToolLoopTests
         public CancellationToken ApplicationStopping => _stopping.Token;
         public CancellationToken ApplicationStopped => _stopped.Token;
         public void StopApplication() => _stopping.Cancel();
+    }
+
+    private sealed class NoopModelSetupService : ILocalModelSetupService
+    {
+        public Task InstallAsync(
+            ModelSetupStartRequest request,
+            Func<ModelSetupProgressEvent, CancellationToken, Task> reportAsync,
+            CancellationToken cancellationToken) =>
+            Task.CompletedTask;
+
+        public void Dispose()
+        {
+        }
     }
 }

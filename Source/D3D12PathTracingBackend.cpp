@@ -1424,8 +1424,19 @@ namespace
             material.extensionFeatureMask = gltf.featureMask;
             material.specularFactor = gltf.specularFactor;
             material.specularColorFactor = XMFLOAT3(gltf.specularColorFactor[0], gltf.specularColorFactor[1], gltf.specularColorFactor[2]);
-            material.indexOfRefraction = gltf.ior;
-            material.transmissionFactor = gltf.transmissionFactor;
+            // PBRT materials carry dielectric IOR/transmission directly on
+            // SceneMaterial. Only replace those values when the imported
+            // material actually declares the corresponding glTF extension;
+            // otherwise GltfMaterialExtensions' defaults would make PBRT
+            // dielectric glass opaque during scene conversion.
+            if ((gltf.featureMask & rb::GltfMaterialFeatureIor) != 0u)
+            {
+                material.indexOfRefraction = gltf.ior;
+            }
+            if ((gltf.featureMask & rb::GltfMaterialFeatureTransmission) != 0u)
+            {
+                material.transmissionFactor = gltf.transmissionFactor;
+            }
             material.thicknessFactor = gltf.thicknessFactor;
             material.attenuationColor = XMFLOAT3(gltf.attenuationColor[0], gltf.attenuationColor[1], gltf.attenuationColor[2]);
             material.attenuationDistance = gltf.attenuationDistance;

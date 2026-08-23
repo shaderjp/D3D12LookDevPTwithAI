@@ -41,15 +41,21 @@ body の buffer 前に拒否し、受信全体を10秒、body buffer を1 reques
 catalog を model へ渡し、上限付きの複数 round Tool loop を実行します。read-only Tool は
 自動実行し、変更 Tool は LookDev dock に canonical 引数全文を表示して Native の一回承認を
 必須とします。Tool の進行と結果は同じ画面へ表示し、SQLite へ保存するのは user message と
-最終的な assistant 応答だけです。手動・署名なしの一体型展示 pack は実装済みで、
-アプリ内 model manager と公式署名済み artifact catalog は後続です。設計と境界は
+最終的な assistant 応答だけです。固定 revision の Gemma 4 と llama.cpp を取得する
+アプリ内 setup、および手動・署名なしの一体型展示 pack は実装済みです。任意 model を扱う
+model manager と公式署名済み artifact catalog は後続です。設計と境界は
 [統合アーキテクチャ](docs/integrated-ai-architecture.ja.md)を参照してください。
 
-### ローカル推論の手動 setup
+### ローカル推論の setup
 
-この milestone は数 GB 規模の model や llama.cpp runtime を自動 download しません。
-開発時または利用者が明示的に承認した setup として、手元の GGUF と、CPU / CUDA /
-Vulkan の llama.cpp runtime directory にある `llama-server.exe` を import します。
+Assistant の `Download & set up` は、license の確認と明示同意後に固定 revision の
+Gemma 4 E2B / E4B と llama.cpp b10205 の CPU / CUDA / Vulkan runtime を取得します。
+画面には file 名、受信量 / 総量、全体の百分率を表示します。中断時は `.partial` を保持し、
+次回同じ setup で HTTP Range download を再開します。取得物は固定 size と SHA-256 を検証し、
+検証完了後にだけ `inference.json` を置き換えます。
+
+独自 GGUF または手元の llama.cpp runtime を使う開発時 setup は、従来どおり次の script で
+import できます。
 
 ```powershell
 .\Scripts\ConfigureLocalInference.ps1 `
@@ -205,7 +211,7 @@ bounded packaging regression は次で単独実行できます。
 .\Scripts\TestIntegratedPortable.ps1
 ```
 
-公式署名済み artifact catalog、アプリ内 model manager、署名済み製品 release は後続です。
+公式署名済み artifact catalog、任意 model を管理する UI、署名済み製品 release は後続です。
 
 ### 旧2アプリ移行スイート
 

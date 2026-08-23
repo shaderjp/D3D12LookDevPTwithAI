@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using D3D12LookDevPTwithAI.Chat.Core;
+using D3D12LookDevPTwithAI.ChatHost.Inference;
 using Microsoft.Extensions.Hosting;
 
 namespace D3D12LookDevPTwithAI.ChatHost;
@@ -15,6 +16,7 @@ public sealed class ChatHostWorker(
     NamedPipeConnection connection,
     PipeRequestRouter router,
     ChatCoordinator coordinator,
+    LocalModelSetupCoordinator modelSetup,
     IHostApplicationLifetime applicationLifetime) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -36,7 +38,7 @@ public sealed class ChatHostWorker(
         finally
         {
             await CompleteShutdownAsync(
-                coordinator.StopAsync,
+                StopServicesAsync,
                 applicationLifetime,
                 ChatHostShutdownBudget.CleanupTimeout).ConfigureAwait(false);
         }
@@ -44,8 +46,14 @@ public sealed class ChatHostWorker(
 
     public override async Task StopAsync(CancellationToken cancellationToken)
     {
-        await coordinator.StopAsync(cancellationToken).ConfigureAwait(false);
+        await StopServicesAsync(cancellationToken).ConfigureAwait(false);
         await base.StopAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task StopServicesAsync(CancellationToken cancellationToken)
+    {
+        await modelSetup.StopAsync(cancellationToken).ConfigureAwait(false);
+        await coordinator.StopAsync(cancellationToken).ConfigureAwait(false);
     }
 
     internal static async Task CompleteShutdownAsync(

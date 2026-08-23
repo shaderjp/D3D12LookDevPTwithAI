@@ -31,7 +31,9 @@ public sealed class DeterministicChatInferenceRuntime : IChatInferenceRuntime
             RuntimeId,
             "Deterministic placeholder",
             IsReady: true,
-            State: "ready"));
+            State: "ready",
+            ModelId: RuntimeId,
+            ModelDisplayName: "Deterministic placeholder"));
     }
 
     public async IAsyncEnumerable<ChatInferenceChunk> StreamAsync(

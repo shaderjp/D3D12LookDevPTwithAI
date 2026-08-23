@@ -145,11 +145,18 @@ public sealed class LlamaServerChatInferenceRuntime : IChatInferenceRuntime, IDi
         }
 
         ValidateSession(session);
+        var modelDisplayName = ModelSetupCatalog.Models.TryGetValue(
+            session.ModelId,
+            out var model)
+            ? model.DisplayName
+            : session.ModelId;
         return new ChatInferenceRuntimeStatus(
             CreateRuntimeId(session.Backend),
             DisplayName,
             IsReady: true,
-            State: "ready");
+            State: "ready",
+            ModelId: session.ModelId,
+            ModelDisplayName: modelDisplayName);
     }
 
     public async IAsyncEnumerable<ChatInferenceChunk> StreamAsync(

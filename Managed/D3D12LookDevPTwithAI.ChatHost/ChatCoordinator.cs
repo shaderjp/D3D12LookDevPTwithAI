@@ -439,7 +439,12 @@ public sealed class ChatCoordinator(
                     ChatInferenceLimits.MaximumRuntimeIdentifierCharacters) ||
                 !IsSafeRuntimeToken(
                     runtimeStatus.State,
-                    ChatInferenceLimits.MaximumRuntimeStateCharacters))
+                    ChatInferenceLimits.MaximumRuntimeStateCharacters) ||
+                (!string.IsNullOrEmpty(runtimeStatus.ModelId) &&
+                 !IsSafeRuntimeToken(
+                     runtimeStatus.ModelId,
+                     ChatInferenceLimits.MaximumNameCharacters)) ||
+                !IsSafeRuntimeDisplayName(runtimeStatus.ModelDisplayName))
             {
                 throw new ChatInferenceException(
                     "invalid_inference_status",
@@ -455,7 +460,11 @@ public sealed class ChatCoordinator(
             await peer.SendEventAsync(
                 requestId,
                 "runtimeState",
-                new RuntimeStateEvent(runtimeStatus.State, runtimeStatus.RuntimeId),
+                new RuntimeStateEvent(
+                    runtimeStatus.State,
+                    runtimeStatus.RuntimeId,
+                    runtimeStatus.ModelId,
+                    runtimeStatus.ModelDisplayName),
                 cancellationToken).ConfigureAwait(false);
 
             var toolsAvailable = mcpClient is not null &&
@@ -1279,6 +1288,13 @@ public sealed class ChatCoordinator(
             return false;
         }
         return true;
+    }
+
+    private static bool IsSafeRuntimeDisplayName(string? value)
+    {
+        if (value is null || value.Length > ChatInferenceLimits.MaximumNameCharacters)
+            return false;
+        return value.All(character => !char.IsControl(character));
     }
 
     private static bool IsOneTimeApprovalGrant(string? value)

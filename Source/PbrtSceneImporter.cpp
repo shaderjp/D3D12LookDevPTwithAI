@@ -663,9 +663,11 @@ private:
         return fallback;
     }
 
-    static std::optional<XMFLOAT3> NamedConductorF0(const ParameterMap& parameters)
+    static std::optional<XMFLOAT3> NamedConductorF0(
+        const ParameterMap& parameters,
+        const std::string& parameterName = "eta")
     {
-        const Parameter* eta = FindParameter(parameters, "eta");
+        const Parameter* eta = FindParameter(parameters, parameterName);
         if (!eta || eta->strings.empty()) return std::nullopt;
         const std::string name = Lower(eta->strings.front());
         if (name.find("metal-ag-") == 0) return XMFLOAT3(0.95f, 0.93f, 0.88f);
@@ -904,7 +906,21 @@ private:
         if (type == "diffuse" || type == "coateddiffuse")
         {
             baseColor = TextureColorOr(parameters, "reflectance", XMFLOAT3(0.5f, 0.5f, 0.5f));
-            roughness = TextureFloatOr(parameters, "roughness", type == "diffuse" ? 1.0f : 0.25f);
+            if (type == "coateddiffuse")
+            {
+                // PBRT's roughness belongs to the dielectric interface over a
+                // diffuse substrate. Preserve that distinction instead of
+                // turning the entire material into a glossy base lobe.
+                roughness = 1.0f;
+                material.gltfExtensions.featureMask |= rb::GltfMaterialFeatureClearcoat;
+                material.gltfExtensions.clearcoatFactor = 1.0f;
+                material.gltfExtensions.clearcoatRoughnessFactor =
+                    TextureFloatOr(parameters, "roughness", 0.0f);
+            }
+            else
+            {
+                roughness = TextureFloatOr(parameters, "roughness", 1.0f);
+            }
         }
         else if (type == "conductor" || type == "coatedconductor")
         {
@@ -912,12 +928,13 @@ private:
             baseColor = TextureColorOr(parameters, "reflectance", XMFLOAT3(0.91f, 0.92f, 0.92f));
             if (!FindParameter(parameters, "reflectance"))
             {
-                const std::optional<XMFLOAT3> namedF0 = NamedConductorF0(parameters);
+                const std::string parameterPrefix = type == "coatedconductor" ? "conductor." : "";
+                const std::optional<XMFLOAT3> namedF0 = NamedConductorF0(parameters, parameterPrefix + "eta");
                 if (namedF0) baseColor = *namedF0;
                 else
                 {
-                    const XMFLOAT3 eta = ColorOr(parameters, "eta", XMFLOAT3(0.2f, 0.9f, 1.1f));
-                    const XMFLOAT3 k = ColorOr(parameters, "k", XMFLOAT3(3.9f, 2.5f, 2.1f));
+                    const XMFLOAT3 eta = ColorOr(parameters, parameterPrefix + "eta", XMFLOAT3(0.2f, 0.9f, 1.1f));
+                    const XMFLOAT3 k = ColorOr(parameters, parameterPrefix + "k", XMFLOAT3(3.9f, 2.5f, 2.1f));
                     const auto f0 = [](float etaValue, float kValue)
                     {
                         const float numerator = (etaValue - 1.0f) * (etaValue - 1.0f) + kValue * kValue;
@@ -927,7 +944,16 @@ private:
                     baseColor = XMFLOAT3(f0(eta.x, k.x), f0(eta.y, k.y), f0(eta.z, k.z));
                 }
             }
-            roughness = TextureFloatOr(parameters, "roughness", 0.1f);
+            roughness = type == "coatedconductor"
+                ? TextureFloatOr(parameters, "conductor.roughness", TextureFloatOr(parameters, "roughness", 0.1f))
+                : TextureFloatOr(parameters, "roughness", 0.1f);
+            if (type == "coatedconductor")
+            {
+                material.gltfExtensions.featureMask |= rb::GltfMaterialFeatureClearcoat;
+                material.gltfExtensions.clearcoatFactor = 1.0f;
+                material.gltfExtensions.clearcoatRoughnessFactor =
+                    TextureFloatOr(parameters, "interface.roughness", 0.0f);
+            }
         }
         else if (type == "dielectric" || type == "thindielectric")
         {
@@ -1042,6 +1068,7 @@ private:
         material.assignment.baseColorFactor = { baseColor.x, baseColor.y, baseColor.z, 1.0f };
         material.assignment.roughnessFactor = roughness;
         material.assignment.metallicFactor = metallic;
+        material.assignment.gltfExtensions = material.gltfExtensions;
         material.baseColorTexturePath = TexturePathFromParameter(parameters, "reflectance", sourceDirectory);
         if (material.baseColorTexturePath.empty()) material.baseColorTexturePath = TexturePathFromParameter(parameters, "transmittance", sourceDirectory);
         material.roughnessTexturePath = TexturePathFromParameter(parameters, "roughness", sourceDirectory);

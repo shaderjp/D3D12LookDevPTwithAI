@@ -154,6 +154,35 @@ bool IsPrivateLookDevMcpEndpoint(std::string_view endpoint)
     return port > 0 && port <= 65535;
 }
 
+std::wstring SelectedComboTag(ComboBox const& combo)
+{
+    if (!combo)
+    {
+        return {};
+    }
+    const auto item = combo.SelectedItem().try_as<ComboBoxItem>();
+    return item
+        ? unbox_value_or<hstring>(item.Tag(), L"").c_str()
+        : std::wstring{};
+}
+
+std::wstring FormatSetupBytes(double bytes)
+{
+    constexpr double mib = 1024.0 * 1024.0;
+    constexpr double gib = 1024.0 * mib;
+    std::wostringstream text;
+    text << std::fixed;
+    if (bytes >= gib)
+    {
+        text << std::setprecision(2) << bytes / gib << L" GiB";
+    }
+    else
+    {
+        text << std::setprecision(0) << bytes / mib << L" MiB";
+    }
+    return text.str();
+}
+
 void SecureClear(std::string& value) noexcept
 {
     if (!value.empty())
@@ -471,6 +500,7 @@ struct AssistantUiState
     std::string pendingCreateRequestId;
     std::string pendingConversationId;
     std::string pendingConversationRequestId;
+    std::string modelSetupRequestId;
     std::string activeTurnId;
     std::vector<std::string> conversationIds;
     std::unordered_map<std::string, TextBlock> messageBodies;
@@ -482,6 +512,7 @@ struct AssistantUiState
         std::string,
         std::shared_ptr<AssistantToolUiEntry>> toolCards;
     bool cancelRequested = false;
+    bool modelSetupActive = false;
 };
 
 void SetAssistantToolStatus(
@@ -719,11 +750,27 @@ void MainWindow::UpdateAssistantInteractionState()
     const bool requestPending = state &&
         (!state->pendingCreateRequestId.empty() ||
          !state->pendingConversationRequestId.empty());
-    const bool idle = ready && !state->turnActive && !requestPending;
+    const bool setupActive = state && state->modelSetupActive;
+    const bool turnActive = state && state->turnActive;
+    const bool idle = ready && !state->turnActive && !requestPending &&
+        !setupActive;
     const bool canSend = idle && !state->activeConversationId.empty();
     AiConversationCombo().IsEnabled(idle);
     AiNewConversationButton().IsEnabled(idle);
     AiSendButton().IsEnabled(canSend);
+    AiModelCombo().IsEnabled(idle);
+    AiBackendCombo().IsEnabled(idle);
+    AiLicenseConsentCheck().IsEnabled(idle);
+    AiSetupButton().IsEnabled(
+        idle &&
+        unbox_value_or<bool>(
+            AiLicenseConsentCheck().IsChecked(), false));
+    AiSetupCancelButton().Visibility(
+        setupActive ? Visibility::Visible : Visibility::Collapsed);
+    AiSetupCancelButton().IsEnabled(setupActive);
+    AiThinkingPanel().Visibility(
+        turnActive ? Visibility::Visible : Visibility::Collapsed);
+    AiThinkingProgress().IsActive(turnActive);
     for (const auto& child : AiQuickPromptPanel().Children())
     {
         if (const auto button = child.try_as<Button>())
@@ -794,8 +841,11 @@ void MainWindow::StartAssistant()
     m_assistant = state;
 
     AiRuntimeStatusText().Text(L"Starting local AI host\u2026");
+    AiLoadedModelText().Text(L"Loaded model: waiting for runtime");
     AiModelStatusText().Text(L"Model: waiting for runtime");
+    AiSetupProgress().IsIndeterminate(true);
     AiSetupProgress().Visibility(Visibility::Visible);
+    AiSetupProgressText().Visibility(Visibility::Collapsed);
     AiRetryButton().IsEnabled(false);
     AiSendButton().IsEnabled(false);
     AiStopButton().IsEnabled(false);
@@ -1005,10 +1055,12 @@ void MainWindow::HandleAssistantHostState(
     {
     case State::Starting:
         AiRuntimeStatusText().Text(L"Starting local AI host\u2026");
+        AiSetupProgress().IsIndeterminate(true);
         AiSetupProgress().Visibility(Visibility::Visible);
         break;
     case State::WaitingForConnection:
         AiRuntimeStatusText().Text(L"Waiting for local AI host\u2026");
+        AiSetupProgress().IsIndeterminate(true);
         AiSetupProgress().Visibility(Visibility::Visible);
         break;
     case State::Connected:
@@ -1033,8 +1085,11 @@ void MainWindow::HandleAssistantHostState(
         m_assistant->pendingCreateRequestId.clear();
         m_assistant->pendingConversationId.clear();
         m_assistant->pendingConversationRequestId.clear();
+        m_assistant->modelSetupRequestId.clear();
+        m_assistant->modelSetupActive = false;
         AiSetupProgress().Visibility(Visibility::Collapsed);
         AiRuntimeStatusText().Text(L"Local AI host disconnected.");
+        AiLoadedModelText().Text(L"Loaded model: unavailable");
         AiModelStatusText().Text(
             L"Retry the private local connection.");
         AiRetryButton().IsEnabled(true);
@@ -1055,7 +1110,10 @@ void MainWindow::HandleAssistantHostState(
         m_assistant->pendingCreateRequestId.clear();
         m_assistant->pendingConversationId.clear();
         m_assistant->pendingConversationRequestId.clear();
+        m_assistant->modelSetupRequestId.clear();
+        m_assistant->modelSetupActive = false;
         AiSetupProgress().Visibility(Visibility::Collapsed);
+        AiLoadedModelText().Text(L"Loaded model: unavailable");
         AiSendButton().IsEnabled(false);
         AiStopButton().IsEnabled(false);
         UpdateAssistantInteractionState();
@@ -1105,7 +1163,9 @@ void MainWindow::TryInitializeAssistant()
         ;
     state->initializing = true;
     AiRuntimeStatusText().Text(L"Initializing local assistant\u2026");
+    AiLoadedModelText().Text(L"Loaded model: none");
     AiModelStatusText().Text(L"Runtime: connecting to ChatHost");
+    AiSetupProgress().IsIndeterminate(true);
     AiSetupProgress().Visibility(Visibility::Visible);
     const bool posted = PostAssistantRequest("initialize", payload.str());
     SecureClear(mcpBearerToken.value);
@@ -1198,6 +1258,12 @@ void MainWindow::HandleAssistantEvent(
             // during initialization. Do not paint that stale response.
             return;
         }
+        if (method == "modelSetup.start" &&
+            (state->modelSetupRequestId.empty() ||
+             event.requestId != state->modelSetupRequestId))
+        {
+            return;
+        }
         if (const cld::JsonValue* error = ObjectMember(root, "error"))
         {
             const std::wstring code = Utf8ToWide(
@@ -1235,7 +1301,22 @@ void MainWindow::HandleAssistantEvent(
             {
                 state->pendingCreateRequestId.clear();
             }
-            AiSetupProgress().Visibility(Visibility::Collapsed);
+            if (method == "modelSetup.start")
+            {
+                state->modelSetupRequestId.clear();
+                state->modelSetupActive = false;
+                AiSetupProgress().IsIndeterminate(false);
+                AiSetupProgress().Value(0.0);
+                AiSetupProgress().Visibility(Visibility::Visible);
+                AiSetupProgressText().Text(code + L": " + message);
+                AiSetupProgressText().Visibility(Visibility::Visible);
+                AiRuntimeStatusText().Text(
+                    L"Local model setup could not be started.");
+            }
+            else
+            {
+                AiSetupProgress().Visibility(Visibility::Collapsed);
+            }
             UpdateAssistantInteractionState();
             return;
         }
@@ -1467,10 +1548,106 @@ void MainWindow::HandleAssistantEvent(
             UpdateAssistantInteractionState();
             return;
         }
+
+        if (method == "modelSetup.start")
+        {
+            return;
+        }
+
+        if (method == "modelSetup.cancel")
+        {
+            if (state->modelSetupActive)
+            {
+                AiSetupCancelButton().IsEnabled(false);
+                AiSetupProgressText().Text(L"Cancellation requested\u2026");
+                AiSetupProgressText().Visibility(Visibility::Visible);
+            }
+            return;
+        }
     }
 
     if (kind != "event")
     {
+        return;
+    }
+    if (method == "modelSetupProgress")
+    {
+        if (!state->modelSetupActive ||
+            state->modelSetupRequestId.empty() ||
+            event.requestId != state->modelSetupRequestId)
+        {
+            return;
+        }
+
+        const double received = (std::max)(0.0,
+            cld::JsonNumberOr(*payload, "overallBytesReceived", 0.0));
+        const double total = (std::max)(0.0,
+            cld::JsonNumberOr(*payload, "overallTotalBytes", 0.0));
+        const double percent = std::clamp(
+            cld::JsonNumberOr(*payload, "percent", 0.0), 0.0, 100.0);
+        const bool terminal =
+            cld::JsonBoolOr(*payload, "terminal", false);
+        const bool succeeded =
+            cld::JsonBoolOr(*payload, "succeeded", false);
+        const std::string stage =
+            cld::JsonStringOr(*payload, "stage");
+        const std::wstring artifact = Utf8ToWide(
+            cld::JsonStringOr(*payload, "artifact"));
+        std::wstring message = Utf8ToWide(
+            cld::JsonStringOr(
+                *payload, "message", "Preparing local model setup..."));
+
+        AiSetupProgress().IsIndeterminate(false);
+        AiSetupProgress().Value(percent);
+        AiSetupProgress().Visibility(Visibility::Visible);
+        if (total > 0.0)
+        {
+            std::wostringstream detail;
+            detail << message << L"  "
+                << FormatSetupBytes(received) << L" / "
+                << FormatSetupBytes(total) << L" ("
+                << std::fixed << std::setprecision(1)
+                << percent << L"%)";
+            message = detail.str();
+        }
+        AiSetupProgressText().Text(message);
+        AiSetupProgressText().Visibility(Visibility::Visible);
+        if (!artifact.empty())
+        {
+            AiModelStatusText().Text(L"Current item: " + artifact);
+        }
+
+        if (terminal)
+        {
+            state->modelSetupRequestId.clear();
+            state->modelSetupActive = false;
+            if (succeeded)
+            {
+                AiSetupProgress().Value(100.0);
+                AiRuntimeStatusText().Text(
+                    L"Local model setup completed.");
+                AiLoadedModelText().Text(
+                    L"Loaded model: will update on the next message");
+                AiModelStatusText().Text(
+                    L"The model will load when the next message is sent.");
+            }
+            else if (stage == "cancelled")
+            {
+                AiRuntimeStatusText().Text(
+                    L"Local model setup was cancelled.");
+            }
+            else
+            {
+                AiRuntimeStatusText().Text(
+                    L"Local model setup failed.");
+            }
+            UpdateAssistantInteractionState();
+        }
+        else
+        {
+            AiRuntimeStatusText().Text(
+                L"Downloading and verifying local AI files\u2026");
+        }
         return;
     }
     if (method == "runtimeState")
@@ -1479,12 +1656,30 @@ void MainWindow::HandleAssistantEvent(
             cld::JsonStringOr(*payload, "status", "ready");
         const std::string backend =
             cld::JsonStringOr(*payload, "backend", "local");
+        const std::wstring modelId = Utf8ToWide(
+            cld::JsonStringOr(*payload, "modelId"));
+        const std::wstring modelDisplayName = Utf8ToWide(
+            cld::JsonStringOr(*payload, "modelDisplayName"));
+        const std::wstring modelName = !modelDisplayName.empty()
+            ? modelDisplayName
+            : modelId;
         AiRuntimeStatusText().Text(
             runtimeStatus == "ready"
                 ? L"Local assistant is ready"
                 : L"Assistant: " + Utf8ToWide(runtimeStatus));
+        AiLoadedModelText().Text(
+            modelName.empty()
+                ? L"Loaded model: not reported"
+                : L"Loaded model: " + modelName);
         AiModelStatusText().Text(
             L"Runtime backend: " + Utf8ToWide(backend));
+        if (state->turnActive)
+        {
+            AiThinkingStatusText().Text(
+                modelName.empty()
+                    ? L"AI Assistant is thinking\u2026"
+                    : modelName + L" is thinking\u2026");
+        }
         return;
     }
     if (method == "messageAdded")
@@ -1541,6 +1736,7 @@ void MainWindow::HandleAssistantEvent(
             cld::JsonStringOr(*payload, "messageId");
         const std::wstring delta = Utf8ToWide(
             cld::JsonStringOr(*payload, "delta"));
+        AiThinkingStatusText().Text(L"Generating response\u2026");
         auto found = state->messageBodies.find(id);
         if (found == state->messageBodies.end())
         {
@@ -1611,6 +1807,8 @@ void MainWindow::HandleAssistantEvent(
             return;
         }
         entry->started = true;
+        AiThinkingStatusText().Text(
+            L"Using LookDev tool: " + Utf8ToWide(toolName) + L"\u2026");
         if (state->cancelRequested)
         {
             SetAssistantToolStatus(
@@ -1657,6 +1855,7 @@ void MainWindow::HandleAssistantEvent(
         {
             return;
         }
+        AiThinkingStatusText().Text(L"Thinking about the tool result\u2026");
         if ((status == "succeeded" && (isError || !code.empty())) ||
             (status != "succeeded" && !isError) ||
             (status == "denied" && code != "user_denied") ||
@@ -1856,6 +2055,8 @@ void MainWindow::HandleAssistantEvent(
         {
             return;
         }
+
+        AiThinkingStatusText().Text(L"Waiting for your approval\u2026");
 
         const std::wstring tool = Utf8ToWide(toolName);
         Border card;
@@ -2120,6 +2321,7 @@ void MainWindow::SendAssistantTurn(
     state->activeTurnId = turnId;
     state->turnActive = true;
     state->cancelRequested = false;
+    AiThinkingStatusText().Text(L"Starting the local model\u2026");
     AiPromptBox().Text(L"");
     UpdateAssistantInteractionState();
     AiStopButton().IsEnabled(true);
@@ -2169,16 +2371,16 @@ void MainWindow::OnAiQuickPromptClick(
     SendAssistantTurn(QuickPrompt(identifier), identifier);
 }
 
-void MainWindow::OnAiPromptKeyDown(
+void MainWindow::OnAiSendAcceleratorInvoked(
     IInspectable const&,
-    KeyRoutedEventArgs const& args)
+    KeyboardAcceleratorInvokedEventArgs const& args)
 {
-    if (args.Key() == VirtualKey::Enter &&
-        (GetKeyState(VK_CONTROL) & 0x8000) != 0)
+    args.Handled(true);
+    if (!AiSendButton().IsEnabled())
     {
-        args.Handled(true);
-        SendAssistantTurn(AiPromptBox().Text().c_str());
+        return;
     }
+    SendAssistantTurn(AiPromptBox().Text().c_str());
 }
 
 void MainWindow::OnAiConversationChanged(
@@ -2246,22 +2448,95 @@ void MainWindow::OnAiSetupClick(
     IInspectable const&,
     RoutedEventArgs const&)
 {
+    auto state = m_assistant;
+    if (!state || !state->connected || !state->initialized ||
+        state->modelSetupActive ||
+        !unbox_value_or<bool>(
+            AiLicenseConsentCheck().IsChecked(), false))
+    {
+        return;
+    }
+
+    const std::wstring modelId = SelectedComboTag(AiModelCombo());
+    const std::wstring backend = SelectedComboTag(AiBackendCombo());
+    if (modelId.empty() || backend.empty())
+    {
+        AiRuntimeStatusText().Text(
+            L"Select a model and inference backend first.");
+        return;
+    }
+    if (const auto flyout = AiSetupFlyoutButton().Flyout())
+    {
+        flyout.Hide();
+    }
+
+    state->modelSetupActive = true;
+    AiSetupProgress().IsIndeterminate(false);
+    AiSetupProgress().Value(0.0);
     AiSetupProgress().Visibility(Visibility::Visible);
-    AiRuntimeStatusText().Text(L"Preparing local assistant services\u2026");
-    AiModelStatusText().Text(
-        L"Model setup is delegated to the installed local ChatHost runtime.");
-    m_aiMcpStartRequested = false;
-    if (!m_assistant)
+    AiSetupProgressText().Text(L"Preparing download\u2026");
+    AiSetupProgressText().Visibility(Visibility::Visible);
+    AiRuntimeStatusText().Text(L"Preparing local model setup\u2026");
+    UpdateAssistantInteractionState();
+
+    const std::string payload =
+        "{\"modelId\":\"" +
+        cld::EscapeJson(WideToUtf8(modelId)) +
+        "\",\"backend\":\"" +
+        cld::EscapeJson(WideToUtf8(backend)) +
+        "\",\"licenseAccepted\":true}";
+    std::string requestId;
+    if (PostAssistantRequest(
+            "modelSetup.start", payload, &requestId))
     {
-        StartAssistant();
+        state->modelSetupRequestId = std::move(requestId);
+        return;
     }
-    if (m_controller)
+
+    state->modelSetupActive = false;
+    state->modelSetupRequestId.clear();
+    AiSetupProgressText().Text(
+        L"The setup request could not be queued.");
+    UpdateAssistantInteractionState();
+}
+
+void MainWindow::OnAiSetupCancelClick(
+    IInspectable const&,
+    RoutedEventArgs const&)
+{
+    const auto state = m_assistant;
+    if (!state || !state->modelSetupActive)
     {
-        if (auto snapshot = m_controller->LatestSnapshot())
-        {
-            UpdateAssistantContext(*snapshot);
-        }
+        return;
     }
+    if (PostAssistantRequest("modelSetup.cancel", "{}"))
+    {
+        AiSetupCancelButton().IsEnabled(false);
+        AiSetupProgressText().Text(L"Cancellation requested\u2026");
+        AiSetupProgressText().Visibility(Visibility::Visible);
+    }
+}
+
+void MainWindow::OnAiLicenseClick(
+    IInspectable const& sender,
+    RoutedEventArgs const&)
+{
+    const auto link = sender.try_as<HyperlinkButton>();
+    const std::wstring license = link
+        ? unbox_value_or<hstring>(link.Tag(), L"").c_str()
+        : std::wstring{};
+    const wchar_t* url = license == L"llama.cpp"
+        ? L"https://github.com/ggml-org/llama.cpp/blob/b10205/LICENSE"
+        : L"https://ai.google.dev/gemma/apache_2";
+    (void)Launcher::LaunchUriAsync(
+        Uri{url});
+}
+
+void MainWindow::OnAiLicenseConsentChanged(
+    IInspectable const&,
+    RoutedEventArgs const&)
+{
+    UpdateAssistantInteractionState();
 }
 
 void MainWindow::OnAiRetryClick(

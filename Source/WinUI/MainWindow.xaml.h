@@ -130,9 +130,9 @@ struct MainWindow : MainWindowT<MainWindow>
     void OnAiQuickPromptClick(
         Windows::Foundation::IInspectable const&,
         Microsoft::UI::Xaml::RoutedEventArgs const&);
-    void OnAiPromptKeyDown(
+    void OnAiSendAcceleratorInvoked(
         Windows::Foundation::IInspectable const&,
-        Microsoft::UI::Xaml::Input::KeyRoutedEventArgs const&);
+        Microsoft::UI::Xaml::Input::KeyboardAcceleratorInvokedEventArgs const&);
     void OnAiConversationChanged(
         Windows::Foundation::IInspectable const&,
         Microsoft::UI::Xaml::Controls::SelectionChangedEventArgs const&);
@@ -140,6 +140,15 @@ struct MainWindow : MainWindowT<MainWindow>
         Windows::Foundation::IInspectable const&,
         Microsoft::UI::Xaml::RoutedEventArgs const&);
     void OnAiSetupClick(
+        Windows::Foundation::IInspectable const&,
+        Microsoft::UI::Xaml::RoutedEventArgs const&);
+    void OnAiSetupCancelClick(
+        Windows::Foundation::IInspectable const&,
+        Microsoft::UI::Xaml::RoutedEventArgs const&);
+    void OnAiLicenseClick(
+        Windows::Foundation::IInspectable const&,
+        Microsoft::UI::Xaml::RoutedEventArgs const&);
+    void OnAiLicenseConsentChanged(
         Windows::Foundation::IInspectable const&,
         Microsoft::UI::Xaml::RoutedEventArgs const&);
     void OnAiRetryClick(

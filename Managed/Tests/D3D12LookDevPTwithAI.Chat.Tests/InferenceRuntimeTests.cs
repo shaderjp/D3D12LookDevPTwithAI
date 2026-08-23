@@ -30,6 +30,8 @@ public sealed class InferenceRuntimeTests
         Assert.Equal(DeterministicChatInferenceRuntime.RuntimeId, status.RuntimeId);
         Assert.True(status.IsReady);
         Assert.Equal("ready", status.State);
+        Assert.Equal(DeterministicChatInferenceRuntime.RuntimeId, status.ModelId);
+        Assert.Equal("Deterministic placeholder", status.ModelDisplayName);
     }
 
     [Fact]

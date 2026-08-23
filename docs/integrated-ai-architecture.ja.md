@@ -117,7 +117,17 @@ runtime を起動せず `not_ready` を返す。deterministic placeholder へ暗
 しない。deterministic runtime は Debug の IPC end-to-end test hook だけに限定し、
 同 hook では private MCP factory も登録しない。製品構成や展示構成には使用しない。
 
-現在の artifact setup は利用者承認による開発／手動 setup である。
+右 dock の `Download & set up` は、利用者が Gemma 4 Apache 2.0 と llama.cpp MIT の
+license を確認して明示同意した後にだけ開始する。選択肢は固定 revision の Gemma 4 E2B / E4B
+と llama.cpp b10205 の CPU / CUDA / Vulkan backend に限定する。各 artifact の URL、size、
+SHA-256 は ChatHost 内の catalog に固定し、HTTPS redirect、再開可能な `.partial` download、
+60秒 inactivity timeout、最大4回の再試行、ZIP path traversal / link 拒否を適用する。
+進捗 event は current artifact、artifact bytes、全体 bytes、百分率、stage を Native UI へ送り、
+cancel 後も partial file を保持する。全 artifact の検証と安全な runtime 展開が完了した後にだけ
+schema v1 `inference.json` と license acceptance record を atomic replace する。portable pack の
+read-only artifact root はアプリ内 setup で置き換えない。
+
+独自 artifact を使う開発／手動 setup は次の script を利用する。
 
 ```powershell
 .\Scripts\ConfigureLocalInference.ps1 `
@@ -139,11 +149,10 @@ runtime を起動せず `not_ready` を返す。deterministic placeholder へ暗
 - 検証済み model / runtime file の read lease と runtime directory handle を server 生存中保持する。runtime tree は検証開始前から変更監視し、追加・削除・更新・watcher error のいずれでも session を失効させて子プロセスを停止する。
 - 設定不正、artifact 不一致、起動失敗、HTTP / stream 異常は固定された安全な error code と message へ変換し、path、API key、server body を UI へ露出しない。
 
-この milestone は数 GB 規模の model / runtime を自動 download せず、標準 model も
-確定しない。renderer と共有する GPU memory budget、自動 backend tuning、アプリ内
-model manager も未実装である。手動 artifact を明示承認して同梱する one-app portable
-経路は実装したが、manifest / ZIP の SHA-256 は整合性だけを示し、出所を認証しない。
-公式署名済み artifact catalog と署名済み製品配布は後続であり、手動 setup / pack は
+固定 catalog の download setup は実装済みだが、renderer と共有する GPU memory budget、
+自動 backend tuning、任意 model を扱う model manager は未実装である。組み込み catalog と
+手動 one-app portable pack の SHA-256 は整合性を検証するが、code signing による出所認証ではない。
+公式署名済み artifact catalog と署名済み製品配布は後続であり、現在の setup / pack は
 その trust path の代替ではない。
 
 ## 保存
@@ -187,13 +196,13 @@ payload directoryのrenameをcommit pointとする。例外時は所有確認で
 
 展示 pack は AI を既定で必須とし、operator が指定した `inference.json` と redistribution
 metadata、GGUF、llama runtime全体を再検証する。artifact license と署名なしtrust境界の
-明示承認を要求し、自動 download、secret、承認rule、会話履歴、user settings、symbolを
+明示承認を要求し、build 中の自動 download、secret、承認rule、会話履歴、user settings、symbolを
 含めない。現在の capability は text chat と同一instance MCP Toolであり、vision用
 `mmproj` は参照も同梱もしない。`-WithoutAi` は renderer 開発用の明示的な例外である。
 
 この manual pack は外部installerなしで起動できる自己完結性と改変検出を提供するが、
 code signing / artifact provenance は提供しない。公式署名済み catalog、認証済み配布、
-in-app model manager、installer は後続である。repository の `BuildPortableSuite.ps1` /
+任意 model を扱う管理 UI、installer は後続である。repository の `BuildPortableSuite.ps1` /
 `BuildOfflinePack.ps1` は外部 `LocalMCPChatClient` を組み合わせる旧移行pipelineとして残す。
 build時の NuGet restore はoperatorが設定したfeed/cacheをmanual trust境界に含み、actual SDK、
 resolved package identity、最終payload hashを記録するが、bit単位の再現性やpackage provenance
@@ -207,7 +216,7 @@ release milestoneの必須条件とする。
 3. 完了: 手動設定した GGUF / llama.cpp による loopback 推論、全 runtime file manifest、artifact lease、process ownership
 4. 完了: 親所有の単一 loopback MCP 接続、`readOnlyHint` policy、一回承認 grant
 5. 完了: llama Tool-call loop、Tool event / result 統合、複数 round 上限
-6. 未完: 公式 model catalog / manager、GPU budget、クイック操作、demo reset
+6. 一部完了: 固定 Gemma 4 / llama.cpp catalog、再開可能 download、進捗 / cancel UI。公式 catalog、任意 model manager、GPU budget、demo reset は未完
 7. 完了: 手動・署名なし one-app portable、self-contained runtime、license/SBOM/hash manifest、bounded packaging regression
 8. 未完: 公式署名済み artifact catalog / 配布、実modelを用いた展示 acceptance、installer、vision payload
 

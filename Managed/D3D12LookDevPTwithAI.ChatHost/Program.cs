@@ -34,6 +34,10 @@ builder.Services.AddSingleton<
 builder.Services.AddSingleton<ILlamaServerSessionProvider>(serviceProvider =>
     new LlamaServerProcessSessionProvider(
         serviceProvider.GetRequiredService<ILocalInferenceSettingsProvider>()));
+builder.Services.AddSingleton(serviceProvider =>
+    new LocalModelSetupCoordinator(
+        new LocalModelSetupService(
+            serviceProvider.GetRequiredService<IAppPaths>())));
 builder.Services.AddSingleton<IChatInferenceRuntime>(serviceProvider =>
 #if DEBUG
     useDeterministicTestRuntime

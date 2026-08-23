@@ -45,6 +45,8 @@ public sealed class LlamaServerChatInferenceRuntimeTests
         Assert.Equal("llama-server-cuda", status.RuntimeId);
         Assert.Equal("ready", status.State);
         Assert.True(status.IsReady);
+        Assert.Equal("gemma-test", status.ModelId);
+        Assert.Equal("gemma-test", status.ModelDisplayName);
         Assert.True(status.RuntimeId.Length <= ChatInferenceLimits.MaximumRuntimeIdentifierCharacters);
         Assert.True(status.State.Length <= ChatInferenceLimits.MaximumRuntimeStateCharacters);
 
@@ -893,6 +895,19 @@ public sealed class LlamaServerChatInferenceRuntimeTests
     }
 
     [Fact]
+    public async Task Ready_status_reports_the_configured_model_display_name()
+    {
+        using var runtime = Runtime(
+            new DelegateHandler((_, _) => throw new InvalidOperationException()),
+            Session(modelId: "gemma-4-e2b-it-q4"));
+
+        var status = await runtime.GetStatusAsync();
+
+        Assert.Equal("gemma-4-e2b-it-q4", status.ModelId);
+        Assert.Equal("Gemma 4 E2B IT (Q4_0)", status.ModelDisplayName);
+    }
+
+    [Fact]
     public async Task Missing_session_reports_not_ready_and_stream_fails_safely()
     {
         var handler = new DelegateHandler((_, _) => throw new InvalidOperationException());
@@ -975,11 +990,12 @@ public sealed class LlamaServerChatInferenceRuntimeTests
 
     private static LlamaServerSession Session(
         Uri? endpoint = null,
-        string backend = "cuda") => new(
+        string backend = "cuda",
+        string modelId = "gemma-test") => new(
             endpoint ?? new Uri("http://127.0.0.1:53123/"),
             "test-api-key",
             backend,
-            "gemma-test",
+            modelId,
             Temperature: 0.25,
             MaxTokens: 512);
 

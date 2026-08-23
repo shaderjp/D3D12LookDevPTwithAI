@@ -780,7 +780,7 @@ void MainWindow::OnTextureResolutionSelectionChanged(
     IInspectable const& sender,
     SelectionChangedEventArgs const&)
 {
-    if (m_refreshing) return;
+    if (m_refreshing || !m_viewModel) return;
     const int slot = TextureResolutionTargetCombo().SelectedIndex();
     if (slot < 0) return;
     if (sender == TextureResolutionTargetCombo())

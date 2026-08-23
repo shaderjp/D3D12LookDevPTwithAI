@@ -99,6 +99,8 @@ void TestPlyNestedInstancesMaterialsAlphaAndLights(const std::filesystem::path& 
         "Texture \"alpha-map\" \"float\" \"imagemap\" \"string filename\" \"alpha.png\" "
         "\"float vscale\" -1 \"float udelta\" 0.25\n"
         "MakeNamedMaterial \"metal\" \"string type\" \"conductor\" \"spectrum eta\" \"metal-Ag-eta\" \"spectrum k\" \"metal-Ag-k\"\n"
+        "MakeNamedMaterial \"paint\" \"string type\" \"coateddiffuse\" \"rgb reflectance\" [0.2 0.4 0.8] \"float roughness\" 0.08\n"
+        "MakeNamedMaterial \"coated-metal\" \"string type\" \"coatedconductor\" \"spectrum conductor.eta\" \"metal-Al-eta\" \"spectrum conductor.k\" \"metal-Al-k\" \"float conductor.roughness\" 0.2 \"float interface.roughness\" 0.03\n"
         "MakeNamedMaterial \"glass\" \"string type\" \"dielectric\"\n"
         "MakeNamedMaterial \"red\" \"string type\" \"diffuse\" \"rgb reflectance\" [1 0 0]\n"
         "MakeNamedMaterial \"blue\" \"string type\" \"diffuse\" \"rgb reflectance\" [0 0 1]\n"
@@ -129,6 +131,8 @@ void TestPlyNestedInstancesMaterialsAlphaAndLights(const std::filesystem::path& 
     bool foundTwoSidedEmission = false;
     bool foundMaterialMix = false;
     bool foundDielectricTransmission = false;
+    bool foundCoatedDiffuse = false;
+    bool foundCoatedConductor = false;
     for (const rb::SceneMaterial& material : result.scene.materials)
     {
         foundMetal |= material.assignment.materialName.find("metal") != std::string::npos && material.assignment.metallicFactor == 1.0f;
@@ -143,12 +147,26 @@ void TestPlyNestedInstancesMaterialsAlphaAndLights(const std::filesystem::path& 
             material.transmissionFactor > 0.99f &&
             std::abs(material.indexOfRefraction - 1.5f) < 1.0e-6f &&
             material.assignment.metallicFactor == 0.0f;
+        foundCoatedDiffuse |= material.assignment.materialName == "paint" &&
+            material.assignment.roughnessFactor == 1.0f &&
+            (material.gltfExtensions.featureMask & rb::GltfMaterialFeatureClearcoat) != 0u &&
+            material.gltfExtensions.clearcoatFactor == 1.0f &&
+            std::abs(material.gltfExtensions.clearcoatRoughnessFactor - 0.08f) < 1.0e-6f;
+        foundCoatedConductor |= material.assignment.materialName == "coated-metal" &&
+            std::abs(material.assignment.roughnessFactor - 0.2f) < 1.0e-6f &&
+            material.assignment.metallicFactor == 1.0f &&
+            std::abs(material.assignment.baseColorFactor[0] - 0.91f) < 1.0e-6f &&
+            (material.gltfExtensions.featureMask & rb::GltfMaterialFeatureClearcoat) != 0u &&
+            material.gltfExtensions.clearcoatFactor == 1.0f &&
+            std::abs(material.gltfExtensions.clearcoatRoughnessFactor - 0.03f) < 1.0e-6f;
     }
     Require(foundMetal, "Named conductor approximation is missing.");
     Require(foundAlpha, "Independent alpha texture was not imported.");
     Require(foundTwoSidedEmission, "Two-sided diffuse area light state was not imported.");
     Require(foundMaterialMix, "Constant-coefficient mix material was not evaluated.");
     Require(foundDielectricTransmission, "PBRT dielectric material was not marked for transmission.");
+    Require(foundCoatedDiffuse, "PBRT coateddiffuse was not mapped to a diffuse base plus clearcoat.");
+    Require(foundCoatedConductor, "PBRT coatedconductor roughness and clearcoat were not preserved.");
     Require(result.diagnostics.find("Straight-through approximation for dielectric") == std::string::npos,
         "The obsolete straight-through dielectric warning is still reported.");
 }

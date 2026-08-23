@@ -114,6 +114,84 @@ public sealed class PipeRequestRouterTests
     }
 
     [Fact]
+    public async Task Model_setup_requires_explicit_license_acceptance()
+    {
+        await using var fixture = new RouterFixture();
+        _ = await fixture.InitializeAsync();
+
+        await fixture.Router.HandleAsync(
+            fixture.Request(
+                "modelSetup.start",
+                new ModelSetupStartRequest(
+                    "gemma-4-e2b-it-q4",
+                    "cpu",
+                    LicenseAccepted: false)),
+            fixture.Peer);
+
+        var rejected = await fixture.Peer.ReadAsync();
+        Assert.Equal(PipeMessageKind.Response, rejected.Kind);
+        Assert.Equal("model_license_not_accepted", rejected.Error?.Code);
+    }
+
+    [Fact]
+    public async Task Model_setup_reports_progress_and_can_be_cancelled()
+    {
+        var setup = new BlockingModelSetupService();
+        await using var fixture = new RouterFixture(modelSetupService: setup);
+        _ = await fixture.InitializeAsync();
+        var start = fixture.Request(
+            "modelSetup.start",
+            new ModelSetupStartRequest(
+                "gemma-4-e2b-it-q4",
+                "vulkan",
+                LicenseAccepted: true));
+
+        await fixture.Router.HandleAsync(start, fixture.Peer);
+        var first = await fixture.Peer.ReadAsync(TimeSpan.FromSeconds(3));
+        var second = await fixture.Peer.ReadAsync(TimeSpan.FromSeconds(3));
+        var accepted = new[] { first, second }.Single(message =>
+            message.Kind == PipeMessageKind.Response);
+        var progress = new[] { first, second }.Single(message =>
+            message.Method == "modelSetupProgress");
+
+        Assert.Null(accepted.Error);
+        Assert.Equal(start.RequestId, progress.RequestId);
+        Assert.Equal(
+            42,
+            progress.Payload.GetProperty("percent").GetDouble());
+        Assert.Equal("vulkan", (await setup.Started.Task.WaitAsync(
+            TimeSpan.FromSeconds(3))).Backend);
+
+        await fixture.Router.HandleAsync(
+            fixture.Request("modelSetup.cancel", new { }),
+            fixture.Peer);
+        PipeEnvelope? cancelled = null;
+        PipeEnvelope? cancelResponse = null;
+        while (cancelled is null || cancelResponse is null)
+        {
+            var message = await fixture.Peer.ReadAsync(TimeSpan.FromSeconds(3));
+            if (message.Kind == PipeMessageKind.Response &&
+                message.Method == "modelSetup.cancel")
+            {
+                cancelResponse = message;
+            }
+            else if (message.Method == "modelSetupProgress" &&
+                     message.Payload.GetProperty("terminal").GetBoolean())
+            {
+                cancelled = message;
+            }
+        }
+
+        Assert.True(cancelResponse.Payload
+            .Deserialize<ModelSetupCancelResult>(PipeJson.SerializerOptions)!
+            .CancelRequested);
+        Assert.Equal(
+            "cancelled",
+            cancelled.Payload.GetProperty("stage").GetString());
+        await setup.Cancelled.Task.WaitAsync(TimeSpan.FromSeconds(3));
+    }
+
+    [Fact]
     public async Task Send_turn_streams_the_injected_inference_runtime()
     {
         var runtime = new ScriptedInferenceRuntime("alpha ", "beta");
@@ -128,6 +206,8 @@ public sealed class PipeRequestRouterTests
         var accepted = await fixture.Peer.ReadAsync();
         var deltas = new List<string>();
         string? backend = null;
+        string? modelId = null;
+        string? modelDisplayName = null;
         PipeEnvelope envelope;
         do
         {
@@ -135,13 +215,21 @@ public sealed class PipeRequestRouterTests
             if (envelope.Method == "textDelta")
                 deltas.Add(envelope.Payload.GetProperty("delta").GetString()!);
             if (envelope.Method == "runtimeState")
+            {
                 backend = envelope.Payload.GetProperty("backend").GetString();
+                modelId = envelope.Payload.GetProperty("modelId").GetString();
+                modelDisplayName = envelope.Payload
+                    .GetProperty("modelDisplayName")
+                    .GetString();
+            }
         }
         while (envelope.Method != "completed");
 
         Assert.Null(accepted.Error);
         Assert.Equal("alpha beta", string.Concat(deltas));
         Assert.Equal(ScriptedInferenceRuntime.Id, backend);
+        Assert.Equal(ScriptedInferenceRuntime.ModelId, modelId);
+        Assert.Equal(ScriptedInferenceRuntime.ModelDisplayName, modelDisplayName);
         var request = Assert.Single(runtime.Requests);
         Assert.Equal(conversationId, request.ConversationId);
         Assert.Equal("use the runtime", request.UserText);
@@ -813,14 +901,17 @@ public sealed class PipeRequestRouterTests
             Path.GetTempPath(),
             "D3D12LookDevPTwithAI.Chat.Tests",
             Guid.NewGuid().ToString("N"));
+        private readonly LocalModelSetupCoordinator _modelSetup;
 
         public RouterFixture(
             IChatInferenceRuntime? inferenceRuntime = null,
             bool failHistoryRead = false,
             Func<IConversationStore, IConversationStore>? decorateConversationStore = null,
-            ISameInstanceMcpClientFactory? mcpClientFactory = null)
+            ISameInstanceMcpClientFactory? mcpClientFactory = null,
+            ILocalModelSetupService? modelSetupService = null)
         {
-            Store = new SqliteConversationStore(new AppPaths(_dataDirectory));
+            var paths = new AppPaths(_dataDirectory);
+            Store = new SqliteConversationStore(paths);
             IConversationStore coordinatorStore = failHistoryRead
                 ? new FailingHistoryConversationStore(Store)
                 : Store;
@@ -830,7 +921,9 @@ public sealed class PipeRequestRouterTests
                 coordinatorStore,
                 inferenceRuntime ?? new DeterministicChatInferenceRuntime(),
                 mcpClientFactory);
-            Router = new PipeRequestRouter(Coordinator, _lifetime);
+            _modelSetup = new LocalModelSetupCoordinator(
+                modelSetupService ?? new LocalModelSetupService(paths));
+            Router = new PipeRequestRouter(Coordinator, _modelSetup, _lifetime);
         }
 
         public SqliteConversationStore Store { get; }
@@ -897,6 +990,7 @@ public sealed class PipeRequestRouterTests
 
         public async ValueTask DisposeAsync()
         {
+            await _modelSetup.DisposeAsync();
             await Coordinator.StopAsync();
             if (Directory.Exists(_dataDirectory)) Directory.Delete(_dataDirectory, recursive: true);
         }
@@ -914,6 +1008,46 @@ public sealed class PipeRequestRouterTests
             Endpoint = endpoint;
             BearerToken = bearerToken;
             return create((endpoint, bearerToken));
+        }
+    }
+
+    private sealed class BlockingModelSetupService : ILocalModelSetupService
+    {
+        public TaskCompletionSource<ModelSetupStartRequest> Started { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource Cancelled { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public async Task InstallAsync(
+            ModelSetupStartRequest request,
+            Func<ModelSetupProgressEvent, CancellationToken, Task> reportAsync,
+            CancellationToken cancellationToken)
+        {
+            Started.TrySetResult(request);
+            await reportAsync(
+                new ModelSetupProgressEvent(
+                    "downloading",
+                    "test artifact",
+                    42,
+                    100,
+                    42,
+                    100,
+                    42,
+                    "Downloading…"),
+                cancellationToken);
+            try
+            {
+                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                Cancelled.TrySetResult();
+                throw;
+            }
+        }
+
+        public void Dispose()
+        {
         }
     }
 
@@ -956,6 +1090,8 @@ public sealed class PipeRequestRouterTests
     private sealed class ScriptedInferenceRuntime(params string[] chunks) : IChatInferenceRuntime
     {
         public const string Id = "scripted-test-runtime";
+        public const string ModelId = "scripted-model-q4";
+        public const string ModelDisplayName = "Scripted Model Q4";
         public const string SensitiveFailureMarker =
             "C:\\private\\model-path\\sensitive-runtime-marker.gguf";
         public List<ChatInferenceRequest> Requests { get; } = [];
@@ -963,7 +1099,9 @@ public sealed class PipeRequestRouterTests
             Id,
             "Scripted test runtime",
             IsReady: true,
-            State: "ready");
+            State: "ready",
+            ModelId,
+            ModelDisplayName);
         public ChatInferenceException? Failure { get; init; }
 
         public ValueTask<ChatInferenceRuntimeStatus> GetStatusAsync(

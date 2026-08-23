@@ -836,28 +836,111 @@
                                        FontWeight="SemiBold"
                                        TextWrapping="Wrap"
                                        AutomationProperties.LiveSetting="Polite" />
+                            <TextBlock x:Name="AiLoadedModelText"
+                                       Text="Loaded model: none"
+                                       TextWrapping="Wrap"
+                                       AutomationProperties.LiveSetting="Polite" />
                             <TextBlock x:Name="AiModelStatusText"
                                        Text="Model: not configured"
                                        TextWrapping="Wrap"
                                        Opacity="0.72" />
                             <ProgressBar x:Name="AiSetupProgress"
+                                         Minimum="0"
+                                         Maximum="100"
+                                         Value="0"
                                          IsIndeterminate="True"
                                          Visibility="Collapsed" />
-                            <ComboBox x:Name="AiModelCombo"
-                                      Header="Local model"
-                                      SelectedIndex="0"
-                                      HorizontalAlignment="Stretch">
-                                <ComboBoxItem Content="Gemma 4 E2B (Recommended)" Tag="gemma-4-e2b" />
-                                <ComboBoxItem Content="Gemma 4 E4B" Tag="gemma-4-e4b" />
-                            </ComboBox>
+                            <TextBlock x:Name="AiSetupProgressText"
+                                       TextWrapping="Wrap"
+                                       Opacity="0.78"
+                                       Visibility="Collapsed"
+                                       AutomationProperties.LiveSetting="Polite" />
                             <StackPanel Orientation="Horizontal" Spacing="6">
-                                <Button x:Name="AiSetupButton"
-                                        Content="Set up"
-                                        Click="OnAiSetupClick" />
+                                <Button x:Name="AiSetupCancelButton"
+                                        Content="Cancel"
+                                        Visibility="Collapsed"
+                                        Click="OnAiSetupCancelClick" />
                                 <Button x:Name="AiRetryButton"
                                         Content="Retry"
                                         Click="OnAiRetryClick" />
                             </StackPanel>
+                            <Button x:Name="AiSetupFlyoutButton"
+                                    Content="Install or change local model"
+                                    HorizontalAlignment="Stretch"
+                                    HorizontalContentAlignment="Left">
+                                <Button.Flyout>
+                                    <Flyout Placement="Left">
+                                    <Grid MinWidth="330" ColumnSpacing="8" RowSpacing="5" Padding="4">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                        </Grid.RowDefinitions>
+                                        <TextBlock Grid.Row="0"
+                                                   Grid.Column="0"
+                                                   Text="Model"
+                                                   VerticalAlignment="Center" />
+                                        <ComboBox x:Name="AiModelCombo"
+                                                  Grid.Row="0"
+                                                  Grid.Column="1"
+                                                  AutomationProperties.Name="Local model"
+                                                  SelectedIndex="0"
+                                                  HorizontalAlignment="Stretch">
+                                            <ComboBoxItem Content="Gemma 4 E2B (Recommended)" Tag="gemma-4-e2b-it-q4" />
+                                            <ComboBoxItem Content="Gemma 4 E4B" Tag="gemma-4-e4b-it-q4" />
+                                        </ComboBox>
+                                        <TextBlock Grid.Row="1"
+                                                   Grid.Column="0"
+                                                   Text="Backend"
+                                                   VerticalAlignment="Center" />
+                                        <ComboBox x:Name="AiBackendCombo"
+                                                  Grid.Row="1"
+                                                  Grid.Column="1"
+                                                  AutomationProperties.Name="Inference backend"
+                                                  SelectedIndex="0"
+                                                  HorizontalAlignment="Stretch">
+                                            <ComboBoxItem Content="CUDA 12.4 (NVIDIA recommended)" Tag="cuda" />
+                                            <ComboBoxItem Content="Vulkan" Tag="vulkan" />
+                                            <ComboBoxItem Content="CPU" Tag="cpu" />
+                                        </ComboBox>
+                                        <StackPanel Grid.Row="2"
+                                                    Grid.ColumnSpan="2"
+                                                    Orientation="Horizontal"
+                                                    Spacing="8">
+                                            <HyperlinkButton Content="Gemma 4 Apache 2.0"
+                                                             Tag="gemma"
+                                                             Click="OnAiLicenseClick"
+                                                             Padding="0,2" />
+                                            <HyperlinkButton Content="llama.cpp MIT"
+                                                             Tag="llama.cpp"
+                                                             Click="OnAiLicenseClick"
+                                                             Padding="0,2" />
+                                        </StackPanel>
+                                        <CheckBox x:Name="AiLicenseConsentCheck"
+                                                  Grid.Row="3"
+                                                  Grid.ColumnSpan="2"
+                                                  Checked="OnAiLicenseConsentChanged"
+                                                  Unchecked="OnAiLicenseConsentChanged">
+                                            <TextBlock Text="I accept both licenses."
+                                                       TextWrapping="Wrap" />
+                                        </CheckBox>
+                                        <Button x:Name="AiSetupButton"
+                                                Grid.Row="4"
+                                                Grid.ColumnSpan="2"
+                                                Content="Download &amp; set up"
+                                                HorizontalAlignment="Left"
+                                                IsEnabled="False"
+                                                Click="OnAiSetupClick" />
+                                    </Grid>
+                                    </Flyout>
+                                </Button.Flyout>
+                            </Button>
                         </StackPanel>
                     </Border>
 
@@ -910,16 +993,41 @@
                         <Grid.RowDefinitions>
                             <RowDefinition Height="Auto" />
                             <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
                         </Grid.RowDefinitions>
+                        <Border x:Name="AiThinkingPanel"
+                                Grid.Row="0"
+                                Padding="9,7"
+                                Background="{ThemeResource AccentFillColorSecondaryBrush}"
+                                CornerRadius="5"
+                                Visibility="Collapsed"
+                                AutomationProperties.LiveSetting="Polite">
+                            <StackPanel Orientation="Horizontal" Spacing="8">
+                                <ProgressRing x:Name="AiThinkingProgress"
+                                              Width="18"
+                                              Height="18"
+                                              IsActive="False" />
+                                <TextBlock x:Name="AiThinkingStatusText"
+                                           Text="AI Assistant is thinking…"
+                                           VerticalAlignment="Center"
+                                           TextWrapping="Wrap" />
+                            </StackPanel>
+                        </Border>
                         <TextBox x:Name="AiPromptBox"
-                                 Grid.Row="0"
+                                 Grid.Row="1"
                                  MinHeight="72"
                                  MaxHeight="160"
                                  AcceptsReturn="True"
                                  TextWrapping="Wrap"
-                                 PlaceholderText="Ask about or control this LookDev scene…"
-                                 KeyDown="OnAiPromptKeyDown" />
-                        <StackPanel Grid.Row="1"
+                                 PlaceholderText="Ask about or control this LookDev scene…  Ctrl+Enter to send"
+                                 AutomationProperties.HelpText="Press Ctrl+Enter to send. Press Enter to insert a new line.">
+                            <TextBox.KeyboardAccelerators>
+                                <KeyboardAccelerator Key="Enter"
+                                                     Modifiers="Control"
+                                                     Invoked="OnAiSendAcceleratorInvoked" />
+                            </TextBox.KeyboardAccelerators>
+                        </TextBox>
+                        <StackPanel Grid.Row="2"
                                     Orientation="Horizontal"
                                     HorizontalAlignment="Right"
                                     Spacing="6">
@@ -927,10 +1035,11 @@
                                     Content="Stop"
                                     IsEnabled="False"
                                     Click="OnAiStopClick" />
-                            <Button x:Name="AiSendButton"
-                                    Content="Send"
-                                    IsEnabled="False"
-                                    Click="OnAiSendClick" />
+                             <Button x:Name="AiSendButton"
+                                     Content="Send"
+                                     ToolTipService.ToolTip="Send (Ctrl+Enter)"
+                                     IsEnabled="False"
+                                     Click="OnAiSendClick" />
                         </StackPanel>
                     </Grid>
                 </Grid>

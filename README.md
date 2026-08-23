@@ -50,16 +50,22 @@ multi-round tool loop. Read-only tools execute automatically; every mutation
 shows its exact canonical arguments in the LookDev dock and requires a native
 one-time approval. Tool progress and results stay in the same window, while
 only the user message and final visible assistant response are persisted. A
-manual, unsigned one-app exhibition pack is now available; the in-app model
-manager and an officially signed artifact catalog remain pending. See the
+fixed-revision in-app setup for Gemma 4 and llama.cpp and a manual, unsigned
+one-app exhibition pack are now available; an arbitrary-model manager and an
+officially signed artifact catalog remain pending. See the
 [integrated architecture](docs/integrated-ai-architecture.ja.md).
 
-### Manual local inference setup
+### Local inference setup
 
-This milestone does not automatically download a multi-gigabyte model or a
-llama.cpp runtime. For development or an explicitly user-approved setup,
-import an existing GGUF and the `llama-server.exe` from an existing CPU, CUDA,
-or Vulkan llama.cpp runtime directory:
+After the user reviews and explicitly accepts the licenses, the Assistant's
+`Download & set up` action downloads a fixed revision of Gemma 4 E2B or E4B and
+the llama.cpp b10205 CPU, CUDA, or Vulkan runtime. It displays the current file,
+received and total bytes, and overall percentage. Cancellation keeps a
+`.partial` file so the same setup can resume with an HTTP Range request. Fixed
+sizes and SHA-256 hashes are verified before `inference.json` is replaced.
+
+For development with a custom GGUF or an existing llama.cpp runtime, import the
+artifacts with the existing script:
 
 ```powershell
 .\Scripts\ConfigureLocalInference.ps1 `
@@ -224,8 +230,8 @@ Run the bounded packaging regression independently with:
 .\Scripts\TestIntegratedPortable.ps1
 ```
 
-An official signed artifact catalog, in-app model manager, and signed product
-release remain future work.
+An officially signed artifact catalog, arbitrary-model management UI, and a
+signed product release remain future work.
 
 ### Legacy two-app transition suite
 

@@ -17,7 +17,9 @@
     <OutputType>WinExe</OutputType>
     <AssemblyName>D3D12LookDevPTwithAI.ChatHost</AssemblyName>
     <TargetFramework>net9.0-windows</TargetFramework>
+    <Platforms>x64</Platforms>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>true</SelfContained>
     <PlatformTarget>x64</PlatformTarget>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
     <AppendRuntimeIdentifierToOutputPath>false</AppendRuntimeIdentifierToOutputPath>

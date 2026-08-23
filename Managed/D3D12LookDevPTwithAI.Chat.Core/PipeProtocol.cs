@@ -156,6 +156,27 @@ public sealed record InitializeResult(
     Guid ActiveConversationId,
     IReadOnlyList<ConversationSummary> Conversations);
 
+public sealed record ModelSetupStartRequest(
+    string ModelId,
+    string Backend,
+    bool LicenseAccepted);
+
+public sealed record ModelSetupStartResult(bool Accepted);
+
+public sealed record ModelSetupCancelResult(bool CancelRequested);
+
+public sealed record ModelSetupProgressEvent(
+    string Stage,
+    string Artifact,
+    long BytesReceived,
+    long TotalBytes,
+    long OverallBytesReceived,
+    long OverallTotalBytes,
+    double Percent,
+    string Message,
+    bool Terminal = false,
+    bool Succeeded = false);
+
 public sealed record ConversationSummary(
     Guid Id,
     string Title,
@@ -199,7 +220,11 @@ public sealed record ApprovalRespondRequest(
 public sealed record ApprovalRespondResult(Guid ApprovalId, bool Accepted);
 public sealed record ApprovalResolution(bool Allowed, string? ApprovalGrant);
 
-public sealed record RuntimeStateEvent(string Status, string Backend = "placeholder");
+public sealed record RuntimeStateEvent(
+    string Status,
+    string Backend = "placeholder",
+    string ModelId = "",
+    string ModelDisplayName = "");
 public sealed record MessageAddedEvent(Guid TurnId, ConversationMessage Message);
 public sealed record TextDeltaEvent(Guid TurnId, Guid MessageId, string Delta);
 public sealed record ToolApprovalRequiredEvent(

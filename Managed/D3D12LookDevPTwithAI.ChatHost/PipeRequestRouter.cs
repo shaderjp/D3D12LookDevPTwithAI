@@ -1,11 +1,13 @@
 using System.Text.Json;
 using D3D12LookDevPTwithAI.Chat.Core;
+using D3D12LookDevPTwithAI.ChatHost.Inference;
 using Microsoft.Extensions.Hosting;
 
 namespace D3D12LookDevPTwithAI.ChatHost;
 
 public sealed class PipeRequestRouter(
     ChatCoordinator coordinator,
+    LocalModelSetupCoordinator modelSetup,
     IHostApplicationLifetime applicationLifetime)
 {
     private int _initialized;
@@ -66,6 +68,30 @@ public sealed class PipeRequestRouter(
                         await coordinator.SelectConversationAsync(
                             Deserialize<ConversationSelectRequest>(request),
                             cancellationToken).ConfigureAwait(false),
+                        cancellationToken: cancellationToken).ConfigureAwait(false);
+                    return;
+                case "modelSetup.start":
+                    {
+                        RequireInitialized();
+                        var setupRequest = Deserialize<ModelSetupStartRequest>(request);
+                        if (!modelSetup.TryStart(setupRequest, peer, request.RequestId))
+                        {
+                            throw new ChatRequestException(
+                                "model_setup_in_progress",
+                                "A local model setup operation is already running.",
+                                retryable: true);
+                        }
+                        await peer.SendResponseAsync(
+                            request,
+                            new ModelSetupStartResult(true),
+                            cancellationToken: cancellationToken).ConfigureAwait(false);
+                        return;
+                    }
+                case "modelSetup.cancel":
+                    RequireInitialized();
+                    await peer.SendResponseAsync(
+                        request,
+                        new ModelSetupCancelResult(modelSetup.Cancel()),
                         cancellationToken: cancellationToken).ConfigureAwait(false);
                     return;
                 case "sendTurn":

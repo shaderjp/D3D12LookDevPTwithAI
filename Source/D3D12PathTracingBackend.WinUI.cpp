@@ -162,7 +162,15 @@ constexpr wchar_t const* TextureNames[] =
     L"Occlusion",
     L"Emissive",
     L"Alpha",
+    L"Specular Color",
+    L"Specular Factor",
+    L"Transmission",
+    L"Thickness",
+    L"Clearcoat",
+    L"Clearcoat Roughness",
+    L"Clearcoat Normal",
 };
+static_assert(_countof(TextureNames) == Bistro::TextureSlotCount);
 }
 
 void D3D12PathTracingBackend::SetViewportFocused(bool focused) noexcept

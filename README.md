@@ -73,6 +73,14 @@ MCP state and diagnostics rather than vision. An arbitrary-model manager and
 an officially signed artifact catalog remain pending. See the
 [integrated architecture](docs/integrated-ai-architecture.ja.md).
 
+During an Assistant turn, the application pauses new viewport command
+recording, submission, and presentation to reduce contention between the local
+LLM and the DXR renderer. MCP commands and cached snapshots remain active, and
+temporal parity and jitter do not advance without a submitted frame. See
+[rendering load control during LLM inference](docs/ai-inference-render-coordination.md)
+for the signal path, pause/resume behavior, direct diagnostics path, and current
+limitations.
+
 ### Local inference setup
 
 After the user reviews and explicitly accepts the licenses, the Assistant's
@@ -606,6 +614,7 @@ DXGI concern and does not add a UI shader pass.
 ## More documentation
 
 - [Asset setup](docs/assets.md)
+- [Rendering load control during LLM inference](docs/ai-inference-render-coordination.md)
 - [Scripts guide](docs/scripts.md)
 - [Rendering pipeline](docs/rendering-pipeline.md)
 - [MCP integration](docs/mcp.md)

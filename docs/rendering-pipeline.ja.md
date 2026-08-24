@@ -9,6 +9,25 @@ English documentation: [Rendering Pipeline Learning Guide](rendering-pipeline.md
 > [!NOTE]
 > この文書は「目標アーキテクチャ」ではなく現在の実装を説明します。条件を満たす DXR 1.1 Interactive Baseline/DI frame は独立 Primary Visibility と compact secondary task graph を使い、RTXDI GI/PT、Reference Still、DXR 1.0、diagnostic run は megakernel を維持します。RTXDI は DI/GI/checkerboard PT、DLSS Ray Reconstruction は frame ごとの tag/evaluation まで実装済みです。
 
+## Inspectorで実装状態を確認する
+
+次の4画面は同じPBRT BMW M6 sceneに対する現在のWinUI Inspectorです。設定値だけでなく、
+特にDenoise / ReSTIR tabでは上部statusを合わせて読むと、requested backendと実際に
+利用できるbackendを区別できます。
+
+| Viewport | Path Tracing |
+|:---:|:---:|
+| ![render mode、display resolution、debug view、tone mapperを公開するViewport Inspector](images/viewport.png) | ![quality profile、RTXDI backend、render scale、adaptive ray budgetを公開するPath Tracing Inspector](images/pathtracing.png) |
+
+| Denoise | ReSTIR |
+|:---:|:---:|
+| ![NRD RELAXとtemporal reconstruction設定、DLSS fallback statusを表示するDenoise Inspector](images/denoise.png) | ![temporal/spatial reuse設定とRTXDI未build fallback statusを表示するReSTIR Inspector](images/restir.png) |
+
+`Path Tracing`のselectorに`RTXDI`が表示されても、optional SDKがcompileされていなければ
+ReSTIR tabのstatusにfallback理由が表示されます。同様にDenoise tabはrequested backendと
+NRD / DLSSのcompile・runtime readinessを別々に示します。画像だけでbackend activeを判断せず、
+status blockまたはMCP stateを根拠にしてください。
+
 ## 1. 2種類の出力目標
 
 D3D12LookDevPTwithAI は、目的の違う2つの描画経路を分けています。

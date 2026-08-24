@@ -9,6 +9,26 @@ A good reading order is to start with the full-frame overview, inspect the stage
 > [!NOTE]
 > This document describes the current implementation, not a target architecture. Eligible DXR 1.1 Interactive Baseline/DI frames use an independent Primary Visibility and compact secondary-task graph; RTXDI GI/PT, Reference Still, DXR 1.0, and diagnostic runs retain the megakernel. RTXDI provides DI, GI, and checkerboard PT, and DLSS Ray Reconstruction has a complete per-frame tagging/evaluation path.
 
+## Inspecting the implemented state
+
+These four views show the current WinUI Inspector for the same PBRT BMW M6
+scene. In particular, read Denoise and ReSTIR selectors together with the
+status block at the top of the tab to distinguish a requested backend from one
+that is actually available.
+
+| Viewport | Path Tracing |
+|:---:|:---:|
+| ![Viewport Inspector exposing render mode, display resolution, debug view, and tone mapping](images/viewport.png) | ![Path Tracing Inspector exposing quality profile, RTXDI backend, render scale, and adaptive ray budget](images/pathtracing.png) |
+
+| Denoise | ReSTIR |
+|:---:|:---:|
+| ![Denoise Inspector showing NRD RELAX and temporal reconstruction controls together with DLSS fallback status](images/denoise.png) | ![ReSTIR Inspector showing temporal and spatial reuse controls together with the not-compiled RTXDI fallback](images/restir.png) |
+
+An `RTXDI` selection in Path Tracing does not prove that the optional SDK was
+compiled; the ReSTIR status explains the fallback when it was not. Likewise,
+the Denoise tab reports requested selection separately from NRD/DLSS compile and
+runtime readiness. Use that status or MCP state as evidence of the active path.
+
 ## 1. Two Output Goals
 
 D3D12LookDevPTwithAI separates two rendering paths with different goals.

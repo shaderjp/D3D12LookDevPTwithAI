@@ -182,6 +182,12 @@ Native UIは`Last AI turn: ... total · runtime ... · model ... · tools ...`�
 `totalMilliseconds`に対応しますが、UI event配送とrenderer loopがgateを観測するまでの短い差が
 あります。
 
+![BMW M6のTool workflow完了後に、Vulkan backend、Gemma 4、total・runtime・model・toolsのturn timingを表示する統合AI Assistant](images/aiassitant.png)
+
+この例では`runtime 4 ms`、`model 7.2 s`、`tools 7.0 s`のように分類されているため、
+長いturnを「LLMがすべてthinkingしていた」と判断せず、Tool処理とmodel処理を分けて確認できます。
+表示値はcapture時点の一例であり、性能基準値ではありません。
+
 ## 現在のtrade-offと制約
 
 - backend非依存のため、CPU inferenceでもrenderをpauseします。

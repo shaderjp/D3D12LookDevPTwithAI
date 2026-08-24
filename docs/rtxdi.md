@@ -63,6 +63,14 @@ as its final build:
 .\Scripts\BuildBackendMatrix.ps1 -Configuration Release
 ```
 
+![The ReSTIR Inspector on PBRT BMW M6 showing temporal/spatial reuse controls together with the not-compiled RTXDI fallback status](images/restir.png)
+
+This is the repository-default build explicitly reporting `RTXDI: not
+compiled, fallback`. ReSTIR DI toggles and reuse parameters remain visible as
+project/UI state, but `RTXDI was disabled at build time` means the current frame
+is not evidence of active RTXDI execution. Prefer the status block over the
+selector when verifying an optional backend.
+
 ## Current Two-Pass DI Graph
 
 The runtime dispatches two compute passes, not the older four-pass/copy chain:

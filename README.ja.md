@@ -59,6 +59,12 @@ vision ではなく MCP state / diagnostics に基づきます。任意 model �
 公式署名済み artifact catalog は後続です。設計と境界は
 [統合アーキテクチャ](docs/integrated-ai-architecture.ja.md)を参照してください。
 
+Assistant turn中はlocal LLMとDXR rendererのGPU競合を抑えるため、新しいviewport frameの
+command記録・submit・Presentを一時停止します。MCP commandとcached snapshotは継続し、
+temporal parityやjitterはsubmitted frameなしに進めません。signal経路、pause対象、再開、
+direct diagnostics経路、制約は
+[LLM推論中のレンダリング負荷制御](docs/ai-inference-render-coordination.ja.md)を参照してください。
+
 ### ローカル推論の setup
 
 Assistant の `Download & set up` は、license の確認と明示同意後に固定 revision の
@@ -558,6 +564,7 @@ WinUI composition は DXGI 側で行い、UI 専用 shader pass は追加しま�
 ## 関連文書
 
 - [Asset setup](docs/assets.ja.md)
+- [LLM推論中のレンダリング負荷制御](docs/ai-inference-render-coordination.ja.md)
 - [Scriptsガイド](docs/scripts.ja.md)
 - [Rendering pipeline](docs/rendering-pipeline.ja.md)
 - [MCP integration](docs/mcp.ja.md)

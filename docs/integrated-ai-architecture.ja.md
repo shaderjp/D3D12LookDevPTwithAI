@@ -41,6 +41,7 @@ Native UI ── process-local one-time approval broker
 - 新製品の初期モードは `AI Assistant`、推奨幅は 420 px とする。
 - `F9` で Assistant を開閉し、`F10` の render-only 動作は維持する。
 - Assistant は会話、読み込み済み model / backend、ストリーミング応答、取消、Tool 実行状態を表示・操作する。turn 中は model 起動、思考中、応答生成、Tool 実行、承認待ちを ProgressRing と status text で区別する。
+- Assistant turn中はDXRの新しいframe submissionを止め、MCP commandとsnapshot更新だけを継続する。submitted frameがない間はtemporal parity、jitter、previous matrix、sample countを進めず、成功・取消・error・host停止の全terminal経路で再開する。詳細は[LLM推論中のレンダリング負荷制御](ai-inference-render-coordination.ja.md)を参照する。
 - 最終的な AI Assistant 応答だけを WinUI `RichTextBlock` へ Markdown としてrenderする。見出し、強調、取消線、inline / fenced code、箇条書き／番号付きlist、引用、horizontal rule、linkを扱い、link schemeは`http` / `https` / `mailto`だけを許可する。画像記法はremote画像を埋め込まず、安全なlabel付きlinkとして表示する。user message、error、Tool lifecycle cardは従来のplain text / native UI表示を維持する。
 - `Ctrl+Enter` は WinUI `KeyboardAccelerator` から送信し、`Enter` だけは複数行入力の改行として扱う。quick prompt は Describe scene、Review view、Frame camera、Suggest denoise、Compare、Benchmark を提供する。
 - 変更 Tool の一回承認カードには、実際の hash と一致する canonical JSON 引数を8 KiB上限で全文表示する。Tool 開始後に取消・切断された場合は、未実行と断定せず結果不明として LookDev 状態の確認を促す。

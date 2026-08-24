@@ -573,6 +573,7 @@ WinUI composition は DXGI 側で行い、UI 専用 shader pass は追加しま�
 
 ## 関連文書
 
+- [印刷用クイックガイド (A4横・1ページ)](docs/quick-guide.ja.pdf)
 - [Asset setup](docs/assets.ja.md)
 - [LLM推論中のレンダリング負荷制御](docs/ai-inference-render-coordination.ja.md)
 - [Scriptsガイド](docs/scripts.ja.md)

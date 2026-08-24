@@ -623,6 +623,7 @@ DXGI concern and does not add a UI shader pass.
 
 ## More documentation
 
+- [Printable quick guide (Japanese, A4 landscape)](docs/quick-guide.ja.pdf)
 - [Asset setup](docs/assets.md)
 - [Rendering load control during LLM inference](docs/ai-inference-render-coordination.md)
 - [Scripts guide](docs/scripts.md)

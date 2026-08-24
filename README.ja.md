@@ -121,6 +121,8 @@ Job Object で ChatHost を所有し、llama.cpp の子孫プロセスも同じ�
 
 ![Bistro Exteriorのscene reviewを見出し、太字、箇条書きで表示するMarkdown対応AI Assistant](docs/images/renderingmarkdown.png)
 
+![Vulkan backendのGemma 4がBMW M6を解析し、runtime・model・Toolに分けたturn timingを表示する統合AI Assistant](docs/images/aiassitant.png)
+
 | AIによる変更の一回承認 | アプリ内local model setup |
 |:---:|:---:|
 | ![露出変更の前に一回承認を待つGemma Tool call](docs/images/screenshot009.png) | ![Gemma 4とllama.cppのsetup flyoutを開いた統合AI Assistant](docs/images/installllm.png) |
@@ -140,6 +142,14 @@ Job Object で ChatHost を所有し、llama.cpp の子孫プロセスも同じ�
 | Material編集 | Lighting編集 |
 |:---:|:---:|
 | ![Bistro InteriorとWinUI material editor](docs/images/material.png) | ![Bistro InteriorとWinUI lighting editor](docs/images/lighting001.png) |
+
+| Viewport / display設定 | Path Tracing品質設定 |
+|:---:|:---:|
+| ![BMW M6とrender mode、display resolution、debug view、tone mapperを表示するViewport Inspector](docs/images/viewport.png) | ![BMW M6とquality profile、RTXDI backend、render scale、ray budgetを表示するPath Tracing Inspector](docs/images/pathtracing.png) |
+
+| Denoiseとbackend status | ReSTIR設定とfallback status |
+|:---:|:---:|
+| ![BMW M6とNRD RELAX、DLSS fallback、temporal reconstruction設定を表示するDenoise Inspector](docs/images/denoise.png) | ![BMW M6とRTXDI未build fallback、temporal/spatial reuse設定を表示するReSTIR Inspector](docs/images/restir.png) |
 
 現在の WinUI から6種類すべての render mode、quality profile / ray budget、固定・動的
 render scale、camera roll / FOV、scene load progress / cancel、material texture residency、

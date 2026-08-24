@@ -3,8 +3,10 @@
 English documentation: [Denoise UI And Fallback Gallery](denoise-ui.md)
 
 このgalleryはDenoise Inspectorの `Denoise Backend` selectorが公開する5種類の値と、
-独立した `DLSS Enabled When Available` 設定を示します。全画像は同じBistro Interiorの
-cameraと、status blockに表示されたrepository既定backend buildを使用しています。
+独立した `DLSS Enabled When Available` 設定を示します。下のbackend matrixの全画像は
+同じBistro Interiorのcameraと、status blockに表示されたrepository既定backend buildを
+使用しています。冒頭の
+BMW M6画像はcurrent Inspector全体を示す補助例で、backend matrixの比較対象ではありません。
 
 ## 画像より先にstatusを確認する
 
@@ -16,6 +18,12 @@ selectorの項目はrequested backendであり、そのbackendがcurrent frame�
 - `denoise.nrd` / `denoise.dlss`: readinessとfallback evidence
 - `dlssEnabledWhenAvailable`: 明示的backend選択とは独立して保存するavailability設定
 - `Off`: masterの `Denoiser Enabled` がオン表示でもreal-time denoiseを無効化
+
+![PBRT BMW M6でNRD RELAXを選択し、NRD readyとDLSS未build fallback、temporal reconstruction設定を同時に表示するDenoise Inspector](images/denoise.png)
+
+このBMW M6の画面では`NRD: compiled, ready`と、`DLSS RR: not compiled`およびfallback理由を
+同じstatus blockで確認できます。下のtoggleや数値はrequested policyであり、上部statusが
+current build/runtimeのavailability evidenceです。
 
 この画像セットではNRDはcompile済み・readyです。DLSS Ray Reconstructionはcompileされず、
 runtime / application identityも利用できないため、DLSS-RRを要求するとstatus blockに示す

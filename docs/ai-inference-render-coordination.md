@@ -172,6 +172,13 @@ The Native UI renders these as `Last AI turn: ... total · runtime ... · model
 timings. The pause duration is approximately the total turn time, with small UI
 event-delivery and renderer-loop observation differences.
 
+![The integrated AI Assistant after a BMW M6 tool workflow, showing the Vulkan backend, Gemma 4, and separate total, runtime, model, and tool timing](images/aiassitant.png)
+
+In this capture, values such as `runtime 4 ms`, `model 7.2 s`, and `tools 7.0 s`
+make it possible to distinguish model work from tool latency instead of
+attributing the complete turn to model thinking. The values are one captured
+run, not a performance baseline.
+
 ## Current trade-offs and limitations
 
 - CPU inference and inference on another GPU still pause rendering.

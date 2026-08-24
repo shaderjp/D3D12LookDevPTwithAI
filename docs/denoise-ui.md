@@ -4,8 +4,10 @@ Japanese documentation: [Denoise UI と fallback 比較](denoise-ui.ja.md)
 
 This gallery shows the five values exposed by the Denoise Inspector's
 `Denoise Backend` selector and the independent `DLSS Enabled When Available`
-preference. All captures use the same Bistro Interior camera and the repository
-default backend build shown in the status block.
+preference. All captures in the backend matrix use the same Bistro Interior
+camera and the repository-default backend build shown in the status block. The
+opening BMW M6 image is a current full-Inspector example and is not part of the
+backend comparison matrix.
 
 ## Read The Status Before The Image
 
@@ -20,6 +22,13 @@ with the selector:
   does not replace the explicit backend selection.
 - Selecting `Off` disables real-time denoising even when the master
   `Denoiser Enabled` switch remains visible as enabled.
+
+![The Denoise Inspector on PBRT BMW M6 with NRD RELAX selected, showing NRD ready, the not-compiled DLSS fallback, and temporal reconstruction controls together](images/denoise.png)
+
+In this BMW M6 view, the same status block reports `NRD: compiled, ready`,
+`DLSS RR: not compiled`, and the fallback reason. The toggles and numeric fields
+below are requested policy; the status above is the availability evidence for
+the current build and runtime.
 
 In these captures NRD is compiled and ready. DLSS Ray Reconstruction is not
 compiled and its runtime/application identity are unavailable, so requesting

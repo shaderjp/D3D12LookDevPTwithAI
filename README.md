@@ -142,6 +142,8 @@ artifact provenance.
 
 ![The Markdown-capable AI Assistant presenting a Bistro Exterior scene review with headings, bold text, and bullet lists](docs/images/renderingmarkdown.png)
 
+![The integrated AI Assistant using the Vulkan-backed Gemma 4 to analyze the BMW M6 scene and report separate runtime, model, and tool timing](docs/images/aiassitant.png)
+
 | AI-approved LookDev mutation | In-app local model setup |
 |:---:|:---:|
 | ![A Gemma tool call waiting for one-time approval before changing exposure](docs/images/screenshot009.png) | ![Integrated AI Assistant with the Gemma 4 and llama.cpp setup flyout](docs/images/installllm.png) |
@@ -161,6 +163,14 @@ artifact provenance.
 | Material editing | Lighting editing |
 |:---:|:---:|
 | ![Bistro Interior with the WinUI material editor](docs/images/material.png) | ![Bistro Interior with the WinUI lighting editor](docs/images/lighting001.png) |
+
+| Viewport and display controls | Path-tracing quality controls |
+|:---:|:---:|
+| ![BMW M6 with the Viewport Inspector exposing render mode, display resolution, debug view, and tone mapping](docs/images/viewport.png) | ![BMW M6 with the Path Tracing Inspector exposing quality profile, RTXDI backend, render scale, and ray budget](docs/images/pathtracing.png) |
+
+| Denoise and backend status | ReSTIR controls and fallback status |
+|:---:|:---:|
+| ![BMW M6 with the Denoise Inspector showing NRD RELAX, DLSS fallback, and temporal reconstruction controls](docs/images/denoise.png) | ![BMW M6 with the ReSTIR Inspector showing the not-compiled RTXDI fallback and temporal/spatial reuse controls](docs/images/restir.png) |
 
 The current WinUI controls expose all six render modes, quality profiles and
 ray budgets, fixed/dynamic render scale, camera roll/FOV, scene-load progress

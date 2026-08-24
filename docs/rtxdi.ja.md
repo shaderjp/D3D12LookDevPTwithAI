@@ -62,6 +62,13 @@ repositoryのbuild matrixはbackendの全組み合わせを確認し、最後に
 .\Scripts\BuildBackendMatrix.ps1 -Configuration Release
 ```
 
+![PBRT BMW M6のReSTIR Inspectorでtemporal/spatial reuse設定とRTXDI未build fallback statusを表示した画面](images/restir.png)
+
+この画面は`RTXDI: not compiled, fallback`を明示したrepository default buildの例です。
+ReSTIR DIのtoggleやreuse parameterはproject/UI stateとして表示されますが、statusに
+`RTXDI was disabled at build time`とあるため、このframeがRTXDIで生成された証明にはなりません。
+optional backendの確認ではselectorよりstatus blockを優先します。
+
 ## 現在の 2-pass DI graph
 
 runtime が dispatch するのは、以前の 4-pass / copy chain ではなく 2 つの compute pass です。
